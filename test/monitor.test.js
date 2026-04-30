@@ -88,6 +88,38 @@ function contextFor(config) {
   };
 }
 
+const openProbabilityEstimator = {
+  async estimate({ market, evidence }) {
+    return {
+      marketId: market.marketId,
+      targetOutcome: "yes",
+      ai_probability: 0.7,
+      aiProbability: 0.7,
+      confidence: "high",
+      reasoning_summary: "Deterministic open signal for monitor tests.",
+      reasoningSummary: "Deterministic open signal for monitor tests.",
+      key_evidence: evidence,
+      keyEvidence: evidence,
+      counter_evidence: [],
+      counterEvidence: [],
+      uncertainty_factors: [],
+      uncertaintyFactors: [],
+      freshness_score: 1,
+      freshnessScore: 1,
+      outcomeEstimates: market.outcomes.map((outcome) => ({
+        tokenId: outcome.tokenId,
+        label: outcome.label,
+        aiProbability: outcome.label.toLowerCase() === "no" ? 0.3 : 0.7,
+        marketProbability: outcome.bestAsk ?? outcome.impliedProbability ?? outcome.lastPrice ?? outcome.bestBid,
+        confidence: "high",
+        reasoning: "Deterministic open signal for monitor tests.",
+        evidenceIds: evidence.map((item) => item.evidenceId)
+      })),
+      diagnostics: { provider: "test", model: "open", generatedAt: new Date().toISOString() }
+    };
+  }
+};
+
 async function readJson(relativePath) {
   return JSON.parse(await readFile(path.resolve(relativePath), "utf8"));
 }
@@ -108,7 +140,8 @@ async function assertMonitorArtifacts(artifactPath) {
 test("paper monitor runs one round and writes complete artifacts", async () => {
   const config = await tempConfig();
   const context = contextFor(config);
-  const result = await new Scheduler(context).monitorRun({ mode: "paper", limit: 2, maxAmountUsd: 1 });
+  const result = await new Scheduler(context, { probabilityEstimator: openProbabilityEstimator })
+    .monitorRun({ mode: "paper", limit: 2, maxAmountUsd: 1 });
 
   assert.equal(result.ok, true);
   assert.equal(result.status, "completed");
@@ -123,7 +156,7 @@ test("paper monitor runs one round and writes complete artifacts", async () => {
 test("paper monitor avoids repeated orders for the same market across rounds", async () => {
   const config = await tempConfig();
   const context = contextFor(config);
-  const scheduler = new Scheduler(context);
+  const scheduler = new Scheduler(context, { probabilityEstimator: openProbabilityEstimator });
 
   const first = await scheduler.monitorRun({ mode: "paper", limit: 1, maxAmountUsd: 1 });
   const second = await scheduler.monitorRun({ mode: "paper", limit: 1, maxAmountUsd: 1 });
@@ -145,7 +178,8 @@ test("live monitor without explicit confirmation is rejected before broker execu
     polymarketHost: "https://clob.polymarket.com"
   });
   const context = contextFor(config);
-  const result = await new Scheduler(context).monitorRun({ mode: "live", limit: 1, maxAmountUsd: 1 });
+  const result = await new Scheduler(context, { probabilityEstimator: openProbabilityEstimator })
+    .monitorRun({ mode: "live", limit: 1, maxAmountUsd: 1 });
 
   assert.equal(result.ok, true);
   assert.equal(result.orders, 0);
@@ -165,7 +199,8 @@ test("live monitor defaults to fail-closed when live env is incomplete", async (
     }
   };
 
-  const result = await new Scheduler(context, { liveBroker }).monitorRun({ mode: "live", limit: 1, maxAmountUsd: 1 });
+  const result = await new Scheduler(context, { liveBroker, probabilityEstimator: openProbabilityEstimator })
+    .monitorRun({ mode: "live", limit: 1, maxAmountUsd: 1 });
   const dir = await assertMonitorArtifacts(result.artifact);
   const risks = await readJson(path.join(dir, "risk.json"));
 
@@ -191,7 +226,7 @@ test("live monitor can execute through a mock broker after confirm", async () =>
     }
   });
   const context = contextFor(config);
-  const result = await new Scheduler(context, { liveBroker }).monitorRun({
+  const result = await new Scheduler(context, { liveBroker, probabilityEstimator: openProbabilityEstimator }).monitorRun({
     mode: "live",
     confirmation: "LIVE",
     limit: 1,
@@ -228,7 +263,7 @@ test("live monitor does not open when system risk state is halted", async () => 
     }
   });
 
-  const result = await new Scheduler(context, { liveBroker }).monitorRun({
+  const result = await new Scheduler(context, { liveBroker, probabilityEstimator: openProbabilityEstimator }).monitorRun({
     mode: "live",
     confirmation: "LIVE",
     limit: 1,

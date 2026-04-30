@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { assertSchema } from "../domain/schemas.js";
@@ -162,6 +162,7 @@ export class EvidenceCrawler {
     this.cacheTtlSeconds = config.evidence?.cacheTtlSeconds ?? 1800;
     this.timeoutMs = config.evidence?.requestTimeoutMs ?? 10000;
     this.retries = config.evidence?.requestRetries ?? 1;
+    this.cacheWrite = Promise.resolve();
   }
 
   async collect({ market }) {
@@ -253,14 +254,20 @@ export class EvidenceCrawler {
     if (!this.cachePath || this.cacheTtlSeconds <= 0) {
       return;
     }
-    const store = await this.readCacheStore();
-    const entries = Object.fromEntries(Object.entries(store.entries ?? {}).slice(-100));
-    entries[key] = {
-      cachedAt: nowIso(),
-      evidence
-    };
-    await mkdir(path.dirname(this.cachePath), { recursive: true });
-    await writeFile(this.cachePath, JSON.stringify({ version: 1, entries }, null, 2), "utf8");
+    const task = this.cacheWrite.catch(() => {}).then(async () => {
+      const store = await this.readCacheStore();
+      const entries = Object.fromEntries(Object.entries(store.entries ?? {}).slice(-100));
+      entries[key] = {
+        cachedAt: nowIso(),
+        evidence
+      };
+      await mkdir(path.dirname(this.cachePath), { recursive: true });
+      const tempPath = `${this.cachePath}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(tempPath, JSON.stringify({ version: 1, entries }, null, 2), "utf8");
+      await rename(tempPath, this.cachePath);
+    });
+    this.cacheWrite = task;
+    return await task;
   }
 }
 

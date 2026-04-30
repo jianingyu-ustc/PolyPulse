@@ -1646,3 +1646,159 @@ rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --gl
 - `test/monitor.test.js`
 - `test/risk-engine.test.js`
 - `docs/memory/POLYPULSE_MEMORY.md`
+
+## 2026-04-30 Stage 11 - 轻量级服务器部署
+
+### 阶段目标
+
+只写部署脚本与 runbook，不连接 `ssh root@43.165.166.171`，不实际部署。目标是在低配 VPS 上以 systemd 长期运行 PolyPulse monitor，默认 paper，live 必须显式 env 配置与启动确认。
+
+### 当前代码观察
+
+- 当前项目是无第三方运行依赖的 Node.js ESM CLI，适合 systemd 方式部署，Docker 不是必须。
+- CLI 已有：
+  - `polypulse env check`
+  - `polypulse account balance`
+  - `polypulse predict`
+  - `polypulse monitor run --loop`
+  - `polypulse monitor status|stop|resume`
+- live 安全门已在 CLI/RiskEngine/LiveBroker 侧强制；部署层仍需要二次保护：env 文件权限检查、live confirm gate、systemd `ExecStartPre` preflight。
+- runtime artifacts 已通过 `.gitignore` 排除，部署脚本应继续把 `/home/PolyPulse/.env` 作为服务器本地 secret 文件，不纳入 git。
+
+### 设计取舍
+
+- 选择 systemd 作为最简部署方案：不引入 Docker、Redis、数据库或进程管理器依赖。
+- systemd service 使用 `/home/PolyPulse/.env`，默认 paper loop。live loop 需要：
+  - `.env` 中 `POLYPULSE_EXECUTION_MODE=live`
+  - `.env` 中 `POLYPULSE_LIVE_CONFIRM=LIVE`
+  - 启动脚本显式传入 `--confirm LIVE`
+  - service `ExecStart` 再次把 `--confirm LIVE` 传入 CLI。
+- 日志采用 systemd append 到 `/home/PolyPulse/logs/polypulse-monitor.log` 和 `.err.log`，并由 `/etc/logrotate.d/polypulse-monitor` 轮转。
+- healthcheck 不做真实下单；paper smoke 使用 mock source 验证 CLI 基本路径。
+
+### 计划修改
+
+- 新建：
+  - `deploy/README.md`
+  - `deploy/env.example`
+  - `deploy/systemd/polypulse-monitor.service`
+  - `deploy/scripts/install.sh`
+  - `deploy/scripts/start.sh`
+  - `deploy/scripts/stop.sh`
+  - `deploy/scripts/status.sh`
+  - `deploy/scripts/healthcheck.sh`
+  - `docs/runbooks/server-deploy.md`
+  - `docs/runbooks/live-trading-checklist.md`
+- 验证：
+  - `bash -n deploy/scripts/*.sh`
+  - `npm test`
+  - `npm run smoke`
+  - `git diff --check`
+  - secret scan
+
+### 实现结果
+
+- `deploy/README.md`
+  - 中文部署说明，覆盖 `/home/PolyPulse` 目录约定、paper/live 启动、状态检查、健康检查、手动预测、余额查询、artifact 查看、停止和恢复 monitor。
+
+- `deploy/env.example`
+  - 服务器 `.env` 模板，默认 `POLYPULSE_EXECUTION_MODE=paper`。
+  - `PRIVATE_KEY` 等 live 字段保持空占位。
+  - `STATE_DIR=/home/PolyPulse/runtime-artifacts/state`，`ARTIFACT_DIR=/home/PolyPulse/runtime-artifacts`。
+  - 低配 VPS 默认降低 monitor 压力：`MARKET_SCAN_LIMIT=500`、`MONITOR_CONCURRENCY=2`、`MONITOR_MAX_TRADES_PER_ROUND=2`。
+  - 新增 `POLYPULSE_LIVE_CONFIRM=`，live 常驻必须改为 `LIVE`。
+
+- `deploy/systemd/polypulse-monitor.service`
+  - systemd 常驻服务，`WorkingDirectory=/home/PolyPulse`。
+  - `EnvironmentFile=/home/PolyPulse/.env`。
+  - `ExecStartPre=/home/PolyPulse/deploy/scripts/healthcheck.sh --preflight`。
+  - 默认 paper loop：`monitor run --mode paper --env-file /home/PolyPulse/.env --loop`。
+  - live loop 必须 env 中 `POLYPULSE_EXECUTION_MODE=live` 且 `POLYPULSE_LIVE_CONFIRM=LIVE`，service 再传 `--confirm LIVE`。
+  - `Restart=always`、`RestartSec=15`、`MemoryMax=512M`、`CPUQuota=80%`。
+  - 日志 append 到 `/home/PolyPulse/logs/polypulse-monitor.log` 和 `.err.log`。
+
+- `deploy/scripts/install.sh`
+  - root-only 安装脚本。
+  - 检查 `/home/PolyPulse`、Node.js `>=20`、部署文件存在。
+  - 创建 runtime/state/logs 目录并收紧权限。
+  - 若 `.env` 不存在，复制 `deploy/env.example` 并 `chmod 600`；若存在，保持并强制 `chmod 600`。
+  - 安装 systemd unit 和 `/etc/logrotate.d/polypulse-monitor`。
+  - 执行 `healthcheck.sh --paper-smoke`。
+
+- `deploy/scripts/start.sh`
+  - 读取 `/home/PolyPulse/.env`。
+  - paper 直接 preflight 后启动 systemd。
+  - live 必须命令行 `--confirm LIVE` 且 `.env` 中 `POLYPULSE_LIVE_CONFIRM=LIVE`，否则拒绝启动。
+
+- `deploy/scripts/stop.sh`
+  - 调用 CLI `monitor stop` 写入 monitor stopped state。
+  - 停止 systemd service。
+
+- `deploy/scripts/status.sh`
+  - 输出 systemd active/status、CLI monitor status、最近日志。
+
+- `deploy/scripts/healthcheck.sh`
+  - 检查 Node.js、env 文件存在和权限。
+  - preflight：paper 调 `env check --mode paper`，live 调 `env check --mode live` 并要求 `POLYPULSE_LIVE_CONFIRM=LIVE`。
+  - `--paper-smoke` 使用 mock source 跑 env/account/market/predict，不下单。
+
+- `docs/runbooks/server-deploy.md`
+  - 中文服务器部署 runbook，包含 rsync 同步、安装、paper 常驻、live 常驻、运维命令、故障排查。
+
+- `docs/runbooks/live-trading-checklist.md`
+  - 中文 live checklist，覆盖测试、服务器 secret、live env、风控参数、preflight、paper 最后一轮、live 启动、停止/恢复、事故处理。
+
+### 额外修复
+
+- `src/adapters/evidence-crawler.js`
+  - `npm test` 曾出现 monitor 并发写 evidence cache 导致 JSON 文件被并发覆盖，触发解析失败，并让 monitor 测试偶发 0 orders。
+  - 修复方式：EvidenceCrawler 内部串行化 cache write，并用临时文件 + `rename()` 原子替换。
+
+- `test/monitor.test.js`
+  - 为 monitor 下单相关测试注入 deterministic `openProbabilityEstimator`，避免启发式估算和测试并发造成偶发 no-order。
+
+### 测试与验证
+
+已运行：
+
+```bash
+bash -n deploy/scripts/install.sh deploy/scripts/start.sh deploy/scripts/stop.sh deploy/scripts/status.sh deploy/scripts/healthcheck.sh
+node --check scripts/run-tests.js
+node --check scripts/smoke.js
+npm test
+npm run smoke
+git diff --check
+rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --glob '!runtime-artifacts/**' --glob '!node_modules/**' --glob '!.git/**'
+```
+
+结果：
+
+- `bash -n` 通过。
+- `node --check` 通过。
+- `npm test` 通过 62 个 tests。
+- `npm run smoke` 通过 7 条 CLI smoke commands。
+- `git diff --check` 通过。
+- secret scan 命中均为占位或文档示例：
+  - `.env.example` / `deploy/env.example` 空 `PRIVATE_KEY=`
+  - runbook 和 deploy README 中 `<server-only-secret>` 占位
+  - `src/config/env.js` 空默认值
+  - `test/env-security.test.js` 空测试 override
+  - memory 中对 secret scan 的文字记录
+  - 未发现真实 secret。
+- 没有执行 ssh、rsync 或 systemd 部署命令；未连接 `43.165.166.171`；未运行真实 live 下单。
+
+### 本阶段创建/修改的关键文件
+
+- `deploy/README.md`
+- `deploy/env.example`
+- `deploy/systemd/polypulse-monitor.service`
+- `deploy/scripts/install.sh`
+- `deploy/scripts/start.sh`
+- `deploy/scripts/stop.sh`
+- `deploy/scripts/status.sh`
+- `deploy/scripts/healthcheck.sh`
+- `docs/runbooks/server-deploy.md`
+- `docs/runbooks/live-trading-checklist.md`
+- `src/adapters/evidence-crawler.js`
+- `test/monitor.test.js`
+- `docs/memory/POLYPULSE_MEMORY.md`
