@@ -40,6 +40,9 @@ test(".env.example contains the required configuration fields", async () => {
   const env = parseEnvContent(await readFile(path.join(repoRoot, ".env.example"), "utf8"));
   const required = [
     "POLYPULSE_EXECUTION_MODE",
+    "POLYPULSE_LIVE_WALLET_MODE",
+    "SIMULATED_WALLET_ADDRESS",
+    "SIMULATED_WALLET_BALANCE_USD",
     "PRIVATE_KEY",
     "FUNDER_ADDRESS",
     "SIGNATURE_TYPE",
@@ -64,7 +67,14 @@ test(".env.example contains the required configuration fields", async () => {
     "ARTIFACT_MAX_RUNS",
     "AI_PROVIDER",
     "AI_MODEL",
-    "AI_COMMAND"
+    "AI_COMMAND",
+    "AGENT_RUNTIME_PROVIDER",
+    "PROVIDER_TIMEOUT_SECONDS",
+    "CODEX_COMMAND",
+    "CODEX_MODEL",
+    "CODEX_SKILL_ROOT_DIR",
+    "CODEX_SKILL_LOCALE",
+    "CODEX_SKILLS"
   ];
 
   for (const key of required) {
@@ -86,6 +96,25 @@ test("live preflight fails when PRIVATE_KEY is missing", async () => {
   const report = validateEnvConfig(config, { mode: "live" });
   assert.equal(report.ok, false);
   assert.ok(report.checks.some((item) => item.key === "PRIVATE_KEY" && !item.ok));
+});
+
+test("live preflight allows simulated wallet without a private key", async () => {
+  const config = await loadEnvConfig({
+    envFile: "/tmp/polypulse-simulated-live.env",
+    overrides: {
+      POLYPULSE_EXECUTION_MODE: "live",
+      POLYPULSE_LIVE_WALLET_MODE: "simulated",
+      PRIVATE_KEY: "",
+      FUNDER_ADDRESS: "",
+      SIGNATURE_TYPE: "",
+      CHAIN_ID: "137",
+      POLYMARKET_HOST: "",
+      SIMULATED_WALLET_BALANCE_USD: "100"
+    }
+  });
+  const report = validateEnvConfig(config, { mode: "live" });
+  assert.equal(report.ok, true);
+  assert.equal(report.liveWalletMode, "simulated");
 });
 
 test("private key value is excluded from stdout, artifacts, and memory", async () => {

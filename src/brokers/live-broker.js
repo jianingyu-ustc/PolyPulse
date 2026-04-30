@@ -1,6 +1,7 @@
 import { assertSchema } from "../domain/schemas.js";
 import { maskAddress, redactSecrets, validateEnvConfig } from "../config/env.js";
 import { LivePolymarketClient, summarizeLiveClientError } from "./live-polymarket-client.js";
+import { SimulatedLiveWalletClient } from "./simulated-live-wallet-client.js";
 
 function blockedResult(order, reason) {
   return assertSchema("OrderResult", {
@@ -18,7 +19,11 @@ export class LiveBroker {
   constructor(config, options = {}) {
     this.kind = "live";
     this.config = config;
-    this.client = options.client ?? new LivePolymarketClient(config, options);
+    this.client = options.client ?? (
+      config.liveWalletMode === "simulated"
+        ? new SimulatedLiveWalletClient(config)
+        : new LivePolymarketClient(config, options)
+    );
   }
 
   async preflight() {
@@ -38,7 +43,8 @@ export class LiveBroker {
       broker: this.kind,
       client,
       account: {
-        funderAddress: maskAddress(this.config.funderAddress)
+        walletMode: this.config.liveWalletMode ?? "real",
+        funderAddress: maskAddress(this.config.funderAddress || this.config.simulatedWalletAddress)
       }
     };
   }
@@ -51,7 +57,7 @@ export class LiveBroker {
     try {
       const balance = await this.client.getCollateralBalance();
       return {
-        source: "polymarket-clob",
+        source: this.config.liveWalletMode === "simulated" ? "simulated-live-wallet" : "polymarket-clob",
         collateralBalance: balance.collateralBalance,
         allowance: balance.allowance,
         raw: redactSecrets(balance.raw)
@@ -106,7 +112,7 @@ export class LiveBroker {
   async sync() {
     const balance = await this.getBalance();
     return {
-      accountId: maskAddress(this.config.funderAddress),
+      accountId: maskAddress(this.config.funderAddress || this.config.simulatedWalletAddress),
       cashUsd: balance.collateralBalance,
       totalEquityUsd: balance.collateralBalance,
       positions: [],

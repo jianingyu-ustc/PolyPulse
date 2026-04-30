@@ -280,6 +280,7 @@ function help() {
       "polypulse account balance --env-file <path>",
       "polypulse market topics --limit 20",
       "polypulse market topics --limit 20 --min-liquidity 1000 --min-volume 500 --category politics --tradable true",
+      "Use topics[].marketId or topics[].marketSlug as --market.",
       "polypulse predict --market <market-id-or-slug>",
       "polypulse trade once --mode paper --market <id> --max-amount 1",
       "polypulse trade once --mode live --market <id> --max-amount 1 --env-file <path> --confirm LIVE",

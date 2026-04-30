@@ -95,6 +95,12 @@ interface ProbabilityEstimator {
 - AI 输出必须通过 schema 校验。
 - 估算结果不能直接下单。
 
+Codex provider 兼容层：
+
+- PolyPulse 支持 Predict-Raven 风格的 `AGENT_RUNTIME_PROVIDER=codex` / `CODEX_*` 配置。
+- Codex 运行时必须使用 read-only sandbox、output schema、temp dir、timeout、原始输出归档和失败诊断保留。
+- 与 Predict-Raven 不同的是，Codex 在 PolyPulse 中只能输出 `ProbabilityEstimate`，不能直接输出可执行交易 JSON；后续仍必须经过 DecisionEngine 与 RiskEngine。
+
 ### 2.4 DecisionEngine
 
 职责：
@@ -180,6 +186,7 @@ LiveBroker 额外要求：
 - 不接收原始 AI decision，只接收 RiskEngine 输出的 ExecutableOrder。
 - 必须验证 confirmation 绑定 run id、market、token、side、amount、env fingerprint。
 - submit 前再次读取订单簿和余额。
+- 服务器 live 部署支持 `POLYPULSE_LIVE_WALLET_MODE=simulated|real`。`simulated` 只演练 live 路径，不连接真实钱包；`real` 才连接 Polymarket 钱包。
 
 ### 2.7 StateStore
 

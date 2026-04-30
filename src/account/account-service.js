@@ -2,12 +2,14 @@ import { maskAddress, summarizeEnvConfig, validateEnvConfig } from "../config/en
 import { LiveBroker } from "../brokers/live-broker.js";
 
 function paperBalance({ config, portfolio }) {
+  const address = config.funderAddress || config.simulatedWalletAddress;
   return {
     executionMode: "paper",
     env: summarizeEnvConfig(config, { mode: "paper" }),
     wallet: {
-      funderAddress: maskAddress(config.funderAddress),
-      proxyAddress: maskAddress(config.funderAddress)
+      walletMode: "paper",
+      funderAddress: maskAddress(address),
+      proxyAddress: maskAddress(address)
     },
     collateral: {
       balanceUsd: portfolio.cashUsd,
@@ -43,12 +45,14 @@ export class AccountService {
     }
 
     const balance = await this.liveBroker.getBalance();
+    const address = this.config.funderAddress || this.config.simulatedWalletAddress;
     return {
       executionMode: "live",
       env: summarizeEnvConfig(this.config, { mode: "live" }),
       wallet: {
-        funderAddress: maskAddress(this.config.funderAddress),
-        proxyAddress: maskAddress(this.config.funderAddress)
+        walletMode: this.config.liveWalletMode ?? "real",
+        funderAddress: maskAddress(address),
+        proxyAddress: maskAddress(address)
       },
       collateral: {
         balanceUsd: balance.collateralBalance,

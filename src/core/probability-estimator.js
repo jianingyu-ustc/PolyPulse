@@ -1,4 +1,6 @@
 import { assertSchema } from "../domain/schemas.js";
+import { CodexProbabilityProvider } from "../runtime/codex-runtime.js";
+import { resolveEffectiveProvider } from "../runtime/codex-skill-settings.js";
 
 function clampProbability(value) {
   const number = Number(value);
@@ -157,7 +159,12 @@ class LocalHeuristicProbabilityProvider {
 export class ProbabilityEstimator {
   constructor(config = {}, options = {}) {
     this.config = config;
-    this.provider = options.provider ?? new LocalHeuristicProbabilityProvider(config);
+    const providerName = resolveEffectiveProvider(config);
+    this.providerName = providerName;
+    this.provider = options.provider
+      ?? (providerName === "codex"
+        ? new CodexProbabilityProvider(config)
+        : new LocalHeuristicProbabilityProvider(config));
   }
 
   async estimate({ market, evidenceBundle = null, evidence = null }) {
@@ -205,7 +212,8 @@ export class ProbabilityEstimator {
       freshnessScore: Number(freshness.toFixed(4)),
       outcomeEstimates: estimates,
       diagnostics: {
-        provider: this.config.ai?.provider ?? "local",
+        provider: this.providerName,
+        effectiveProvider: this.providerName,
         model: this.config.ai?.model || "local-heuristic",
         generatedAt,
         missingEvidence: [...new Set(uncertainty)].filter((item) => item.includes("evidence")),

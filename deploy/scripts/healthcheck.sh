@@ -51,12 +51,16 @@ preflight() {
   load_env
   mkdir -p "${STATE_DIR:-$POLYPULSE_HOME/runtime-artifacts/state}" "${ARTIFACT_DIR:-$POLYPULSE_HOME/runtime-artifacts}" "$POLYPULSE_HOME/logs"
   if [ "$MODE" = "live" ]; then
+    case "${POLYPULSE_LIVE_WALLET_MODE:-real}" in
+      real|simulated) ;;
+      *) fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated" ;;
+    esac
     [ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live mode requires POLYPULSE_LIVE_CONFIRM=LIVE"
     run_cli env check --mode live --env-file "$ENV_FILE" >/dev/null
   else
     run_cli env check --mode paper --env-file "$ENV_FILE" >/dev/null
   fi
-  info "preflight ok mode=$MODE"
+  info "preflight ok mode=$MODE wallet=${POLYPULSE_LIVE_WALLET_MODE:-paper}"
 }
 
 paper_smoke() {

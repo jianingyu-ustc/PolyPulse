@@ -38,11 +38,25 @@ ARTIFACT_DIR=/home/PolyPulse/runtime-artifacts
 ```dotenv
 POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_CONFIRM=LIVE
+POLYPULSE_LIVE_WALLET_MODE=real
 PRIVATE_KEY=<server-only-secret>
 FUNDER_ADDRESS=<proxy-or-funder-address>
 SIGNATURE_TYPE=<polymarket-signature-type>
 CHAIN_ID=137
 POLYMARKET_HOST=https://clob.polymarket.com
+```
+
+钱包模式选择：
+
+- `POLYPULSE_LIVE_WALLET_MODE=simulated`：只演练 live 命令、preflight、RiskEngine、artifact 与 broker 接口，不连接真实钱包、不发真实订单。
+- `POLYPULSE_LIVE_WALLET_MODE=real`：连接真实 Polymarket 钱包，必须配置 server-only secret。
+
+模拟 live 钱包配置：
+
+```dotenv
+POLYPULSE_LIVE_WALLET_MODE=simulated
+SIMULATED_WALLET_ADDRESS=
+SIMULATED_WALLET_BALANCE_USD=100
 ```
 
 不得把 `PRIVATE_KEY`、助记词、API key、cookie 或 session token 写入：
@@ -127,7 +141,13 @@ find /home/PolyPulse/runtime-artifacts/monitor -type f | sort | tail -n 30
 
 ```bash
 cd /home/PolyPulse
-deploy/scripts/start.sh --confirm LIVE
+deploy/scripts/start.sh --wallet real --confirm LIVE
+```
+
+模拟 live 钱包演练启动：
+
+```bash
+deploy/scripts/start.sh --wallet simulated --confirm LIVE
 ```
 
 启动后立即验证：

@@ -102,6 +102,7 @@ chmod 600 /home/PolyPulse/.env
 ```dotenv
 POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_CONFIRM=LIVE
+POLYPULSE_LIVE_WALLET_MODE=real
 PRIVATE_KEY=<server-only-secret>
 FUNDER_ADDRESS=<proxy-or-funder-address>
 SIGNATURE_TYPE=<polymarket-signature-type>
@@ -109,11 +110,23 @@ CHAIN_ID=137
 POLYMARKET_HOST=https://clob.polymarket.com
 ```
 
+如果要在 live 部署流程中先使用模拟钱包演练，不接真实钱包、不发真实订单，设置：
+
+```dotenv
+POLYPULSE_EXECUTION_MODE=live
+POLYPULSE_LIVE_CONFIRM=LIVE
+POLYPULSE_LIVE_WALLET_MODE=simulated
+SIMULATED_WALLET_ADDRESS=
+SIMULATED_WALLET_BALANCE_USD=100
+```
+
+模拟钱包仍会走 live preflight、RiskEngine 和 live broker 接口，但 broker 使用 `simulated-live-wallet`，不会连接 Polymarket SDK。
+
 启动：
 
 ```bash
 deploy/scripts/healthcheck.sh --preflight
-deploy/scripts/start.sh --confirm LIVE
+deploy/scripts/start.sh --wallet real --confirm LIVE
 ```
 
 缺少 `POLYPULSE_LIVE_CONFIRM=LIVE` 或 `--confirm LIVE` 都会拒绝 live 服务启动。
@@ -126,6 +139,14 @@ deploy/scripts/start.sh --confirm LIVE
 cd /home/PolyPulse
 node ./bin/polypulse.js predict --env-file /home/PolyPulse/.env --market <market-id-or-slug>
 ```
+
+`<market-id-or-slug>` 的取值来自市场扫描结果：
+
+```bash
+node ./bin/polypulse.js market topics --env-file /home/PolyPulse/.env --limit 20
+```
+
+从返回的 `topics[]` 里复制 `marketId` 或 `marketSlug`；mock 源示例是 `market-001` 或 `fed-cut-before-july`。
 
 手动查余额：
 

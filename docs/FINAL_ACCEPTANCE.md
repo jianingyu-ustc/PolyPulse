@@ -207,7 +207,7 @@ runtime-artifacts/final-acceptance/
 
 部署文件已创建：
 
-- `deploy/README.md`
+- `README.md`
 - `deploy/env.example`
 - `deploy/systemd/polypulse-monitor.service`
 - `deploy/scripts/install.sh`

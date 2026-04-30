@@ -139,6 +139,23 @@ test("account balance uses mock live broker without exposing credentials", async
   assert.equal(JSON.stringify(balance).includes(config.privateKey), false);
 });
 
+test("simulated live wallet reports balance without real credentials", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    liveWalletMode: "simulated",
+    simulatedWalletAddress: "0x9999999999999999999999999999999999999999",
+    simulatedWalletBalanceUsd: 42,
+    envFilePath: "/tmp/polypulse-simulated-live.env"
+  });
+  const stateStore = new FileStateStore(config);
+  const balance = await new AccountService({ config, stateStore }).getBalance({ mode: "live" });
+
+  assert.equal(balance.executionMode, "live");
+  assert.equal(balance.wallet.walletMode, "simulated");
+  assert.equal(balance.collateral.source, "simulated-live-wallet");
+  assert.equal(balance.collateral.balanceUsd, 42);
+});
+
 test("account balance surfaces mock API failure without leaking credentials", async () => {
   const config = await tempConfig({
     executionMode: "live",
@@ -292,4 +309,18 @@ test("live broker can execute through a mock client only after confirm", async (
   assert.equal(posted, true);
   assert.equal(result.status, "filled");
   assert.equal(result.orderId, "live-filled");
+});
+
+test("simulated live wallet fills through live broker without Polymarket SDK", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    liveWalletMode: "simulated",
+    simulatedWalletBalanceUsd: 10,
+    envFilePath: "/tmp/polypulse-simulated-live.env"
+  });
+  const liveBroker = new LiveBroker(config);
+  const result = await liveBroker.submit({ ...order("BUY"), mode: "live", amountUsd: 1 }, SAMPLE_MARKETS[0], "LIVE");
+
+  assert.equal(result.status, "filled");
+  assert.match(result.orderId, /^sim-live-/);
 });

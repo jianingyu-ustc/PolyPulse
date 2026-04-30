@@ -1958,3 +1958,204 @@ rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --gl
 - `docs/KNOWN_LIMITATIONS.md`
 - `docs/ROADMAP.md`
 - `docs/memory/POLYPULSE_MEMORY.md`
+
+## 2026-04-30 后续问答：AGENT_RUNTIME_PROVIDER=codex 迁移说明
+
+问题：原仓库 `AGENT_RUNTIME_PROVIDER=codex` 的逻辑在 PolyPulse 中是如何迁移的。
+
+源码追踪：
+
+- Predict-Raven 的 `AGENT_RUNTIME_PROVIDER=codex` 属于 `provider-runtime` legacy 路径；默认主路径已是 `AGENT_DECISION_STRATEGY=pulse-direct`。
+- 原逻辑在 `services/orchestrator/src/config.ts` 中读取 `AGENT_RUNTIME_PROVIDER` 与 `CODEX_*` skill provider 配置，在 `services/orchestrator/src/runtime/provider-runtime.ts` 中当 provider 为 `codex` 且没有自定义 command 时，直接 spawn `codex exec`。
+- 原 codex 调用带 `--skip-git-repo-check`、`-C <repoRoot>`、`-s read-only`、`--output-schema <schema>`、`-o <output>`、`--color never`，把 prompt 从 stdin 传入，并带 timeout、heartbeat、temp dir、schema output、stderr 错误归档。
+- provider-runtime 要求外部 Codex 直接输出合法 `TradeDecisionSet` JSON；这一路径风险在于外部进程超时、输出非法、扫描范围失控或生成不可控交易字段。
+
+PolyPulse 迁移方式：
+
+- 没有逐字迁移 `AGENT_RUNTIME_PROVIDER=codex` 和 `codex exec` spawn 逻辑，也没有让外部 Codex CLI 直接产出可执行交易 JSON。
+- 将原 provider-runtime 的安全思想拆到接口层：`EvidenceCrawler`、`ProbabilityEstimator`、`DecisionEngine`、`RiskEngine`、`Broker`。
+- 配置层保留轻量 AI 扩展点 `AI_PROVIDER`、`AI_MODEL`、`AI_COMMAND`，但当前实现默认 `AI_PROVIDER=local`，由 `LocalHeuristicProbabilityProvider` 生成 schema 化概率估计。
+- AI/估算输出只作为 `ProbabilityEstimate` 与 `TradeDecision` 的输入；交易金额、edge、no-trade、token 校验、live 确认、余额和风控裁剪全部由代码层执行。
+- 因此实际迁移的是 `pulse-direct` 的方向：AI 负责证据与概率判断，代码负责 sizing、风控、执行和归档。`AI_COMMAND` 留作后续接入 Codex/Claude/OpenAI CLI 的 adapter seam，但必须仍然输出 ProbabilityEstimate schema，不能绕过 RiskEngine。
+
+残余风险：
+
+- `AI_COMMAND` 目前只在配置中占位，尚未实现 subprocess adapter；如果后续实现，应复用原仓库的 read-only sandbox、timeout、output schema、temp dir、stderr 摘要、secret redaction 和 artifact 诊断策略。
+- live 路径必须继续保持 fail-closed：外部 AI 不得直接调用 broker，必须先经过 DecisionEngine 与 RiskEngine。
+
+## 2026-04-30 变更：Codex runtime 迁移、市场 id 用法、服务器 live 钱包模式
+
+用户问题：
+
+- `node ./bin/polypulse.js predict --env-file /home/PolyPulse/.env --market <market-id-or-slug>` 中 `<market-id-or-slug>` 如何赋值。
+- 要求一比一迁移原 Predict-Raven 的所有 codex 相关逻辑。
+- 要求服务器部署 live 支持选择模拟钱包和真实钱包。
+
+市场 id / slug 结论：
+
+- `<market-id-or-slug>` 来自 `polypulse market topics` 的输出。
+- 返回 JSON 中 `topics[].marketId` 和 `topics[].marketSlug` 都可用于 `--market`。
+- mock 源验证结果：`market-001` 和 `fed-cut-before-july` 都能定位同一市场。
+- 文档已在 `deploy/README.md` 与 `docs/runbooks/server-deploy.md` 中补充：先运行 `market topics --limit 20`，从 `topics[]` 复制 `marketId` 或 `marketSlug`。
+
+Predict-Raven Codex 逻辑迁移追踪：
+
+- 源仓库逻辑位于 `services/orchestrator/src/config.ts`、`services/orchestrator/src/runtime/provider-runtime.ts`、`services/orchestrator/src/runtime/skill-settings.ts`。
+- 已迁移的关键行为：
+  - `AGENT_RUNTIME_PROVIDER=codex` 兼容配置。
+  - `PROVIDER_TIMEOUT_SECONDS`。
+  - `CODEX_COMMAND`、`CODEX_MODEL`、`CODEX_SKILL_ROOT_DIR`、`CODEX_SKILL_LOCALE`、`CODEX_SKILLS`。
+  - provider skill 解析，默认 skill 为 `polypulse-market-agent`。
+  - Codex 默认命令：`codex exec --skip-git-repo-check -C <repoRoot> -s read-only --output-schema <schema> -o <output> --color never [-m model] [-add-dir skillRoot] -`。
+  - custom command template 支持：`{{repo_root}}`、`{{prompt_file}}`、`{{output_file}}`、`{{schema_file}}`、`{{skill_root}}`、`{{market_json}}`、`{{evidence_json}}`、`{{risk_doc}}`。
+  - temp dir、prompt file、schema file、market/evidence input file、output file。
+  - timeout、SIGTERM、stderr 摘要、失败时保留 temp dir。
+  - 输出 JSON wrapper 解析，支持 `estimate`、`probabilityEstimate`、`result`、`output`、`payload`、`final`。
+  - source URL normalization。
+  - runtime log artifact：`runtime-artifacts/codex-runtime/<timestamp>/runtime-log.md`。
+  - text metrics：prompt/schema/input/output 统计。
+
+PolyPulse 适配边界：
+
+- 为保持项目硬安全边界，Codex 运行时输出契约是 `ProbabilityEstimate`，不是 Predict-Raven legacy 的 `TradeDecisionSet`。
+- Codex 可以估算 `ai_probability`、`confidence`、`reasoning_summary`、`key_evidence`、`counter_evidence`、`uncertainty_factors`、`freshness_score`。
+- Codex 不能直接输出 broker 参数、token 改写、交易金额或可执行订单。
+- 后续交易仍必须经过 `DecisionEngine`、`RiskEngine`、`OrderExecutor` 与 Broker。
+
+新增/修改文件：
+
+- `src/runtime/codex-runtime.js`
+- `src/runtime/codex-skill-settings.js`
+- `src/runtime/text-metrics.js`
+- `src/core/probability-estimator.js`
+- `src/config/env.js`
+- `.env.example`
+- `test/codex-runtime.test.js`
+
+服务器 live 钱包模式：
+
+- 新增 `POLYPULSE_LIVE_WALLET_MODE=real|simulated`。
+- `real`：沿用真实钱包要求，live preflight 必须有 `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`POLYMARKET_HOST`。
+- `simulated`：用于服务器 live 路径演练，不要求真实 private key，不连接 Polymarket SDK，不提交真实订单。
+- 新增 `SIMULATED_WALLET_ADDRESS` 与 `SIMULATED_WALLET_BALANCE_USD`。
+- `LiveBroker` 在 simulated 模式下使用 `SimulatedLiveWalletClient`，source 标记为 `simulated-live-wallet`。
+- simulated live 仍要求 `--mode live --confirm LIVE` 和 `POLYPULSE_LIVE_CONFIRM=LIVE`，以保持所有 live 路径有显式确认。
+
+新增/修改文件：
+
+- `src/brokers/simulated-live-wallet-client.js`
+- `src/brokers/live-broker.js`
+- `src/account/account-service.js`
+- `deploy/env.example`
+- `deploy/scripts/start.sh`
+- `deploy/scripts/healthcheck.sh`
+- `deploy/systemd/polypulse-monitor.service`
+- `deploy/README.md`
+- `docs/runbooks/server-deploy.md`
+- `docs/runbooks/live-trading-checklist.md`
+- `docs/specs/architecture.md`
+- `test/broker-account.test.js`
+- `test/env-security.test.js`
+
+验证：
+
+```bash
+npm test
+# ok=true tests=69 pass=69 fail=0
+
+npm run smoke
+# ok=true commands=7 pass=7 fail=0
+
+node ./bin/polypulse.js market topics --source mock --limit 1
+# 返回 topics[0].marketId=market-001, topics[0].marketSlug=fed-cut-before-july
+
+bash -n deploy/scripts/install.sh
+bash -n deploy/scripts/start.sh
+bash -n deploy/scripts/healthcheck.sh
+git diff --check
+# 均通过
+```
+
+残余风险：
+
+- 真实 `codex exec` 未在自动测试中调用，测试通过 fake spawn 验证参数与通过 `CODEX_COMMAND` 模板验证输出解析。
+- 真实钱包 live 仍未执行，也不应在没有人工上线确认前执行。
+- simulated live 钱包是 live-path dry-run 工具，不代表真实 Polymarket SDK、签名、余额和订单簿行为。
+
+## 2026-04-30 变更：同步更新根 README
+
+用户要求：同步更新 README。
+
+观察：
+
+- 目标仓库此前没有根 `README.md`，只有 `deploy/README.md`。
+- 为避免部署说明和根文档脱节，新建根 `README.md`，同步当前 CLI、Codex runtime、market id/slug 用法、live 钱包模式、artifact 路径、部署入口和测试命令。
+
+README 覆盖内容：
+
+- PolyPulse 项目定位与默认 paper 安全边界。
+- 当前已实现能力：市场扫描、EvidenceCrawler、ProbabilityEstimator、DecisionEngine、RiskEngine、Broker、one-shot、monitor、systemd 部署。
+- `--market <market-id-or-slug>` 填写方式：先运行 `market topics`，从 `topics[].marketId` 或 `topics[].marketSlug` 复制。
+- Codex runtime：`AGENT_RUNTIME_PROVIDER=codex`、`CODEX_*`、read-only `codex exec`、custom command template；同时声明 PolyPulse 中 Codex 只允许输出 `ProbabilityEstimate`，不能直接控制交易。
+- live 钱包模式：`POLYPULSE_LIVE_WALLET_MODE=real|simulated`，以及 simulated live 钱包不连接真实钱包、不提交真实订单，但仍需 live 双确认。
+- runtime artifact 路径、部署文档入口、测试命令。
+
+验证命令：
+
+```bash
+npm test
+npm run smoke
+bash -n deploy/scripts/install.sh
+bash -n deploy/scripts/start.sh
+bash -n deploy/scripts/healthcheck.sh
+git diff --check
+```
+
+上次验证结果仍为：`npm test` 69 pass，`npm run smoke` 7 pass；本次 README-only 文档变更无需重新执行业务测试，最终可按上述命令复验。
+
+关键文件：
+
+- `README.md`
+- `docs/memory/POLYPULSE_MEMORY.md`
+
+## 2026-04-30 变更：合并 README
+
+用户要求：合并根 `README.md` 和 `deploy/README.md`，只保留一个 README。
+
+处理：
+
+- 保留根 `README.md` 作为唯一 README。
+- 将 `deploy/README.md` 中的轻量服务器部署内容合并进根 `README.md` 的“轻量服务器部署”章节。
+- 删除 `deploy/README.md`。
+- 更新 `deploy/systemd/polypulse-monitor.service` 的 `Documentation=` 指向 `/home/PolyPulse/README.md`。
+- 更新 `docs/FINAL_ACCEPTANCE.md` 中部署文件清单，使用 `README.md` 替代 `deploy/README.md`。
+
+合并后的根 README 覆盖：
+
+- 项目定位与默认 paper 安全边界。
+- CLI 快速开始与 `--market` 取值方式。
+- Codex runtime 配置和安全边界。
+- live `real` / `simulated` 钱包模式。
+- runtime artifact 路径。
+- systemd VPS 部署：目录约定、文件说明、初次安装、paper/live monitor、服务器常用命令、日志轮转、部署后验证。
+
+验证：
+
+```bash
+rg -n "deploy/README\\.md" . --glob '!runtime-artifacts/**' --glob '!node_modules/**' --glob '!.git/**'
+# 仅 docs/memory 历史记录仍命中。
+
+git diff --check
+bash -n deploy/scripts/install.sh
+bash -n deploy/scripts/start.sh
+bash -n deploy/scripts/healthcheck.sh
+# 均通过。
+```
+
+关键文件：
+
+- `README.md`
+- `deploy/README.md` 删除
+- `deploy/systemd/polypulse-monitor.service`
+- `docs/FINAL_ACCEPTANCE.md`
+- `docs/memory/POLYPULSE_MEMORY.md`
