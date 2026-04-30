@@ -10,9 +10,14 @@
     "polypulse": "node ./bin/polypulse.js",
     "test": "node ./scripts/run-tests.js",
     "test:node": "node --test",
-    "smoke": "node ./scripts/smoke.js"
+    "smoke": "node ./scripts/smoke.js",
+    "agent:check": "node ./scripts/check-agent-config.js"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@polymarket/clob-client-v2": "^1.0.2",
+    "viem": "^2.48.4"
   }
 }

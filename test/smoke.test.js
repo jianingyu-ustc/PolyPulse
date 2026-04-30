@@ -14,6 +14,9 @@ async function runCli(args) {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-test-"));
   const env = {
     ...process.env,
+    AI_PROVIDER: "local",
+    AGENT_RUNTIME_PROVIDER: "none",
+    CODEX_COMMAND: "",
     POLYPULSE_MARKET_SOURCE: "mock",
     STATE_DIR: path.join(dir, "state"),
     ARTIFACT_DIR: path.join(dir, "artifacts")

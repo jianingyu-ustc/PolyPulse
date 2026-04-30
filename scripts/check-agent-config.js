@@ -1,0 +1,152 @@
+#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { loadEnvConfig } from "../src/config/env.js";
+import { resolveCodexSkillSettings, resolveEffectiveProvider } from "../src/runtime/codex-skill-settings.js";
+
+function option(args, name, fallback = null) {
+  const index = args.indexOf(name);
+  if (index < 0) {
+    return fallback;
+  }
+  const value = args[index + 1];
+  return value && !value.startsWith("--") ? value : fallback;
+}
+
+function addCheck(checks, key, ok, summary, level = "error") {
+  checks.push({ key, ok, level, summary });
+}
+
+function firstLine(value) {
+  return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+function checkCodexCli() {
+  const result = spawnSync("codex", ["--version"], {
+    encoding: "utf8",
+    timeout: 5000
+  });
+  return {
+    checked: true,
+    ok: result.status === 0,
+    command: "codex",
+    version: result.status === 0 ? firstLine(result.stdout || result.stderr) : "",
+    error: result.status === 0 ? "" : firstLine(result.stderr || result.error?.message || "codex --version failed")
+  };
+}
+
+async function main(args = process.argv.slice(2)) {
+  const envFile = option(args, "--env-file");
+  const expectedProvider = option(args, "--expect");
+  const config = await loadEnvConfig({ envFile });
+  const effectiveProvider = resolveEffectiveProvider(config);
+  const checks = [];
+
+  if (envFile) {
+    addCheck(
+      checks,
+      "env-file",
+      existsSync(path.resolve(envFile)),
+      `envFile=${path.resolve(envFile)}`
+    );
+  }
+  if (expectedProvider) {
+    addCheck(
+      checks,
+      "expected-provider",
+      effectiveProvider === expectedProvider,
+      `effectiveProvider=${effectiveProvider}, expected=${expectedProvider}`
+    );
+    if (expectedProvider === "codex") {
+      addCheck(checks, "AI_PROVIDER", config.ai.provider === "codex", `AI_PROVIDER=${config.ai.provider}`);
+      addCheck(
+        checks,
+        "AGENT_RUNTIME_PROVIDER",
+        config.agentRuntimeProvider === "codex",
+        `AGENT_RUNTIME_PROVIDER=${config.agentRuntimeProvider}`
+      );
+    }
+  }
+
+  const codexEnabled = effectiveProvider === "codex";
+  let codex = {
+    enabled: codexEnabled,
+    commandMode: "not-used",
+    customCommand: false,
+    model: "",
+    providerTimeoutSeconds: config.providerTimeoutSeconds,
+    skillLocale: "",
+    skillRootDir: "",
+    skills: [],
+    cli: { checked: false, ok: null, command: "codex", version: "", error: "" }
+  };
+
+  if (codexEnabled) {
+    let settings = null;
+    try {
+      settings = resolveCodexSkillSettings(config);
+      codex = {
+        ...codex,
+        commandMode: settings.command ? "custom-command" : "codex-cli",
+        customCommand: Boolean(settings.command),
+        model: settings.model,
+        skillLocale: settings.skillLocale,
+        skillRootDir: settings.skillRootDir,
+        skills: settings.skills.map((skill) => ({
+          id: skill.id,
+          skillFile: path.relative(config.repoRoot, skill.skillFile)
+        }))
+      };
+      addCheck(checks, "codex-skills", settings.skills.length > 0, `skills=${settings.skills.map((item) => item.id).join(",")}`);
+    } catch (error) {
+      addCheck(checks, "codex-skills", false, error instanceof Error ? error.message : String(error));
+    }
+
+    if (settings?.command) {
+      addCheck(
+        checks,
+        "CODEX_COMMAND_OUTPUT_FILE",
+        settings.command.includes("{{output_file}}"),
+        "CODEX_COMMAND must write provider JSON to {{output_file}}"
+      );
+    } else {
+      const cli = checkCodexCli();
+      codex.cli = cli;
+      addCheck(checks, "codex-cli", cli.ok, cli.ok ? `codex=${cli.version}` : cli.error);
+    }
+
+    addCheck(
+      checks,
+      "PROVIDER_TIMEOUT_SECONDS",
+      config.providerTimeoutSeconds > 0,
+      `PROVIDER_TIMEOUT_SECONDS=${config.providerTimeoutSeconds}; 0 means no provider timeout`,
+      "warning"
+    );
+  }
+
+  const ok = checks.every((item) => item.ok || item.level === "warning");
+  const output = {
+    ok,
+    envFilePath: config.envFilePath,
+    aiProvider: config.ai.provider,
+    agentRuntimeProvider: config.agentRuntimeProvider,
+    effectiveProvider,
+    expectedProvider,
+    codex,
+    checks
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+  if (!ok) {
+    process.exit(1);
+  }
+}
+
+main().catch((error) => {
+  console.error(JSON.stringify({
+    ok: false,
+    error: error instanceof Error ? error.message : String(error)
+  }, null, 2));
+  process.exit(1);
+});

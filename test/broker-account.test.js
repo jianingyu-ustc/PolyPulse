@@ -11,6 +11,7 @@ import { AccountService } from "../src/account/account-service.js";
 import { ArtifactWriter } from "../src/artifacts/artifact-writer.js";
 import { PaperBroker } from "../src/brokers/paper-broker.js";
 import { LiveBroker } from "../src/brokers/live-broker.js";
+import { LivePolymarketClient } from "../src/brokers/live-polymarket-client.js";
 import { OrderExecutor } from "../src/execution/order-executor.js";
 import { SAMPLE_MARKETS } from "../src/adapters/mock-market-source.js";
 
@@ -77,7 +78,15 @@ function order(side = "BUY") {
 }
 
 test("live env preflight fails fast when required fields are missing", async () => {
-  const config = await loadEnvConfig({ overrides: { POLYPULSE_EXECUTION_MODE: "live" } });
+  const config = await loadEnvConfig({
+    overrides: {
+      POLYPULSE_EXECUTION_MODE: "live",
+      PRIVATE_KEY: "",
+      FUNDER_ADDRESS: "",
+      SIGNATURE_TYPE: "",
+      POLYMARKET_HOST: ""
+    }
+  });
   const report = validateEnvConfig(config, { mode: "live" });
   assert.equal(report.ok, false);
   const failed = report.checks.filter((item) => !item.ok).map((item) => item.key);
@@ -154,6 +163,20 @@ test("simulated live wallet reports balance without real credentials", async () 
   assert.equal(balance.wallet.walletMode, "simulated");
   assert.equal(balance.collateral.source, "simulated-live-wallet");
   assert.equal(balance.collateral.balanceUsd, 42);
+});
+
+test("live Polymarket client normalizes collateral base units", async () => {
+  const config = await tempConfig();
+  const client = new LivePolymarketClient(config, {
+    clientFactory: async () => ({
+      getBalanceAllowance: async () => ({
+        balance: "30542705",
+        raw: { balance: "30542705" }
+      })
+    })
+  });
+  const balance = await client.getCollateralBalance();
+  assert.equal(balance.collateralBalance, 30.542705);
 });
 
 test("account balance surfaces mock API failure without leaking credentials", async () => {

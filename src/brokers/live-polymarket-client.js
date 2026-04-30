@@ -1,5 +1,7 @@
 import { redactSecrets } from "../config/env.js";
 
+const COLLATERAL_DECIMALS = 6;
+
 function errorSummary(error) {
   const message = error instanceof Error ? error.message : String(error);
   return String(redactSecrets(message));
@@ -10,17 +12,41 @@ function numberFrom(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function decimalFromCollateralUnits(value, fallback = 0) {
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    return numberFrom(value, fallback) / 10 ** COLLATERAL_DECIMALS;
+  }
+  if (typeof value === "bigint") {
+    return Number(value) / 10 ** COLLATERAL_DECIMALS;
+  }
+  return numberFrom(value, fallback);
+}
+
+function normalizePrivateKey(privateKey) {
+  const trimmed = String(privateKey ?? "").trim();
+  const normalized = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  if (!/^0x[a-fA-F0-9]{64}$/.test(normalized)) {
+    throw new Error("PRIVATE_KEY must be a 32-byte hex private key.");
+  }
+  return normalized;
+}
+
 function extractCollateralBalance(raw) {
-  const candidates = [
-    raw?.balance,
+  const normalizedCandidates = [
     raw?.collateral,
     raw?.collateralBalance,
     raw?.collateral_balance,
     raw?.available,
     raw?.availableBalance
   ];
-  const value = candidates.find((item) => item != null);
-  return numberFrom(value, 0);
+  const value = normalizedCandidates.find((item) => item != null);
+  if (value != null) {
+    return numberFrom(value, 0);
+  }
+  if (raw?.balance != null) {
+    return decimalFromCollateralUnits(raw.balance, 0);
+  }
+  return 0;
 }
 
 function extractAllowance(raw) {
@@ -58,16 +84,31 @@ export class LivePolymarketClient {
       return this.cachedClient;
     }
     let clobModule;
-    let ethersModule;
+    let viemModule;
+    let viemAccountsModule;
     try {
       clobModule = await import("@polymarket/clob-client-v2");
-      ethersModule = await import("ethers");
+      viemModule = await import("viem");
+      viemAccountsModule = await import("viem/accounts");
     } catch (error) {
       throw new Error(`Polymarket SDK unavailable: ${errorSummary(error)}`);
     }
     const { ClobClient } = clobModule;
-    const { Wallet } = ethersModule;
-    const signer = new Wallet(this.config.privateKey);
+    const { createWalletClient, custom } = viemModule;
+    const { privateKeyToAccount } = viemAccountsModule;
+    const account = privateKeyToAccount(normalizePrivateKey(this.config.privateKey));
+    const signer = createWalletClient({
+      account,
+      // CLOB auth only needs local EIP-712 signing; no Polygon RPC is required here.
+      transport: custom({
+        request: async ({ method }) => {
+          if (method === "eth_accounts" || method === "eth_requestAccounts") {
+            return [account.address];
+          }
+          throw new Error(`Unsupported offline wallet RPC method: ${method}`);
+        }
+      })
+    });
     const boot = new ClobClient({
       host: this.config.polymarketHost,
       chain: this.config.chainId,

@@ -27,7 +27,12 @@ for (const args of commands) {
   const result = spawnSync(process.execPath, ["./bin/polypulse.js", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: process.env
+    env: {
+      ...process.env,
+      AI_PROVIDER: "local",
+      AGENT_RUNTIME_PROVIDER: "none",
+      CODEX_COMMAND: ""
+    }
   });
   const name = args.join("-");
   writeFileSync(path.join(artifactDir, `${name}.stdout.log`), result.stdout ?? "", "utf8");
