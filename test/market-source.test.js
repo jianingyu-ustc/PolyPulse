@@ -135,3 +135,36 @@ test("PolymarketMarketSource marks insufficient scan results with risk flags", a
   assert.ok(scan.riskFlags.includes("market_scan_empty"));
   assert.ok(scan.riskFlags.includes("market_scan_result_below_minimum"));
 });
+
+test("PolymarketMarketSource falls back to stale cache with explicit risk flag", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-market-source-stale-"));
+  const host = "https://mock.polymarket.local";
+  const first = mockFetch(() => ({ body: [rawMarket(1), rawMarket(2)] }));
+  const warmSource = new PolymarketMarketSource(testConfig(host, dir), null, { fetchImpl: first.fetchImpl });
+  const warm = await warmSource.scan({ limit: 2 });
+  assert.equal(warm.markets.length, 2);
+
+  const failing = mockFetch(() => ({ status: 500, body: { error: "down" } }));
+  const staleSource = new PolymarketMarketSource(
+    testConfig(host, dir, { scan: { cacheTtlSeconds: 0, requestRetries: 0 } }),
+    null,
+    { fetchImpl: failing.fetchImpl }
+  );
+  const stale = await staleSource.scan({ limit: 2 });
+
+  assert.equal(stale.fallback, true);
+  assert.equal(stale.fromCache, true);
+  assert.equal(stale.markets.length, 2);
+  assert.ok(stale.riskFlags.includes("stale_market_cache_used"));
+});
+
+test("low-liquidity markets are filtered and marked as empty when none remain", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-market-source-liquidity-"));
+  const { fetchImpl } = mockFetch(() => ({ body: [rawMarket(1, { liquidity: 10 })] }));
+  const source = new PolymarketMarketSource(testConfig("https://mock.polymarket.local", dir), null, { fetchImpl });
+  const scan = await source.scan({ limit: 1, minLiquidityUsd: 1000 });
+
+  assert.equal(scan.totalFetched, 1);
+  assert.equal(scan.markets.length, 0);
+  assert.ok(scan.riskFlags.includes("market_scan_empty"));
+});

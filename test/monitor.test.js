@@ -154,6 +154,26 @@ test("live monitor without explicit confirmation is rejected before broker execu
   assert.ok(risks[0].blocked_reasons.includes("live_requires_confirm_live"));
 });
 
+test("live monitor defaults to fail-closed when live env is incomplete", async () => {
+  const config = await tempConfig({ executionMode: "live" });
+  const context = contextFor(config);
+  let submitCalls = 0;
+  const liveBroker = {
+    async submit() {
+      submitCalls += 1;
+      throw new Error("submit should not be called");
+    }
+  };
+
+  const result = await new Scheduler(context, { liveBroker }).monitorRun({ mode: "live", limit: 1, maxAmountUsd: 1 });
+  const dir = await assertMonitorArtifacts(result.artifact);
+  const risks = await readJson(path.join(dir, "risk.json"));
+
+  assert.equal(result.orders, 0);
+  assert.equal(submitCalls, 0);
+  assert.ok(risks[0].blocked_reasons.includes("live_preflight_failed"));
+});
+
 test("live monitor can execute through a mock broker after confirm", async () => {
   const config = await tempConfig({
     executionMode: "live",
@@ -183,6 +203,43 @@ test("live monitor can execute through a mock broker after confirm", async () =>
   const dir = await assertMonitorArtifacts(result.artifact);
   const orders = await readJson(path.join(dir, "orders.json"));
   assert.equal(orders[0].orderId, "mock-monitor-live-order");
+});
+
+test("live monitor does not open when system risk state is halted", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    envFilePath: "/tmp/polypulse-live.env",
+    privateKey: "test-placeholder-not-secret",
+    funderAddress: "0x7777777777777777777777777777777777777777",
+    signatureType: "1",
+    polymarketHost: "https://clob.polymarket.com"
+  });
+  const context = contextFor(config);
+  await context.stateStore.haltRisk("test_halt");
+  let submitCalls = 0;
+  const liveBroker = new LiveBroker(config, {
+    client: {
+      preflight: async () => ({ ok: true, source: "mock" }),
+      getCollateralBalance: async () => ({ collateralBalance: 100, allowance: 100, raw: {} }),
+      postMarketOrder: async () => {
+        submitCalls += 1;
+        return { ok: true, orderId: "should-not-fill", filledUsd: 1, avgPrice: 0.43, raw: {} };
+      }
+    }
+  });
+
+  const result = await new Scheduler(context, { liveBroker }).monitorRun({
+    mode: "live",
+    confirmation: "LIVE",
+    limit: 1,
+    maxAmountUsd: 1
+  });
+  const dir = await assertMonitorArtifacts(result.artifact);
+  const risks = await readJson(path.join(dir, "risk.json"));
+
+  assert.equal(result.orders, 0);
+  assert.equal(submitCalls, 0);
+  assert.ok(risks[0].blocked_reasons.includes("system_halted_requires_explicit_resume"));
 });
 
 test("monitor recovers a stale in-flight run before starting a new round", async () => {

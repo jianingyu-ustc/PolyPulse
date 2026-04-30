@@ -127,6 +127,27 @@ test("DecisionEngine opens positive edge from deterministic fake AI output", asy
   assert.ok(decision.expected_value > 0);
 });
 
+test("fake AI response is normalized into a valid ProbabilityEstimate schema", async () => {
+  const market = SAMPLE_MARKETS[0];
+  const estimator = new ProbabilityEstimator(config, {
+    provider: {
+      estimate: async ({ evidence: items }) => ({
+        ai_probability: 1.7,
+        confidence: "high",
+        reasoning_summary: "Fake provider deliberately returns an out-of-range probability.",
+        key_evidence: items,
+        counter_evidence: [],
+        uncertainty_factors: [],
+        freshness_score: 1.2
+      })
+    }
+  });
+  const estimate = await estimator.estimate({ market, evidence: [evidence({ evidenceId: "e1" }), evidence({ evidenceId: "e2" })] });
+
+  assert.equal(validateSchema("ProbabilityEstimate", estimate).ok, true);
+  assert.equal(estimate.ai_probability, 0.95);
+});
+
 test("DecisionEngine can suggest no side when edge is negative for yes", async () => {
   const market = SAMPLE_MARKETS[0];
   const estimator = new ProbabilityEstimator(config, {
@@ -167,6 +188,28 @@ test("DecisionEngine no-trades when evidence is insufficient", async () => {
     }
   });
   const estimate = await estimator.estimate({ market, evidence: [] });
+  const decision = new DecisionEngine().analyze({ market, estimate, portfolio, amountUsd: 1 });
+
+  assert.equal(decision.action, "skip");
+  assert.equal(decision.noTradeReason, "insufficient_evidence");
+});
+
+test("DecisionEngine no-trades when confidence is too low despite apparent edge", async () => {
+  const market = SAMPLE_MARKETS[0];
+  const estimator = new ProbabilityEstimator(config, {
+    provider: {
+      estimate: async ({ evidence: items }) => ({
+        ai_probability: 0.9,
+        confidence: "low",
+        reasoning_summary: "Low confidence fake response.",
+        key_evidence: items,
+        counter_evidence: [],
+        uncertainty_factors: [],
+        freshness_score: 0.9
+      })
+    }
+  });
+  const estimate = await estimator.estimate({ market, evidence: [evidence({ evidenceId: "e1" }), evidence({ evidenceId: "e2" })] });
   const decision = new DecisionEngine().analyze({ market, estimate, portfolio, amountUsd: 1 });
 
   assert.equal(decision.action, "skip");

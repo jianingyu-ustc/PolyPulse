@@ -227,6 +227,7 @@ export function validateEnvConfig(config, options = {}) {
       check("env-file", Boolean(config.envFilePath), "live mode requires an explicit env file or .env."),
       check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required for live mode."),
       check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required for live mode."),
+      check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
       check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required for live mode."),
       check("CHAIN_ID", config.chainId === 137, "CHAIN_ID must be 137 for Polygon mainnet."),
       check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required for live mode.")

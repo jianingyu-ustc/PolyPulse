@@ -8,8 +8,9 @@
   },
   "scripts": {
     "polypulse": "node ./bin/polypulse.js",
-    "test": "node --test",
-    "smoke": "node ./bin/polypulse.js env check --source mock && node ./bin/polypulse.js account balance --source mock && node ./bin/polypulse.js market topics --source mock --limit 20 && node ./bin/polypulse.js predict --source mock --market market-001 && node ./bin/polypulse.js trade once --source mock --mode paper --market market-001 --max-amount 1 && node ./bin/polypulse.js monitor status --source mock && node ./bin/polypulse.js monitor run --source mock --mode paper --rounds 1 --limit 2 --max-amount 1"
+    "test": "node ./scripts/run-tests.js",
+    "test:node": "node --test",
+    "smoke": "node ./scripts/smoke.js"
   },
   "engines": {
     "node": ">=20.0.0"

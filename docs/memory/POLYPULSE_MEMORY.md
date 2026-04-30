@@ -1474,3 +1474,175 @@ rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --gl
 - `src/cli.js`
 - `test/monitor.test.js`
 - `docs/memory/POLYPULSE_MEMORY.md`
+
+## 2026-04-30 Stage 10 - 补齐测试矩阵
+
+### 阶段目标
+
+按 `docs/specs/testing-plan.md` 补齐测试模块，覆盖 env、account、market scan、prediction、paper/live one-shot、paper/live monitor、RiskEngine、性能/稳定性，并提供本地一键测试命令与失败详情归档。
+
+### 当前测试观察
+
+- 已有测试基础较完整：
+  - `test/broker-account.test.js` 覆盖 env preflight、private key 不打印、live mock balance、PaperBroker buy/sell、LiveBroker confirm gate、OrderExecutor blocked。
+  - `test/market-source.test.js` 覆盖分页、过滤、cache、insufficient scan risk flags。
+  - `test/analysis.test.js` 覆盖 EvidenceCrawler cache/dedupe、ProbabilityEstimator schema、DecisionEngine edge/no-trade。
+  - `test/risk-engine.test.js` 覆盖系统 pause/halt、drawdown、position loss、position count、notional limits、min trade、stale market、missing token、live gates。
+  - `test/once-runner.test.js` 覆盖 paper one-shot、no-trade、live missing confirm、live mock success、artifact 完整性。
+  - `test/monitor.test.js` 覆盖 paper/live monitor、dedupe、crash recovery、concurrency、stop/resume、watchlist/blocklist。
+- 缺口：
+  - `.env.example` 字段完整性测试。
+  - unique fake secret 不进入 stdout/artifact/memory 的端到端测试。
+  - AccountService / LiveBroker API failure、chain/address 配置错误。
+  - stale cache fallback 标记。
+  - 大量市场 mock scan。
+  - retry / timeout 独立测试。
+  - artifact cleanup policy。
+  - risk 拒绝后 broker submit 不被调用。
+  - live monitor halted 禁止 open。
+  - PaperBroker 余额不足应 fail-closed，目前 buy 会让 paper cash 变负，需修复。
+
+### 计划修改
+
+- 新增 `scripts/run-tests.js`，作为 `npm test` 的一键测试入口：运行 `node --test`，写 `runtime-artifacts/test-runs/<timestamp>/`，失败时保留 stdout/stderr/summary。
+- 新建 `docs/testing.md`，记录测试矩阵、命令、artifact 路径、CI/local 用法。
+- 新增/扩展测试：
+  - `test/env-security.test.js`
+  - `test/performance-stability.test.js`
+  - 扩展 `test/broker-account.test.js`
+  - 扩展 `test/market-source.test.js`
+  - 扩展 `test/analysis.test.js`
+  - 扩展 `test/once-runner.test.js`
+  - 扩展 `test/monitor.test.js`
+  - 扩展 `test/risk-engine.test.js`
+- 修复 PaperBroker buy 余额不足时应 reject，不更新持仓或 cash。
+
+### 实现结果
+
+- `scripts/run-tests.js`
+  - 新增一键测试入口，`npm test` 调用该脚本。
+  - 脚本执行 `node --test`，并写：
+    - `runtime-artifacts/test-runs/<timestamp>/command.txt`
+    - `runtime-artifacts/test-runs/<timestamp>/stdout.log`
+    - `runtime-artifacts/test-runs/<timestamp>/stderr.log`
+    - `runtime-artifacts/test-runs/<timestamp>/summary.json`
+  - 屏幕只输出 compact JSON summary；失败时 summary 中包含 artifact dir。
+
+- `scripts/smoke.js`
+  - 新增 CLI smoke runner，替代 package script 中的长 shell chain。
+  - 执行 7 条 CLI smoke：env check、account balance、market topics、predict、paper trade once、monitor status、monitor run。
+  - 每条命令 stdout/stderr 写入 `runtime-artifacts/test-runs/<timestamp>-smoke/`。
+  - 屏幕只输出 compact JSON summary。
+
+- `docs/testing.md`
+  - 新增测试文档，记录：
+    - `npm test`
+    - `npm run test:node`
+    - `npm run smoke`
+    - `git diff --check`
+    - secret scan 命令
+    - 失败详情 artifact 目录
+    - 功能覆盖矩阵
+    - live 测试边界
+
+- `package.json`
+  - `test` 改为 `node ./scripts/run-tests.js`。
+  - 新增 `test:node`。
+  - `smoke` 改为 `node ./scripts/smoke.js`。
+
+- `src/state/file-state-store.js`
+  - PaperBroker buy 余额不足时现在抛出 `paper_insufficient_cash`，避免 paper cash 变负。
+
+- `src/adapters/evidence-crawler.js`
+  - 修复 timeout 实现：原实现只 abort signal，如果 adapter 忽略 signal，仍会等待到 adapter 自然返回。
+  - 新实现使用 `Promise.race()`，超时后明确返回 failed evidence fallback。
+
+- `src/config/env.js`
+  - live preflight 增加 `FUNDER_ADDRESS_FORMAT` 校验，要求 20-byte hex address。
+
+### 新增/扩展测试覆盖
+
+- `test/env-security.test.js`
+  - `.env.example` 字段完整性。
+  - 缺 `PRIVATE_KEY` 时 live preflight fail。
+  - 构造 fake private value，验证不进入 stdout、artifact、memory。
+
+- `test/broker-account.test.js`
+  - Account balance mock client success 已存在。
+  - 新增 mock API failure。
+  - 新增 chain/address 配置错误。
+  - 新增 balance artifact 输出验证。
+  - 新增 paper buy 余额不足拒绝且不更新持仓。
+  - PaperBroker buy/sell/mark-to-market/crash recovery 已存在。
+
+- `test/market-source.test.js`
+  - 分页、过滤、cache 已存在。
+  - 新增 stale cache fallback 标记 `stale_market_cache_used`。
+  - 新增低流动性过滤后 `market_scan_empty` 标记。
+
+- `test/analysis.test.js`
+  - mock evidence、schema、edge/no-trade 已存在。
+  - 新增 fake AI response normalization，越界概率被 clamp 后仍符合 schema。
+  - 新增 low confidence no-trade。
+
+- `test/once-runner.test.js`
+  - paper one-shot 成功、no-trade、live 缺 confirm、live mock success 已存在。
+  - 新增 risk 拒绝后不调用 live broker submit。
+
+- `test/monitor.test.js`
+  - paper 单轮/多轮去重、crash recovery、stop/resume、live mock success 已存在。
+  - 新增 live env incomplete 默认 fail-closed。
+  - 新增 live halted 状态禁止 open，并验证不调用 submit。
+
+- `test/risk-engine.test.js`
+  - 单笔上限、总敞口、单事件、最大持仓、最小交易额、stale market、token mismatch、live gates 已存在。
+  - 新增 AI-proposed token outside market snapshot 被拒绝，作为 AI 越权输出测试。
+
+- `test/performance-stability.test.js`
+  - 新增 5,000 market mock scan，验证分页和返回数量。
+  - 新增 retryable failure 后重试成功。
+  - 新增 EvidenceCrawler timeout -> failed evidence，不挂起。
+  - 新增 monitor artifact cleanup policy，`maxRuns=1` 只保留最新 run。
+
+### 测试与验证
+
+已运行：
+
+```bash
+npm test
+npm run smoke
+git diff --check
+rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --glob '!runtime-artifacts/**' --glob '!node_modules/**' --glob '!.git/**'
+```
+
+结果：
+
+- `npm test` 通过 62 个 tests。
+- `npm run smoke` 通过 7 条 CLI smoke commands。
+- `git diff --check` 通过。
+- secret scan 命中均为预期空占位或文档记录：
+  - `.env.example` 空 `PRIVATE_KEY=`
+  - `src/config/env.js` 空默认值
+  - `test/env-security.test.js` 中空 `PRIVATE_KEY`
+  - memory 中对 secret scan 的文字记录
+  - 未发现非空 secret 赋值。
+- 未运行真实 live 命令；live 测试全部为 mock 或 fail-closed 检查。
+
+### 本阶段创建/修改的关键文件
+
+- `docs/testing.md`
+- `scripts/run-tests.js`
+- `scripts/smoke.js`
+- `package.json`
+- `src/state/file-state-store.js`
+- `src/adapters/evidence-crawler.js`
+- `src/config/env.js`
+- `test/env-security.test.js`
+- `test/performance-stability.test.js`
+- `test/broker-account.test.js`
+- `test/market-source.test.js`
+- `test/analysis.test.js`
+- `test/once-runner.test.js`
+- `test/monitor.test.js`
+- `test/risk-engine.test.js`
+- `docs/memory/POLYPULSE_MEMORY.md`

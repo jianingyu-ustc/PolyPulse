@@ -61,9 +61,17 @@ function dedupeEvidence(items) {
 
 async function withTimeout(promiseFactory, timeoutMs, label) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let timeout;
   try {
-    return await promiseFactory(controller.signal);
+    return await Promise.race([
+      promiseFactory(controller.signal),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      })
+    ]);
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error(`${label} timed out after ${timeoutMs}ms`);

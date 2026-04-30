@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
 import { FileStateStore } from "../src/state/file-state-store.js";
 import { AccountService } from "../src/account/account-service.js";
+import { ArtifactWriter } from "../src/artifacts/artifact-writer.js";
 import { PaperBroker } from "../src/brokers/paper-broker.js";
 import { LiveBroker } from "../src/brokers/live-broker.js";
 import { OrderExecutor } from "../src/execution/order-executor.js";
@@ -138,6 +139,59 @@ test("account balance uses mock live broker without exposing credentials", async
   assert.equal(JSON.stringify(balance).includes(config.privateKey), false);
 });
 
+test("account balance surfaces mock API failure without leaking credentials", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    envFilePath: "/tmp/polypulse-live.env",
+    privateKey: "in-memory-test-secret",
+    funderAddress: "0x2222222222222222222222222222222222222222",
+    signatureType: "1",
+    polymarketHost: "https://clob.polymarket.com"
+  });
+  const stateStore = new FileStateStore(config);
+  const liveBroker = new LiveBroker(config, {
+    client: {
+      preflight: async () => ({ ok: true, source: "mock" }),
+      getCollateralBalance: async () => {
+        throw new Error("mock_balance_api_failed");
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => new AccountService({ config, stateStore, liveBroker }).getBalance({ mode: "live" }),
+    /live_balance_failed/
+  );
+});
+
+test("live account preflight rejects invalid chain and funder address", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    envFilePath: "/tmp/polypulse-live.env",
+    privateKey: "in-memory-test-secret",
+    funderAddress: "not-an-address",
+    signatureType: "1",
+    chainId: 1,
+    polymarketHost: "https://clob.polymarket.com"
+  });
+  const report = validateEnvConfig(config, { mode: "live" });
+  assert.equal(report.ok, false);
+  assert.ok(report.checks.some((item) => item.key === "FUNDER_ADDRESS_FORMAT" && !item.ok));
+  assert.ok(report.checks.some((item) => item.key === "CHAIN_ID" && !item.ok));
+});
+
+test("account balance writes a redacted balance artifact", async () => {
+  const config = await tempConfig();
+  const stateStore = new FileStateStore(config);
+  const balance = await new AccountService({ config, stateStore }).getBalance({ mode: "paper" });
+  const artifact = await new ArtifactWriter(config).writeAccountBalance(balance);
+
+  await access(path.resolve(artifact.path));
+  const payload = await readFile(path.resolve(artifact.path), "utf8");
+  assert.match(payload, /paper-state/);
+  assert.equal(payload.includes("in-memory-test-secret"), false);
+});
+
 test("paper broker supports buy, sell, mark-to-market, and crash recovery", async () => {
   const config = await tempConfig();
   const stateStore = new FileStateStore(config);
@@ -161,6 +215,19 @@ test("paper broker supports buy, sell, mark-to-market, and crash recovery", asyn
   const recovered = await new FileStateStore(config).getPortfolio();
   assert.equal(recovered.accountId, "paper");
   assert.ok(recovered.positions.length <= 1);
+});
+
+test("paper broker rejects buys that exceed cash without mutating positions", async () => {
+  const config = await tempConfig();
+  const stateStore = new FileStateStore(config);
+  const broker = new PaperBroker(stateStore);
+  const result = await broker.submit({ ...order("BUY"), amountUsd: 2000 }, SAMPLE_MARKETS[0]);
+  const portfolio = await stateStore.getPortfolio();
+
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "paper_insufficient_cash");
+  assert.equal(portfolio.cashUsd, 1000);
+  assert.equal(portfolio.positions.length, 0);
 });
 
 test("live broker rejects by default and without confirm LIVE", async () => {

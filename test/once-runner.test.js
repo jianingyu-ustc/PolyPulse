@@ -159,3 +159,37 @@ test("live one-shot can execute through mock broker after confirm", async () => 
   assert.equal(result.orderResult.status, "filled");
   await assertOnceArtifacts(result.artifacts);
 });
+
+test("live one-shot risk rejection does not call broker submit", async () => {
+  const config = await tempConfig({
+    executionMode: "live",
+    envFilePath: "/tmp/polypulse-live.env",
+    privateKey: "in-memory-test-secret",
+    funderAddress: "0x7777777777777777777777777777777777777777",
+    signatureType: "1",
+    polymarketHost: "https://clob.polymarket.com"
+  });
+  let submitCalls = 0;
+  const liveBroker = {
+    async getBalance() {
+      return { collateralBalance: 100, allowance: 100, raw: {}, source: "mock" };
+    },
+    async submit() {
+      submitCalls += 1;
+      throw new Error("submit should not be called");
+    }
+  };
+
+  const result = await runTradeOnce({
+    context: contextFor(config),
+    marketId: "market-001",
+    mode: "live",
+    maxAmountUsd: 0.5,
+    confirmation: "LIVE",
+    options: { liveBroker }
+  });
+
+  assert.equal(result.action, "no-trade");
+  assert.equal(submitCalls, 0);
+  assert.ok(result.risk.blocked_reasons.includes("below_min_trade_usd"));
+});

@@ -224,6 +224,18 @@ test("stale market, missing evidence, low confidence, missing token, and closed/
   assert.ok(inactive.blocked_reasons.includes("market_not_tradable"));
 });
 
+test("AI-proposed token outside the market snapshot is rejected as overreach", async () => {
+  const risk = await evaluate({
+    decision: {
+      tokenId: "ai-invented-token-id",
+      sources: ["e-1", "e-2"]
+    }
+  });
+
+  assert.equal(risk.allowed, false);
+  assert.ok(risk.blocked_reasons.includes("token_not_in_market_snapshot"));
+});
+
 test("live mode requires confirmation, env preflight, and balance check", async () => {
   assert.ok((await evaluate({ mode: "live" })).blocked_reasons.includes("live_requires_confirm_live"));
   assert.ok((await evaluate({ mode: "live", confirmation: "LIVE" })).blocked_reasons.includes("live_preflight_failed"));
