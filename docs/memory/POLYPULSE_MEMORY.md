@@ -1802,3 +1802,159 @@ rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --gl
 - `src/adapters/evidence-crawler.js`
 - `test/monitor.test.js`
 - `docs/memory/POLYPULSE_MEMORY.md`
+
+## 2026-04-30 Stage 12 - 最终验收与整理
+
+### 阶段目标
+
+对照 `docs/specs/product-requirements.md` 完成最终验收，运行完整测试、paper one-shot demo、paper monitor demo、live fail-closed 检查、secret 检查、runtime artifacts 结构检查、memory 完整性检查和部署文档检查，并输出：
+
+- `docs/FINAL_ACCEPTANCE.md`
+- `docs/KNOWN_LIMITATIONS.md`
+- `docs/ROADMAP.md`
+
+### PRD 对照观察
+
+- 已完成：
+  - 账户余额查询：paper/live mock，live env 缺失 fail-fast，artifact redaction。
+  - 市场抓取：Polymarket Gamma 分页、过滤、cache、retry/timeout、risk flags。
+  - 证据抓取接口：EvidenceCrawler adapters、timeout、retry、dedupe、cache、artifact。
+  - 概率估计 schema：ProbabilityEstimator 输出 confidence、uncertainty、key/counter evidence。
+  - edge/EV/market probability：DecisionEngine 输出 gross/net edge、EV、suggested side/notional。
+  - hard risk：RiskEngine 强制系统、数据、仓位、交易、live 门禁。
+  - paper once 和 monitor：完整闭环、state、artifact、dedupe、crash recovery。
+  - live once 和 monitor：安全脚手架、mock broker 测试、默认拒绝。
+  - 部署：systemd、脚本、runbook、healthcheck、logrotate、live double confirm。
+- 部分完成 / 残余风险：
+  - 默认 AI 仍是本地启发式 provider，真实 LLM / AI command provider 待接入。
+  - 外部网页/新闻/官方数据搜索适配器尚未接入。
+  - LiveBroker 真实 Polymarket SDK / 钱包路径未实际验证。
+  - live confirmation 尚未绑定 run id、market、side、amount 和 env fingerprint。
+  - order book 深度成交、multi-outcome/neg-risk、reduce/close CLI 尚未完备。
+  - HTTP health endpoint 未实现，当前用命令式 `healthcheck.sh` 替代。
+
+### 执行命令与结果
+
+完整测试：
+
+```bash
+npm test
+```
+
+结果：
+
+- `62` tests passed。
+- artifact：`runtime-artifacts/test-runs/2026-04-30T12-11-40-852Z/summary.json`
+
+Smoke：
+
+```bash
+npm run smoke
+```
+
+结果：
+
+- `7` commands passed。
+- artifact：`runtime-artifacts/test-runs/2026-04-30T12-12-32-586Z-smoke/summary.json`
+
+Paper one-shot demo：
+
+```bash
+STATE_DIR=runtime-artifacts/final-acceptance/once-state ARTIFACT_DIR=runtime-artifacts/final-acceptance node ./bin/polypulse.js trade once --source mock --mode paper --market market-001 --max-amount 1
+```
+
+结果：
+
+- `action=paper-order`
+- `ai_probability=0.4886`
+- `market_probability=0.43`
+- `edge=0.0586`
+- artifact：`runtime-artifacts/final-acceptance/runs/2026-04-30T12-06-05-058Z-once/summary.md`
+
+Paper monitor demo：
+
+```bash
+STATE_DIR=runtime-artifacts/final-acceptance/monitor-state ARTIFACT_DIR=runtime-artifacts/final-acceptance MONITOR_CONCURRENCY=1 MONITOR_MAX_TRADES_PER_ROUND=1 node ./bin/polypulse.js monitor run --source mock --mode paper --rounds 1 --limit 2 --max-amount 1
+```
+
+结果：
+
+- `markets=2`
+- `candidates=2`
+- `predictions=2`
+- `orders=1`
+- `action=paper-orders`
+- artifact：`runtime-artifacts/final-acceptance/monitor/2026-04-30/2026-04-30t12-06-05-049z-39dcfc79/summary.md`
+
+Live one-shot 默认拒绝：
+
+```bash
+STATE_DIR=runtime-artifacts/final-acceptance/live-state ARTIFACT_DIR=runtime-artifacts/final-acceptance node ./bin/polypulse.js trade once --source mock --mode live --market market-001 --max-amount 1
+```
+
+结果：
+
+- `action=no-trade`
+- blocked reasons：`live_requires_confirm_live`、`live_preflight_failed`、`live_balance_check_missing`
+- artifact：`runtime-artifacts/final-acceptance/runs/2026-04-30T12-06-05-055Z-once/summary.md`
+
+Live monitor 默认拒绝：
+
+```bash
+STATE_DIR=runtime-artifacts/final-acceptance/live-monitor-state ARTIFACT_DIR=runtime-artifacts/final-acceptance MONITOR_CONCURRENCY=1 node ./bin/polypulse.js monitor run --source mock --mode live --rounds 1 --limit 1 --max-amount 1
+```
+
+结果：
+
+- `action=no-trade`
+- `orders=0`
+- blocked reasons：`live_requires_confirm_live`、`live_preflight_failed`、`live_balance_check_missing`
+- artifact：`runtime-artifacts/final-acceptance/monitor/2026-04-30/2026-04-30t12-06-05-049z-c8d98615/summary.md`
+
+Live env preflight:
+
+```bash
+node ./bin/polypulse.js env check --mode live --env-file .env.example
+```
+
+结果：
+
+- `ok=false`
+- 明确缺 `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`POLYMARKET_HOST`
+- 未打印 private key。
+
+### Secret 与 artifact 检查
+
+执行：
+
+```bash
+rg -n "(PRIVATE_KEY|API_KEY|SECRET|TOKEN|COOKIE|SESSION)[[:space:]]*[:=]" . --glob '!runtime-artifacts/**' --glob '!node_modules/**' --glob '!.git/**'
+# 另执行了测试用 fake private-key literal 扫描，范围为 runtime-artifacts 与 docs/memory。
+```
+
+结果：
+
+- 未发现真实 secret。
+- 命中项为 env 模板空值、runbook 占位符、测试 fake literal 或 memory 检查记录。
+- 测试用 fake private-key literal 未出现在 runtime artifacts 或 memory。
+- runtime artifacts 中有 `PRIVATE_KEY is required` 这类缺字段说明，但没有 private key 值。
+
+### Runtime artifacts 结构观察
+
+- `runtime-artifacts/final-acceptance/runs/<timestamp>-once/` 包含 `input.json`、`market.json`、`evidence.json`、`estimate.json`、`decision.json`、`risk.json`、`order.json`、`summary.md`。
+- `runtime-artifacts/final-acceptance/monitor/<date>/<run-id>/` 包含 `markets.json`、`candidates.json`、`predictions/<market>/`、`decisions.json`、`risk.json`、`orders.json`、`summary.md`。
+- `runtime-artifacts/final-acceptance/*-state/` 分离 paper/live 与 once/monitor state。
+- 大小：`runtime-artifacts/final-acceptance` 约 212K，`runtime-artifacts/test-runs` 约 176K。
+
+### 部署文档检查
+
+- `deploy/README.md`、`docs/runbooks/server-deploy.md` 和 `docs/runbooks/live-trading-checklist.md` 可指导轻量级 VPS 部署。
+- 覆盖 `/home/PolyPulse`、`.env` 权限、STATE_DIR/ARTIFACT_DIR、systemd、logrotate、healthcheck、自动重启、paper smoke、paper/live monitor、手动预测、余额、artifact、停止和恢复。
+- live 启动有双确认：`.env` 的 `POLYPULSE_LIVE_CONFIRM=LIVE` 和 `deploy/scripts/start.sh --confirm LIVE`。
+
+### 本阶段创建/修改的关键文件
+
+- `docs/FINAL_ACCEPTANCE.md`
+- `docs/KNOWN_LIMITATIONS.md`
+- `docs/ROADMAP.md`
+- `docs/memory/POLYPULSE_MEMORY.md`
