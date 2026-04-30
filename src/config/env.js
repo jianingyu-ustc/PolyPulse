@@ -57,7 +57,16 @@ const DEFAULTS = {
   CODEX_MODEL: "",
   CODEX_SKILL_ROOT_DIR: "skills",
   CODEX_SKILL_LOCALE: "zh",
-  CODEX_SKILLS: "polypulse-market-agent"
+  CODEX_SKILLS: "polypulse-market-agent",
+  CLAUDE_CODE_COMMAND: "",
+  CLAUDE_CODE_MODEL: "",
+  CLAUDE_CODE_SKILL_ROOT_DIR: "skills",
+  CLAUDE_CODE_SKILL_LOCALE: "zh",
+  CLAUDE_CODE_SKILLS: "polypulse-market-agent",
+  CLAUDE_CODE_PERMISSION_MODE: "bypassPermissions",
+  CLAUDE_CODE_ALLOWED_TOOLS: "Read,Glob,Grep",
+  CLAUDE_CODE_EXTRA_ARGS: "",
+  CLAUDE_CODE_MAX_BUDGET_USD: ""
 };
 
 const SECRET_KEYS = new Set([
@@ -218,6 +227,17 @@ export async function loadEnvConfig(options = {}) {
         skillRootDir: path.resolve(repoRoot, values.CODEX_SKILL_ROOT_DIR || DEFAULTS.CODEX_SKILL_ROOT_DIR),
         skillLocale: ["en", "zh"].includes(values.CODEX_SKILL_LOCALE) ? values.CODEX_SKILL_LOCALE : "zh",
         skills: values.CODEX_SKILLS || DEFAULTS.CODEX_SKILLS
+      },
+      claudeCode: {
+        command: values.CLAUDE_CODE_COMMAND || (values.AI_PROVIDER === "claude-code" ? values.AI_COMMAND ?? "" : ""),
+        model: values.CLAUDE_CODE_MODEL || values.AI_MODEL || "",
+        skillRootDir: path.resolve(repoRoot, values.CLAUDE_CODE_SKILL_ROOT_DIR || DEFAULTS.CLAUDE_CODE_SKILL_ROOT_DIR),
+        skillLocale: ["en", "zh"].includes(values.CLAUDE_CODE_SKILL_LOCALE) ? values.CLAUDE_CODE_SKILL_LOCALE : "zh",
+        skills: values.CLAUDE_CODE_SKILLS || DEFAULTS.CLAUDE_CODE_SKILLS,
+        permissionMode: values.CLAUDE_CODE_PERMISSION_MODE || DEFAULTS.CLAUDE_CODE_PERMISSION_MODE,
+        allowedTools: values.CLAUDE_CODE_ALLOWED_TOOLS ?? DEFAULTS.CLAUDE_CODE_ALLOWED_TOOLS,
+        extraArgs: values.CLAUDE_CODE_EXTRA_ARGS ?? "",
+        maxBudgetUsd: values.CLAUDE_CODE_MAX_BUDGET_USD ?? ""
       }
     }
   };

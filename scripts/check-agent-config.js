@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { loadEnvConfig } from "../src/config/env.js";
 import { resolveCodexSkillSettings, resolveEffectiveProvider } from "../src/runtime/codex-skill-settings.js";
+import { resolveClaudeSkillSettings } from "../src/runtime/claude-skill-settings.js";
 
 function option(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -36,6 +37,20 @@ function checkCodexCli() {
   };
 }
 
+function checkClaudeCli() {
+  const result = spawnSync("claude", ["--version"], {
+    encoding: "utf8",
+    timeout: 5000
+  });
+  return {
+    checked: true,
+    ok: result.status === 0,
+    command: "claude",
+    version: result.status === 0 ? firstLine(result.stdout || result.stderr) : "",
+    error: result.status === 0 ? "" : firstLine(result.stderr || result.error?.message || "claude --version failed")
+  };
+}
+
 async function main(args = process.argv.slice(2)) {
   const envFile = option(args, "--env-file");
   const expectedProvider = option(args, "--expect");
@@ -64,6 +79,15 @@ async function main(args = process.argv.slice(2)) {
         checks,
         "AGENT_RUNTIME_PROVIDER",
         config.agentRuntimeProvider === "codex",
+        `AGENT_RUNTIME_PROVIDER=${config.agentRuntimeProvider}`
+      );
+    }
+    if (expectedProvider === "claude-code") {
+      addCheck(checks, "AI_PROVIDER", config.ai.provider === "claude-code", `AI_PROVIDER=${config.ai.provider}`);
+      addCheck(
+        checks,
+        "AGENT_RUNTIME_PROVIDER",
+        config.agentRuntimeProvider === "claude-code",
         `AGENT_RUNTIME_PROVIDER=${config.agentRuntimeProvider}`
       );
     }
@@ -125,6 +149,66 @@ async function main(args = process.argv.slice(2)) {
     );
   }
 
+  const claudeEnabled = effectiveProvider === "claude-code";
+  let claudeCode = {
+    enabled: claudeEnabled,
+    commandMode: "not-used",
+    customCommand: false,
+    model: "",
+    providerTimeoutSeconds: config.providerTimeoutSeconds,
+    skillLocale: "",
+    skillRootDir: "",
+    permissionMode: "",
+    allowedTools: [],
+    skills: [],
+    cli: { checked: false, ok: null, command: "claude", version: "", error: "" }
+  };
+
+  if (claudeEnabled) {
+    let settings = null;
+    try {
+      settings = resolveClaudeSkillSettings(config);
+      claudeCode = {
+        ...claudeCode,
+        commandMode: settings.command ? "custom-command" : "claude-cli",
+        customCommand: Boolean(settings.command),
+        model: settings.model,
+        skillLocale: settings.skillLocale,
+        skillRootDir: settings.skillRootDir,
+        permissionMode: settings.permissionMode,
+        allowedTools: settings.allowedTools,
+        skills: settings.skills.map((skill) => ({
+          id: skill.id,
+          skillFile: path.relative(config.repoRoot, skill.skillFile)
+        }))
+      };
+      addCheck(checks, "claude-code-skills", settings.skills.length > 0, `skills=${settings.skills.map((item) => item.id).join(",")}`);
+    } catch (error) {
+      addCheck(checks, "claude-code-skills", false, error instanceof Error ? error.message : String(error));
+    }
+
+    if (settings?.command) {
+      addCheck(
+        checks,
+        "CLAUDE_CODE_COMMAND_OUTPUT_FILE",
+        settings.command.includes("{{output_file}}"),
+        "CLAUDE_CODE_COMMAND must write provider JSON to {{output_file}}"
+      );
+    } else {
+      const cli = checkClaudeCli();
+      claudeCode.cli = cli;
+      addCheck(checks, "claude-code-cli", cli.ok, cli.ok ? `claude=${cli.version}` : cli.error);
+    }
+
+    addCheck(
+      checks,
+      "PROVIDER_TIMEOUT_SECONDS",
+      config.providerTimeoutSeconds > 0,
+      `PROVIDER_TIMEOUT_SECONDS=${config.providerTimeoutSeconds}; 0 means no provider timeout`,
+      "warning"
+    );
+  }
+
   const ok = checks.every((item) => item.ok || item.level === "warning");
   const output = {
     ok,
@@ -134,6 +218,7 @@ async function main(args = process.argv.slice(2)) {
     effectiveProvider,
     expectedProvider,
     codex,
+    claudeCode,
     checks
   };
 

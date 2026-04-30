@@ -1,5 +1,6 @@
 import { assertSchema } from "../domain/schemas.js";
 import { CodexProbabilityProvider } from "../runtime/codex-runtime.js";
+import { ClaudeProbabilityProvider } from "../runtime/claude-runtime.js";
 import { resolveEffectiveProvider } from "../runtime/codex-skill-settings.js";
 
 function clampProbability(value) {
@@ -164,7 +165,9 @@ export class ProbabilityEstimator {
     this.provider = options.provider
       ?? (providerName === "codex"
         ? new CodexProbabilityProvider(config)
-        : new LocalHeuristicProbabilityProvider(config));
+        : providerName === "claude-code"
+          ? new ClaudeProbabilityProvider(config)
+          : new LocalHeuristicProbabilityProvider(config));
   }
 
   async estimate({ market, evidenceBundle = null, evidence = null }) {

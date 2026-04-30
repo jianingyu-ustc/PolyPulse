@@ -10,6 +10,8 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。所有交易仍必须经过 `DecisionEngine`、`RiskEngine` 和 `OrderExecutor`。
 
+PolyPulse 也支持把概率估算 provider 切换为 Claude Code（`claude` CLI）。设置 `AI_PROVIDER=claude-code` 和 `AGENT_RUNTIME_PROVIDER=claude-code` 后，runtime 会以 `claude --print --bare` 非交互模式调用 Claude Code，并通过 `--allowedTools` 和 `--permission-mode` 限制为只读访问。Claude Code 与 Codex 一样只能输出 `ProbabilityEstimate`，下游 `DecisionEngine`、`RiskEngine`、`OrderExecutor` 仍生效，CODEX_* 配置保持不变可随时切回 Codex。
+
 主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 codex-runtime。所有 artifact 写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
@@ -71,7 +73,14 @@ npm run agent:check -- --env-file .env --expect codex
 
 `agent:check` 用于确认 `AI_PROVIDER=codex`、`AGENT_RUNTIME_PROVIDER=codex` 是否真的选中了 Codex provider，并检查 `CODEX_SKILL_ROOT_DIR` / `CODEX_SKILLS`。如果没有配置 `CODEX_COMMAND`，它还会检查当前机器上 `codex --version` 是否可用。
 
-Codex 完整功能链路测试：用于逐项验证“市场话题抓取 -> 证据收集 -> Codex 概率估算 -> 隐含概率和 edge 计算 -> RiskEngine 决定 paper/live 下单”。市场话题抓取是市场数据阶段，不调用 Codex；`predict` 和 `trade once` 会先收集证据，再调用 Codex 产出 `ProbabilityEstimate`。
+把 `--expect codex` 换成 `--expect claude-code` 即可校验 Claude Code provider：要求 `.env` 中 `AI_PROVIDER=claude-code`、`AGENT_RUNTIME_PROVIDER=claude-code`，并能解析 `CLAUDE_CODE_SKILL_ROOT_DIR` / `CLAUDE_CODE_SKILLS`。没有配置 `CLAUDE_CODE_COMMAND` 时，agent:check 会调用 `claude --version` 验证 Claude Code CLI 是否安装。
+
+```bash
+# 校验当前 .env 是否成功启用 Claude Code provider。
+npm run agent:check -- --env-file .env --expect claude-code
+```
+
+Codex / Claude Code 完整功能链路测试：用于逐项验证“市场话题抓取 -> 证据收集 -> 概率估算 -> 隐含概率和 edge 计算 -> RiskEngine 决定 paper/live 下单”。市场话题抓取是市场数据阶段，不调用 provider；`predict` 和 `trade once` 会先收集证据，再调用 provider 产出 `ProbabilityEstimate`。下面命令默认走 `.env` 里配置的 provider；要切换 provider，把 `.env` 里的 `AI_PROVIDER` / `AGENT_RUNTIME_PROVIDER` 改成 `codex` 或 `claude-code` 即可，命令本身保持不变。
 
 ```bash
 # 0. 确认当前 env 已启用 Codex provider。
@@ -249,6 +258,38 @@ journalctl -u polypulse-monitor.service -n 100 --no-pager
 # 查看最近文件日志。
 tail -n 100 /home/PolyPulse/logs/polypulse-monitor.log
 ```
+
+## 切换概率估算 Provider
+
+PolyPulse 同时支持两个本地非交互 provider：Codex（`codex exec`）和 Claude Code（`claude --print`）。两者输出格式完全一致，`DecisionEngine`、`RiskEngine` 和 `OrderExecutor` 不感知 provider 切换。
+
+只用其中一个或两个都不启用，由 `.env` 里这两行决定：
+
+```bash
+# 启用 Codex provider。需要本机有 codex CLI。
+AI_PROVIDER=codex
+AGENT_RUNTIME_PROVIDER=codex
+
+# 启用 Claude Code provider。需要本机有 claude CLI（Claude Code）。
+AI_PROVIDER=claude-code
+AGENT_RUNTIME_PROVIDER=claude-code
+
+# 走本地启发式估算，不调用任何外部 CLI。
+AI_PROVIDER=local
+AGENT_RUNTIME_PROVIDER=none
+```
+
+Claude Code provider 相关 env 变量都在 `.env.example` 的 `CLAUDE_CODE_*` 段落：
+
+- `CLAUDE_CODE_COMMAND`：可选。提供模板化命令，覆盖默认的 `claude --print` 调用。需包含 `{{output_file}}` 占位符。
+- `CLAUDE_CODE_MODEL`：可选 model alias 或全名（例如 `sonnet`、`opus`、`claude-sonnet-4-6`）。
+- `CLAUDE_CODE_SKILL_ROOT_DIR` / `CLAUDE_CODE_SKILL_LOCALE` / `CLAUDE_CODE_SKILLS`：与 Codex 一致的 skill 目录/语言/skill id。
+- `CLAUDE_CODE_PERMISSION_MODE`：默认 `bypassPermissions`，配合下面的工具白名单使用；也可改为 `plan`、`default` 等。
+- `CLAUDE_CODE_ALLOWED_TOOLS`：默认 `Read,Glob,Grep`，限制 Claude Code 只能做只读访问。
+- `CLAUDE_CODE_EXTRA_ARGS`：追加给 `claude` CLI 的额外参数（按 shell 规则解析）。
+- `CLAUDE_CODE_MAX_BUDGET_USD`：可选预算上限，传给 `--max-budget-usd`。
+
+切换到 Claude Code 后再跑一次 `agent:check` 与 README 中其他 `predict` / `trade once` / `monitor run` 命令即可。CODEX_* 段落保持不变，可以随时切回 Codex provider。
 
 ## 关键文档
 
