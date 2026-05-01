@@ -24,6 +24,27 @@ PolyPulse 也支持把概率估算 provider 切换为 Claude Code（`claude` CLI
 
 推荐、预测和交易决策链路的 AI 调用边界：`predict`、`trade once`、`monitor run` 都会进入 `ProbabilityEstimator`。当 `.env` 中 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex`，或 `AI_PROVIDER=claude-code` 且 `AGENT_RUNTIME_PROVIDER=claude-code` 时，底层会调用对应 AI CLI 生成 `ProbabilityEstimate`；AI 只负责概率和证据判断，代码按 Predict-Raven pulse-direct 口径计算 fee、net edge、quarter Kelly、monthly return、排序和风控。`--source mock` 只表示市场数据用 mock，不表示概率估算用 mock；只要命令带 `--env-file .env` 且 `agent:check` 通过，使用方法里的推荐/预测同样会调用配置的 AI provider。只有明确设置 `AI_PROVIDER=local` / `AGENT_RUNTIME_PROVIDER=none`，或运行 `npm run smoke` 这种离线测试脚本时，才会使用本地启发式 fallback 而不调用外部 AI。
 
+### Predict-Raven Pulse 策略配置
+
+默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径；`.env.example` 和 `deploy/env.example` 已包含这些配置：
+
+```bash
+PULSE_STRATEGY=pulse-direct
+PULSE_MIN_LIQUIDITY_USD=5000
+PULSE_MAX_CANDIDATES=20
+PULSE_REPORT_CANDIDATES=4
+PULSE_BATCH_CAP_PCT=0.2
+PULSE_FETCH_DIMENSIONS=volume24hr,liquidity,startDate,competitive
+PULSE_REQUIRE_EVIDENCE_GUARD=false
+```
+
+这些配置的含义：
+
+- `market topics` 默认按 Pulse-compatible 候选池筛选：最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
+- `predict` 和 `trade once` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
+- `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；真实 live 仍必须通过 `--confirm LIVE`、env preflight、余额检查和 `RiskEngine`。
+- 如需回退旧版 PolyPulse 单市场阈值策略，可设置 `PULSE_STRATEGY=legacy`；这会恢复固定 fee/slippage 阈值和证据/置信度硬阻断。
+
 ### 与 Predict-Raven 快速开始第 3、4 步的对应关系
 
 Predict-Raven README 的 `### 3. 获取推荐，不下单` 对应 `pnpm pulse:recommend` / `scripts/pulse-live.ts --recommend-only`：它会跑 Pulse 候选池、生成多笔推荐和 `recommendation.json`，但不会发送真实订单。
@@ -73,7 +94,7 @@ Codex 提示词版本（逐条对应上面的 0-7 条命令）：
 0. 请先检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
 1. 请用 mock 市场数据 market-001 跑一次 predict，但概率估算必须走 .env 配置的 AI provider；确认输出 provider、effectiveProvider、action=predict-only 和 artifact 路径，不调用 OrderExecutor，不提交任何订单。
 2. 请用 .env 抓取 20 个真实市场 topic，并告诉我可用于后续 predict 的 marketId 或 marketSlug。
-3. 请对选出的真实市场运行 predict，确认底层 provider 不是 local，输出 action=predict-only，并汇总概率、隐含概率、edge 和 artifact 路径。
+3. 请对选出的真实市场运行 predict，确认底层 provider 不是 local，输出 action=predict-only，并汇总概率、隐含概率、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 artifact 路径。
 4. 请列出 runtime-artifacts/predictions 下最近 20 个文件，确认推荐不下单的 evidence、estimate 和 decision 已落盘。
 5. 请用 mock 市场跑 live trade once 但不要带 confirm LIVE，确认概率估算走 AI provider，同时 live 保护路径会阻止真实下单。
 6. 请只在 .env 明确使用 POLYPULSE_LIVE_WALLET_MODE=simulated 时，跑一次带 confirm LIVE 的 live once 演练，并确认不会连接真实钱包或提交真实订单。
@@ -212,7 +233,7 @@ Codex 提示词版本（逐条对应上面的 0-8 步）：
 0. 请先检查 .env 是否启用了 Codex provider，并汇总 agent:check 的 ok、provider、runtime provider 和 skill 配置结果。
 1. 请用 .env 配置抓取 20 个真实市场话题；从 topics[] 中挑出后续测试可用的 marketId 或 marketSlug。
 2. 请使用上一步选出的 marketId 或 marketSlug 跑一次 predict，收集证据并调用当前 provider 估算事件真实发生概率。
-3. 请在同一次 predict 结果中检查 market_implied_probability、edge 和 action=predict-only 是否存在，并说明含义。
+3. 请在同一次 predict 结果中检查 market_implied_probability、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 action=predict-only 是否存在，并说明含义。
 4. 请检查 runtime-artifacts/predictions 和 runtime-artifacts/codex-runtime 中最近 20 个文件，确认 evidence、estimate、decision 和 runtime artifact 已落盘。
 5. 请用同一个市场跑一次 paper trade once，max-amount=1，验证 DecisionEngine、RiskEngine 和 PaperBroker 链路，不提交真实订单。
 6. 请用同一个市场跑一次 live trade once 但不要带 confirm LIVE，验证 live 风控保护路径会阻止真实下单。
@@ -242,7 +263,7 @@ Codex 提示词版本（逐条对应上面的 4 条命令）：
 
 ```text
 1. 请用 .env 配置抓取 20 个市场话题，并告诉我可用于后续测试的 marketId 或 marketSlug。
-2. 请对我指定或你刚选出的 marketId/marketSlug 运行 predict，汇总 evidence、概率估算、隐含概率和 edge。
+2. 请对我指定或你刚选出的 marketId/marketSlug 运行 predict，汇总 evidence、概率估算、隐含概率、edge、net_edge、quarter_kelly_pct 和 monthly_return。
 3. 请查看当前模式下的账户余额；如果是 paper 模式，请说明余额来源是本地 paper state。
 4. 请列出 runtime-artifacts 下最近 30 个 artifact 文件，并按类别说明哪些是本次测试产生的。
 ```
