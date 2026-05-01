@@ -142,7 +142,7 @@
 /**
  * @typedef {Object} OrderRequest
  * @property {string} orderId
- * @property {"paper"|"live"} mode
+ * @property {"live"} mode
  * @property {string} marketId
  * @property {string} tokenId
  * @property {"BUY"|"SELL"} side
@@ -153,7 +153,7 @@
  * @typedef {Object} OrderResult
  * @property {string} orderId
  * @property {"filled"|"rejected"|"blocked"|"dry-run"} status
- * @property {"paper"|"live"} mode
+ * @property {"live"} mode
  * @property {number} requestedUsd
  * @property {number} filledUsd
  * @property {number|null} avgPrice

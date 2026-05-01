@@ -3,7 +3,6 @@ import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
-import { PaperBroker } from "../brokers/paper-broker.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { AccountService } from "../account/account-service.js";
 import { OrderExecutor } from "../execution/order-executor.js";
@@ -12,7 +11,7 @@ function oneShotAction({ mode, risk, orderResult }) {
   if (!risk.allowed || !risk.order || orderResult?.status === "blocked") {
     return "no-trade";
   }
-  return mode === "live" ? "live-order" : "paper-order";
+  return "live-order";
 }
 
 export async function buildPrediction(context, marketId, options = {}) {
@@ -30,12 +29,15 @@ export async function buildPrediction(context, marketId, options = {}) {
 export async function runTradeOnce({
   context,
   marketId,
-  mode = "paper",
+  mode = "live",
   side = null,
   maxAmountUsd = 1,
   confirmation = null,
   options = {}
 }) {
+  if (mode !== "live") {
+    throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+  }
   const input = {
     command: "trade once",
     mode,
@@ -53,10 +55,9 @@ export async function runTradeOnce({
   const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
 
   const liveBroker = options.liveBroker ?? new LiveBroker(context.config);
-  const paperBroker = options.paperBroker ?? new PaperBroker(context.stateStore);
   let liveBalance = null;
   let liveBalanceError = null;
-  if (mode === "live" && confirmation === "LIVE") {
+  if (confirmation === "LIVE") {
     try {
       liveBalance = await new AccountService({
         config: context.config,
@@ -79,7 +80,7 @@ export async function runTradeOnce({
     liveBalance,
     liveBalanceError
   });
-  const orderResult = await new OrderExecutor({ paperBroker, liveBroker }).execute({ risk, market, mode, confirmation });
+  const orderResult = await new OrderExecutor({ liveBroker }).execute({ risk, market, mode, confirmation });
   const action = oneShotAction({ mode, risk, orderResult });
   const artifacts = await context.artifactWriter.writeOnceRun({
     input,

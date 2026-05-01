@@ -55,18 +55,18 @@ test("agent config check passes for codex with custom command", async () => {
   assert.equal(output.codex.skills[0].id, "polypulse-market-agent");
 });
 
-test("agent config check fails when codex is expected but not selected", async () => {
+test("agent config check fails when codex is expected but claude-code is selected", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-agent-config-"));
-  const envPath = path.join(dir, "local.env");
+  const envPath = path.join(dir, "claude.env");
   await writeFile(envPath, [
-    "AI_PROVIDER=local",
-    "AGENT_RUNTIME_PROVIDER=none"
+    "AI_PROVIDER=claude-code",
+    "AGENT_RUNTIME_PROVIDER=claude-code"
   ].join("\n"), "utf8");
 
   const result = await runAgentCheck(["--env-file", envPath, "--expect", "codex"]);
   assert.notEqual(result.status, 0);
   const output = JSON.parse(result.stdout);
   assert.equal(output.ok, false);
-  assert.equal(output.effectiveProvider, "local");
+  assert.equal(output.effectiveProvider, "claude-code");
   assert.ok(output.checks.some((item) => item.key === "expected-provider" && !item.ok));
 });

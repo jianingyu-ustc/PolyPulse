@@ -1,18 +1,19 @@
 # PolyPulse
 
-PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。核心链路是：抓取市场话题，收集证据，估算事件真实发生概率，计算市场隐含概率和 edge，再通过服务层硬风控决定是否 paper / live 下单。
+PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。当前 README 只保留两条运行路径：
 
-默认运行模式是 `paper`。任何 live 路径都必须显式 `--mode live --confirm LIVE`，并通过 env preflight、余额检查和 `RiskEngine`。
+- `live simulated`：读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包、不提交真实订单。
+- `live real`：读取当前 Polymarket 真实市场，连接真实钱包，并在风控允许后提交真实订单。
+
+所有测试、验收和部署命令都必须使用 `.env`，并读取当前 Polymarket 真实市场。
 
 ## 项目概览
 
-当前能力：Polymarket 市场扫描、EvidenceCrawler、ProbabilityEstimator、DecisionEngine、RiskEngine、paper/live broker、one-shot、monitor 常驻运行和 systemd 部署。默认运行模式是 `paper`；任何 live 路径都必须显式 `--mode live --confirm LIVE`，并通过 env preflight、余额检查和 `RiskEngine`。
+核心链路：抓取当前 Polymarket 市场话题，收集证据，调用配置的 AI provider 估算事件真实发生概率，按 Predict-Raven `pulse-direct` 口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
 
-Codex runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。默认策略是 `PULSE_STRATEGY=pulse-direct`：话题筛选、fee / net edge、quarter Kelly sizing、monthly return 排序和 batch cap 口径与 Predict-Raven 的 pulse-direct 对齐；所有交易仍必须经过 `DecisionEngine`、`RiskEngine` 和 `OrderExecutor`。
+Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-PolyPulse 也支持把概率估算 provider 切换为 Claude Code（`claude` CLI）。设置 `AI_PROVIDER=claude-code` 和 `AGENT_RUNTIME_PROVIDER=claude-code` 后，runtime 会以 `claude --print --bare` 非交互模式调用 Claude Code，并通过 `--allowedTools` 和 `--permission-mode` 限制为只读访问。Claude Code 与 Codex 一样只能输出 `ProbabilityEstimate`，下游 `DecisionEngine`、`RiskEngine`、`OrderExecutor` 仍生效，CODEX_* 配置保持不变可随时切回 Codex。
-
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 codex-runtime。所有 artifact 写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。所有 artifact 写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
@@ -20,13 +21,49 @@ PolyPulse 也支持把概率估算 provider 切换为 Claude Code（`claude` CLI
 
 ## 使用方法
 
-每个命令块后面的 `Codex 提示词版本` 可以直接复制到 Codex 中执行；提示词与上方命令或配置步骤按编号一一对应，由 Codex 负责运行同等测试、检查结果并汇总失败原因。
+每个命令块后面的 `Codex 提示词版本` 可以直接复制到 Codex 中执行；提示词与上方命令或配置步骤按编号一一对应，由 Codex 负责运行同等检查、真实市场测试和失败原因汇总。
 
-推荐、预测和交易决策链路的 AI 调用边界：`predict`、`trade once`、`monitor run` 都会进入 `ProbabilityEstimator`。当 `.env` 中 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex`，或 `AI_PROVIDER=claude-code` 且 `AGENT_RUNTIME_PROVIDER=claude-code` 时，底层会调用对应 AI CLI 生成 `ProbabilityEstimate`；AI 只负责概率和证据判断，代码按 Predict-Raven pulse-direct 口径计算 fee、net edge、quarter Kelly、monthly return、排序和风控。`--source mock` 只表示市场数据用 mock，不表示概率估算用 mock；只要命令带 `--env-file .env` 且 `agent:check` 通过，使用方法里的推荐/预测同样会调用配置的 AI provider。只有明确设置 `AI_PROVIDER=local` / `AGENT_RUNTIME_PROVIDER=none`，或运行 `npm run smoke` 这种离线测试脚本时，才会使用本地启发式 fallback 而不调用外部 AI。
+### 必需运行模式
+
+`.env` 必须明确选择以下两种模式之一。
+
+`live simulated` 用于真实市场演练：
+
+```bash
+POLYPULSE_EXECUTION_MODE=live
+POLYPULSE_LIVE_CONFIRM=LIVE
+POLYPULSE_LIVE_WALLET_MODE=simulated
+SIMULATED_WALLET_BALANCE_USD=100
+POLYPULSE_MARKET_SOURCE=polymarket
+POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+```
+
+`live real` 用于真实钱包交易：
+
+```bash
+POLYPULSE_EXECUTION_MODE=live
+POLYPULSE_LIVE_CONFIRM=LIVE
+POLYPULSE_LIVE_WALLET_MODE=real
+PRIVATE_KEY=<server-local-secret>
+FUNDER_ADDRESS=<0x...>
+SIGNATURE_TYPE=<signature-type>
+CHAIN_ID=137
+POLYMARKET_HOST=https://clob.polymarket.com
+POLYPULSE_MARKET_SOURCE=polymarket
+POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+```
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env 是否是 live simulated 或 live real，并确认 POLYPULSE_MARKET_SOURCE=polymarket、POLYMARKET_GAMMA_HOST 指向真实 Gamma API。
+2. 如果是 live simulated，请确认它会读取真实 Polymarket 市场，但不会连接真实钱包或提交真实订单。
+3. 如果是 live real，请确认 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST 已配置，并提醒这是会触发真实资金路径的配置。
+```
 
 ### Predict-Raven Pulse 策略配置
 
-默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径；`.env.example` 和 `deploy/env.example` 已包含这些配置：
+默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径：
 
 ```bash
 PULSE_STRATEGY=pulse-direct
@@ -41,304 +78,146 @@ PULSE_REQUIRE_EVIDENCE_GUARD=false
 这些配置的含义：
 
 - `market topics` 默认按 Pulse-compatible 候选池筛选：最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
-- `predict` 和 `trade once` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
-- `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；真实 live 仍必须通过 `--confirm LIVE`、env preflight、余额检查和 `RiskEngine`。
-- 如需回退旧版 PolyPulse 单市场阈值策略，可设置 `PULSE_STRATEGY=legacy`；这会恢复固定 fee/slippage 阈值和证据/置信度硬阻断。
+- `predict`、`trade once` 和 `monitor run` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
+- `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；`live real` 仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
 
-### 与 Predict-Raven 快速开始第 3、4 步的对应关系
+Codex 提示词版本：
 
-Predict-Raven README 的 `### 3. 获取推荐，不下单` 对应 `pnpm pulse:recommend` / `scripts/pulse-live.ts --recommend-only`：它会跑 Pulse 候选池、生成多笔推荐和 `recommendation.json`，但不会发送真实订单。
+```text
+1. 请检查 .env 的 PULSE_* 配置是否与 Predict-Raven pulse-direct 兼容口径一致。
+2. 请说明 market topics、predict、trade once 和 monitor run 会如何使用这些 PULSE_* 配置。
+```
 
-PolyPulse 已将核心策略口径对齐到 Predict-Raven 的 `pulse-direct`：`market topics` 默认使用 Pulse 候选池规则（最小流动性 5000、必须有 CLOB token、移除 7 天内短期价格市场、维度元数据为 `volume24hr/liquidity/startDate/competitive`）；`predict` 对单个市场执行“市场快照 -> 证据收集 -> 配置的 AI provider 概率估算 -> Predict-Raven fee / net edge / quarter Kelly / monthly return 计算 -> `action=predict-only`”，并写入 `runtime-artifacts/predictions/`。它不会调用 `OrderExecutor`，也不会提交 paper 或 live 订单。当前 PolyPulse 的 CLI 仍是单市场 `predict`，要做多市场推荐，需要先 `market topics`，再对选出的市场逐个 `predict` 或通过 monitor 批量评估。
+### 切换概率估算 Provider
 
-Predict-Raven README 的 `### 4. 实盘交易` 对应 `pnpm pulse:live`：默认按 Pulse 推荐进入真实执行路径。PolyPulse 包含 live once 和 live monitor，但不是同款默认实盘 Pulse：所有 live 路径必须显式 `--mode live --confirm LIVE`，并通过 `.env` preflight、余额检查和 `RiskEngine`；`.env` 设为 `POLYPULSE_LIVE_WALLET_MODE=simulated` 时只演练 live 流程，不连接真实钱包、不提交真实订单，设为 `real` 时才可能真实下单。
-
-底层策略逻辑已对齐到 Predict-Raven 的核心公式和 AI 分工：
-
-- 话题筛选：Pulse-compatible 候选池默认最小流动性 5000，过滤缺失 CLOB token 的市场，移除 7 天内短期价格预测市场，并记录 Pulse 维度元数据。
-- AI 使用方式：Codex / Claude Code 只输出 `ProbabilityEstimate`；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
-- Edge / sizing：`DecisionEngine` 使用 Predict-Raven 的 category fee、`netEdge = grossEdge - entryFeePct`、`quarterKellyPct = ((aiProb - marketProb) / (1 - marketProb)) / 4`、`monthlyReturn = netEdge / monthsToResolution`。
-- 风控：`RiskEngine` 继续做 token 必须来自市场快照、active/tradable/closed、单笔上限、总敞口、事件敞口、流动性上限、最小金额、最大持仓数、drawdown halt、live confirm、env preflight 和 live balance。pulse-direct 默认把证据不足/低置信度作为警告而不是硬阻断；如需恢复硬阻断，设置 `PULSE_REQUIRE_EVIDENCE_GUARD=true`。
-
-Predict-Raven 第 3、4 步在 PolyPulse 中的安全对照测试命令：
+只保留真实 AI provider 路径。启用 Codex：
 
 ```bash
-# 0. 先确认 .env 启用了 Codex provider；如果使用 Claude Code，把 expect 改成 claude-code。
+AI_PROVIDER=codex
+AGENT_RUNTIME_PROVIDER=codex
+CODEX_SKILL_ROOT_DIR=skills
+CODEX_SKILL_LOCALE=zh
+CODEX_SKILLS=polypulse-market-agent
+```
+
+启用 Claude Code：
+
+```bash
+AI_PROVIDER=claude-code
+AGENT_RUNTIME_PROVIDER=claude-code
+CLAUDE_CODE_SKILL_ROOT_DIR=skills
+CLAUDE_CODE_SKILL_LOCALE=zh
+CLAUDE_CODE_SKILLS=polypulse-market-agent
+CLAUDE_CODE_PERMISSION_MODE=bypassPermissions
+CLAUDE_CODE_ALLOWED_TOOLS=Read,Glob,Grep
+```
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env 是否启用了 Codex 或 Claude Code provider，并确认会调用配置的真实 AI provider。
+2. 请运行 agent:check 验证当前 provider、runtime provider 和 skill 配置。
+```
+
+### Live Simulated 验收
+
+以下命令全部读取当前 Polymarket 真实市场；`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=simulated`。
+
+```bash
+# 0. 检查 provider 配置；如果使用 Claude Code，把 expect 改成 claude-code。
 npm run agent:check -- --env-file .env --expect codex
 
-# 1. 推荐不下单：用 mock 市场数据跑单市场 predict，底层仍调用 .env 配置的 AI provider，输出 action=predict-only。
-node ./bin/polypulse.js predict --env-file .env --source mock --market market-001
+# 1. 检查 live env。
+node ./bin/polypulse.js env check --mode live --env-file .env
 
-# 2. 推荐不下单：用真实 .env 抓市场 topic，手动选择返回的 marketId 或 marketSlug。
+# 2. 抓取当前 Polymarket 真实市场话题；从 topics[] 复制 marketId 或 marketSlug。
 node ./bin/polypulse.js market topics --env-file .env --limit 20
 
-# 3. 推荐不下单：对真实市场做单市场 predict，不调用 OrderExecutor。
+# 3. 对真实市场做推荐不下单预测。
 node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 
-# 4. 检查推荐不下单 artifact。
-find runtime-artifacts/predictions -type f | sort | tail -n 20
-
-# 5. live 保护路径：不带 --confirm LIVE，验证会调用 AI 生成估算，但不会真实下单。
-node ./bin/polypulse.js trade once --env-file .env --source mock --mode live --market market-001 --max-amount 1
-
-# 6. simulated live：.env 使用 POLYPULSE_LIVE_WALLET_MODE=simulated，演练 live once 但不连接真实钱包、不提交真实订单。
+# 4. 走 live simulated 一次性验收；不连接真实钱包、不提交真实订单。
 node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 
-# 7. real live：.env 使用 POLYPULSE_LIVE_WALLET_MODE=real，会在风控允许后真实提交订单。
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-```
-
-Codex 提示词版本（逐条对应上面的 0-7 条命令）：
-
-```text
-0. 请先检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
-1. 请用 mock 市场数据 market-001 跑一次 predict，但概率估算必须走 .env 配置的 AI provider；确认输出 provider、effectiveProvider、action=predict-only 和 artifact 路径，不调用 OrderExecutor，不提交任何订单。
-2. 请用 .env 抓取 20 个真实市场 topic，并告诉我可用于后续 predict 的 marketId 或 marketSlug。
-3. 请对选出的真实市场运行 predict，确认底层 provider 不是 local，输出 action=predict-only，并汇总概率、隐含概率、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 artifact 路径。
-4. 请列出 runtime-artifacts/predictions 下最近 20 个文件，确认推荐不下单的 evidence、estimate 和 decision 已落盘。
-5. 请用 mock 市场跑 live trade once 但不要带 confirm LIVE，确认概率估算走 AI provider，同时 live 保护路径会阻止真实下单。
-6. 请只在 .env 明确使用 POLYPULSE_LIVE_WALLET_MODE=simulated 时，跑一次带 confirm LIVE 的 live once 演练，并确认不会连接真实钱包或提交真实订单。
-7. 请只在我明确确认 .env 使用 real wallet 且接受真实资金风险时，跑一次真实 live once；如果缺少确认或前置检查失败，请停止并说明原因。
-```
-
-### 本地与服务器通用说明
-
-以下命令在 macOS 和 Ubuntu 都适用，先进入项目根目录再执行；服务器部署到 `/home/PolyPulse` 时，项目根目录就是 `/home/PolyPulse`。
-
-### 基础测试
-
-在项目根目录执行，用于确认单元测试、离线 smoke、CLI 帮助、Codex agent 配置和 mock 交易链路都能跑通；这组命令不依赖真实 Polymarket 下单。`npm run smoke` 是离线 smoke，会强制 local fallback；下面单独列出的 `predict` / `trade once` / `monitor run` 命令带 `--env-file .env`，在 `agent:check` 通过后会调用配置的 AI provider。
-
-```bash
-# 跑完整 Node.js 测试套件。
-npm test
-
-# 跑离线 smoke 测试，确认 CLI 主链路可用。
-npm run smoke
-
-# 查看 CLI 支持的命令。
-node ./bin/polypulse.js --help
-
-# 检查 .env 是否真的启用了 Codex provider。
-npm run agent:check -- --env-file .env --expect codex
-
-# 用 mock 数据抓取市场话题，不访问真实 Polymarket。
-node ./bin/polypulse.js market topics --source mock --limit 20
-
-# 用 mock 市场跑一次预测；mock 只替代市场数据，概率估算仍走 .env 的 AI provider。
-node ./bin/polypulse.js predict --env-file .env --source mock --market market-001
-
-# 用 mock 市场跑一次 paper 下单链路；概率估算走 .env 的 AI provider，不提交真实订单。
-node ./bin/polypulse.js trade once --env-file .env --source mock --mode paper --market market-001 --max-amount 1
-
-# 用 mock 市场跑一轮 monitor；概率估算走 .env 的 AI provider，不进入无限循环。
-node ./bin/polypulse.js monitor run --env-file .env --source mock --mode paper --rounds 1 --limit 2 --max-amount 1
-```
-
-Codex 提示词版本（逐条对应上面的 8 条命令）：
-
-```text
-1. 请在项目根目录运行完整 Node.js 测试套件，并在结束后告诉我是否通过、失败用例和测试 artifact 路径。
-2. 请在项目根目录运行离线 smoke 测试，确认 CLI 主链路可用，并汇总结果。
-3. 请查看 PolyPulse CLI 帮助，列出支持的主要命令和子命令。
-4. 请检查 .env 是否启用了 Codex provider，并说明 agent:check 的 ok、provider 和 skill 配置结果。
-5. 请用 mock 数据抓取 20 个市场话题，不访问真实 Polymarket，并汇总返回的 marketId 和 marketSlug。
-6. 请用 mock 市场 market-001 跑一次预测，mock 只替代市场数据，概率估算必须走 .env 配置的 AI provider；检查 provider、evidence、estimate、decision 是否生成。
-7. 请用 mock 市场 market-001 跑一次 paper trade once，概率估算走 .env 的 AI provider，最大金额 1，不提交真实订单，并汇总风控和下单结果。
-8. 请用 mock 市场跑一轮 paper monitor，概率估算走 .env 的 AI provider，rounds=1、limit=2、max-amount=1，不进入无限循环，并汇总运行结果。
-```
-
-### 部署脚本和健康检查
-
-在项目根目录执行，用于确认部署脚本语法、健康检查和 Codex agent 配置都正常；`agent:check` 输出 `ok=true` 后再持久化运行 monitor。
-
-```bash
-# 检查安装脚本语法。
-bash -n deploy/scripts/install.sh
-
-# 检查启动脚本语法。
-bash -n deploy/scripts/start.sh
-
-# 检查健康检查脚本语法。
-bash -n deploy/scripts/healthcheck.sh
-
-# 执行项目健康检查。
-deploy/scripts/healthcheck.sh
-
-# 检查 .env 是否真的启用了 Codex provider。
-npm run agent:check -- --env-file .env --expect codex
-```
-
-Codex 提示词版本（逐条对应上面的 5 条命令）：
-
-```text
-1. 请检查 deploy/scripts/install.sh 的 bash 语法，发现语法错误时定位到行号。
-2. 请检查 deploy/scripts/start.sh 的 bash 语法，发现语法错误时定位到行号。
-3. 请检查 deploy/scripts/healthcheck.sh 的 bash 语法，发现语法错误时定位到行号。
-4. 请执行项目部署健康检查脚本，汇总通过项、失败项和需要我处理的配置缺口。
-5. 请检查 .env 是否启用了 Codex provider；只有 agent:check 返回 ok=true 后，才建议继续持久化运行 monitor。
-```
-
-### Agent Provider 配置检查
-
-`agent:check` 用于确认 `AI_PROVIDER=codex`、`AGENT_RUNTIME_PROVIDER=codex` 是否真的选中了 Codex provider，并检查 `CODEX_SKILL_ROOT_DIR` / `CODEX_SKILLS`。如果没有配置 `CODEX_COMMAND`，它还会检查当前机器上 `codex --version` 是否可用。
-
-把 `--expect codex` 换成 `--expect claude-code` 即可校验 Claude Code provider：要求 `.env` 中 `AI_PROVIDER=claude-code`、`AGENT_RUNTIME_PROVIDER=claude-code`，并能解析 `CLAUDE_CODE_SKILL_ROOT_DIR` / `CLAUDE_CODE_SKILLS`。没有配置 `CLAUDE_CODE_COMMAND` 时，agent:check 会调用 `claude --version` 验证 Claude Code CLI 是否安装。
-
-```bash
-# 校验当前 .env 是否成功启用 Claude Code provider。
-npm run agent:check -- --env-file .env --expect claude-code
-```
-
-Codex 提示词版本（对应上面的 1 条命令）：
-
-```text
-1. 请检查当前 .env 是否成功启用 Claude Code provider，并说明 CLAUDE_CODE_* skill 配置和 claude CLI 可用性检查结果。
-```
-
-### Codex / Claude Code 完整功能链路测试
-
-用于逐项验证“Pulse-compatible 市场话题抓取 -> 证据收集 -> 概率估算 -> Predict-Raven fee / net edge / quarter Kelly / monthly return 计算 -> RiskEngine 决定 paper/live 下单”。市场话题抓取是市场数据阶段，不调用 provider；`predict` 和 `trade once` 会先收集证据，再调用 provider 产出 `ProbabilityEstimate`。下面命令默认走 `.env` 里配置的 provider；要切换 provider，把 `.env` 里的 `AI_PROVIDER` / `AGENT_RUNTIME_PROVIDER` 改成 `codex` 或 `claude-code` 即可，命令本身保持不变。
-
-```bash
-# 0. 确认当前 env 已启用 Codex provider。
-npm run agent:check -- --env-file .env --expect codex
-
-# 1. 抓取市场话题；从返回的 topics[] 复制 marketId 或 marketSlug。
-node ./bin/polypulse.js market topics --env-file .env --limit 20
-
-# 2. 收集证据，并调用 Codex 估算事件真实发生概率。
-# 3. 同一步会计算 market_implied_probability 和 edge，输出 action=predict-only。
-node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-
-# 4. 检查 evidence、estimate、decision 和 Codex runtime artifact 是否落盘。
-find runtime-artifacts/predictions runtime-artifacts/codex-runtime -type f | sort | tail -n 20
-
-# 5. 走服务层硬风控和 PaperBroker，验证 paper 下单决策。
-node ./bin/polypulse.js trade once --mode paper --env-file .env --market <market-id-or-slug> --max-amount 1
-
-# 6. 走 live 风控保护路径；没有 --confirm LIVE 时不会真实下单。
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1
-
-# 7. 模拟 live 一次性验收；.env 使用 POLYPULSE_LIVE_WALLET_MODE=simulated，不连接真实钱包、不提交真实订单。
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-
-# 8. 真实 live 一次性小额下单验收；.env 使用 POLYPULSE_LIVE_WALLET_MODE=real，会真实提交订单。
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-```
-
-Codex 提示词版本（逐条对应上面的 0-8 步）：
-
-```text
-0. 请先检查 .env 是否启用了 Codex provider，并汇总 agent:check 的 ok、provider、runtime provider 和 skill 配置结果。
-1. 请用 .env 配置抓取 20 个真实市场话题；从 topics[] 中挑出后续测试可用的 marketId 或 marketSlug。
-2. 请使用上一步选出的 marketId 或 marketSlug 跑一次 predict，收集证据并调用当前 provider 估算事件真实发生概率。
-3. 请在同一次 predict 结果中检查 market_implied_probability、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 action=predict-only 是否存在，并说明含义。
-4. 请检查 runtime-artifacts/predictions 和 runtime-artifacts/codex-runtime 中最近 20 个文件，确认 evidence、estimate、decision 和 runtime artifact 已落盘。
-5. 请用同一个市场跑一次 paper trade once，max-amount=1，验证 DecisionEngine、RiskEngine 和 PaperBroker 链路，不提交真实订单。
-6. 请用同一个市场跑一次 live trade once 但不要带 confirm LIVE，验证 live 风控保护路径会阻止真实下单。
-7. 请在 .env 使用 POLYPULSE_LIVE_WALLET_MODE=simulated 时，用同一个市场跑一次带 confirm LIVE 的 simulated live 验收，确认不会连接真实钱包或提交真实订单。
-8. 请只在我已明确确认 .env 使用 real wallet 且接受真实下单风险时，用同一个市场跑一次真实 live 小额验收；如果缺少确认或前置条件不满足，请停止并说明原因。
-```
-
-### 手动预测、余额和 Artifact 检查
-
-用于手动验证市场扫描、单市场预测、当前模式余额读取和运行产物落盘；`--market` 要替换成上一行 `market topics` 返回的真实 `marketId` 或 `marketSlug`。
-
-```bash
-# 抓取市场话题；从返回的 topics[] 复制 marketId 或 marketSlug。
-node ./bin/polypulse.js market topics --env-file .env --limit 20
-
-# 对单个市场收集证据、估算概率、计算隐含概率和 edge。
-node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-
-# 查看当前模式下的账户余额；paper 模式读取本地 paper state。
-node ./bin/polypulse.js account balance --env-file .env
-
-# 查看最近生成的 artifact 文件。
+# 5. 查看最近 artifact。
 find runtime-artifacts -type f | sort | tail -n 30
 ```
 
-Codex 提示词版本（逐条对应上面的 4 条命令）：
+Codex 提示词版本：
 
 ```text
-1. 请用 .env 配置抓取 20 个市场话题，并告诉我可用于后续测试的 marketId 或 marketSlug。
-2. 请对我指定或你刚选出的 marketId/marketSlug 运行 predict，汇总 evidence、概率估算、隐含概率、edge、net_edge、quarter_kelly_pct 和 monthly_return。
-3. 请查看当前模式下的账户余额；如果是 paper 模式，请说明余额来源是本地 paper state。
-4. 请列出 runtime-artifacts 下最近 30 个 artifact 文件，并按类别说明哪些是本次测试产生的。
+0. 请检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
+1. 请检查 live env，并确认当前是 live simulated、读取真实 Polymarket 市场、不连接真实钱包。
+2. 请用 .env 抓取 20 个当前 Polymarket 真实市场 topic，并告诉我可用于后续测试的 marketId 或 marketSlug。
+3. 请对选出的真实市场运行 predict，记录实际 provider，输出 action=predict-only，并汇总概率、隐含概率、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 artifact 路径。
+4. 请用同一个真实市场运行 live simulated trade once，max-amount=1，confirm LIVE，确认不会连接真实钱包或提交真实订单，并汇总 DecisionEngine、RiskEngine、broker 和 artifact 结果。
+5. 请列出 runtime-artifacts 下最近 30 个文件，并按 markets、predictions、runs、runtime log 分类说明哪些是本次真实市场测试产生的。
 ```
 
-`--market <market-id-or-slug>` 来自 `market topics` 返回的 `topics[].marketId` 或 `topics[].marketSlug`。例如 mock 源同一市场可以用 `market-001` 或 `fed-cut-before-july`。
+### Live Real 验收
 
-### 查看真实钱包余额
-
-用于确认 live real wallet 能连接 Polymarket CLOB 并读取 collateral balance；`.env` 中必须是 `POLYPULSE_LIVE_WALLET_MODE=real` 且已配置真实 `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`。
+以下命令会连接真实钱包，并可能在风控允许后提交真实订单。执行前必须确认 `.env` 是 `POLYPULSE_LIVE_WALLET_MODE=real`，并且你接受真实资金风险。
 
 ```bash
-# 先检查 live real wallet 所需 env 是否齐全。
+# 0. 检查 provider 配置；如果使用 Claude Code，把 expect 改成 claude-code。
+npm run agent:check -- --env-file .env --expect codex
+
+# 1. 检查 live real env。
 node ./bin/polypulse.js env check --mode live --env-file .env
 
-# 查询真实 Polymarket CLOB collateral balance。
+# 2. 查询真实 Polymarket CLOB collateral balance。
 node ./bin/polypulse.js account balance --mode live --env-file .env
+
+# 3. 抓取当前 Polymarket 真实市场话题。
+node ./bin/polypulse.js market topics --env-file .env --limit 20
+
+# 4. 对真实市场做推荐不下单预测。
+node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
+
+# 5. 真实 live 一次性小额下单验收；会在风控允许后提交真实订单。
+node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
-Codex 提示词版本（逐条对应上面的 2 条命令）：
+Codex 提示词版本：
 
 ```text
-1. 请先检查 live real wallet 所需 env 是否齐全，尤其是 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST。
-2. 请在确认 .env 使用 POLYPULSE_LIVE_WALLET_MODE=real 后查询 live collateral balance；如果实际读到 paper-state，请停止并指出配置不是真实钱包。
+0. 请检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
+1. 请检查 live real env，尤其是 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST。
+2. 请查询真实 Polymarket CLOB collateral balance；如果不是 live real wallet，请停止并说明原因。
+3. 请抓取 20 个当前 Polymarket 真实市场 topic，并挑选适合小额验收的 marketId 或 marketSlug。
+4. 请对选出的真实市场运行 predict，汇总 evidence、概率估算、隐含概率、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
+5. 请只在我明确确认接受真实资金风险后，运行真实 live once 小额验收；如果缺少确认或前置检查失败，请停止并说明原因。
 ```
 
-如果输出里是 `executionMode=paper` 或 `collateral.source=paper-state`，表示查到的是本地 paper 账户，不是真实 Polymarket 余额。
+### Live Simulated Monitor
 
-### Paper Monitor 持久化运行
-
-用于默认安全模式的持续扫描和 paper 交易；适合先观察策略、artifact 和风控表现，不会提交真实订单。
+`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=simulated`。该模式持续读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不提交真实订单。
 
 ```bash
-# 持续运行 paper monitor；只做 paper 交易，不提交真实订单。
-node ./bin/polypulse.js monitor run --mode paper --env-file .env --loop
-```
-
-Codex 提示词版本（对应上面的 1 条命令）：
-
-```text
-1. 请用 .env 持续运行 paper monitor，只做 paper 交易、不提交真实订单，并持续观察 artifact、风控和错误日志。
-```
-
-### 真实 Live Monitor 持久化运行
-
-用于真实钱包持续交易。运行前需要 `.env` 中设置 `POLYPULSE_EXECUTION_MODE=live`、`POLYPULSE_LIVE_CONFIRM=LIVE`、`POLYPULSE_LIVE_WALLET_MODE=real`，并配置真实 `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`CHAIN_ID=137`、`POLYMARKET_HOST=https://clob.polymarket.com`。
-
-```bash
-# 持续运行真实 live monitor；会在风控允许后提交真实订单。
 node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
 ```
 
-Codex 提示词版本（对应上面的 1 条命令）：
+Codex 提示词版本：
 
 ```text
-1. 请只在我已明确确认真实钱包和真实交易风险后，使用 .env 启动 live monitor 持久化运行；启动前检查 live env、余额和 confirm LIVE，启动后汇总服务状态、风控状态和日志位置。
+1. 请在 .env 使用 live simulated wallet 时启动 monitor，确认它读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包或提交真实订单。
 ```
 
-### 模拟 Live 钱包持久化运行
+### Live Real Monitor
 
-用于演练 live preflight、RiskEngine、artifact 和 broker 接口，不连接真实钱包、不提交真实订单。需要 `.env` 中设置 `POLYPULSE_EXECUTION_MODE=live`、`POLYPULSE_LIVE_CONFIRM=LIVE`、`POLYPULSE_LIVE_WALLET_MODE=simulated`、`SIMULATED_WALLET_BALANCE_USD=100`。
+`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=real`，并配置真实钱包。该模式持续读取当前 Polymarket 真实市场，并可能在风控允许后提交真实订单。
 
 ```bash
-# 持续运行 simulated live monitor；走 live 流程但不连接真实钱包。
 node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
 ```
 
-Codex 提示词版本（对应上面的 1 条命令）：
+Codex 提示词版本：
 
 ```text
-1. 请在 .env 使用 simulated live wallet 时启动 live monitor 持久化演练，确认走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包、不提交真实订单。
+1. 请只在我明确确认真实钱包和真实交易风险后启动 live real monitor；启动前检查 live env、真实余额和 confirm LIVE，启动后汇总服务状态、风控状态、artifact 和日志位置。
 ```
 
 ### 停止和恢复 Monitor
-
-用于维护窗口或风险暂停后恢复持续运行状态；live 模式恢复后再次启动仍需要按 live 启动要求带确认参数。
 
 ```bash
 # 写入 monitor stop 状态，用于暂停持续运行。
@@ -347,21 +226,19 @@ node ./bin/polypulse.js monitor stop --env-file .env --reason manual_stop
 # 清除 stop 状态，允许 monitor 再次运行。
 node ./bin/polypulse.js monitor resume --env-file .env
 
-# 恢复后重新启动 paper monitor。
-node ./bin/polypulse.js monitor run --mode paper --env-file .env --loop
+# 恢复后重新启动 live monitor。
+node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
 ```
 
-Codex 提示词版本（逐条对应上面的 3 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请写入 monitor stop 状态，reason=manual_stop，用于暂停持续运行。
 2. 请清除 monitor stop 状态，让 monitor 允许再次运行。
-3. 请在恢复后重新启动 paper monitor 持久化运行，并确认仍然不会提交真实订单。
+3. 请在恢复后重新启动 live monitor，并确认读取当前 Polymarket 真实市场。
 ```
 
 ### 查看 Monitor 和风险状态
-
-用于确认当前运行状态、最近错误、暂停/停止状态和系统级风控状态。
 
 ```bash
 # 查看 monitor 状态、最近运行和最近错误。
@@ -371,7 +248,7 @@ node ./bin/polypulse.js monitor status --env-file .env
 node ./bin/polypulse.js risk status --env-file .env
 ```
 
-Codex 提示词版本（逐条对应上面的 2 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请查看 monitor 状态，汇总最近运行、最近错误、暂停状态和 stop/resume 状态。
@@ -383,7 +260,6 @@ Codex 提示词版本（逐条对应上面的 2 条命令）：
 在 macOS 本机把当前项目文件复制到 `/home/PolyPulse`，同时排除本地 secret、运行产物、依赖目录和 git 元数据。
 
 ```bash
-# 从本机同步项目文件到服务器 /home/PolyPulse。
 rsync -az --delete \
   --exclude '.git' \
   --exclude '.env' \
@@ -394,7 +270,7 @@ rsync -az --delete \
   root@43.165.166.171:/home/PolyPulse/
 ```
 
-Codex 提示词版本（对应上面的 1 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请在我的 macOS 本机把当前 PolyPulse 项目同步到 root@43.165.166.171:/home/PolyPulse/，同步时排除 .git、.env、.env.*、runtime-artifacts 和 node_modules，并汇总传输结果。
@@ -402,60 +278,40 @@ Codex 提示词版本（对应上面的 1 条命令）：
 
 ### 服务器安装
 
-登陆 Ubuntu 服务器后安装：进入服务器目录、赋予部署脚本执行权限，并安装 systemd unit、运行目录、日志轮转和基础 smoke。
-
 ```bash
-# 登录服务器。
 ssh root@43.165.166.171
-
-# 进入服务器上的项目目录。
 cd /home/PolyPulse
-
-# 确保部署脚本可执行。
 chmod +x deploy/scripts/*.sh
-
-# 安装 systemd unit、运行目录、日志轮转并执行基础 smoke。
 deploy/scripts/install.sh
 ```
 
-Codex 提示词版本（逐条对应上面的 4 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请登录 root@43.165.166.171 这台 Ubuntu 服务器，后续命令都在服务器上执行。
 2. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
 3. 请确保 deploy/scripts/*.sh 都有可执行权限。
-4. 请运行部署安装脚本，安装 systemd unit、运行目录和日志轮转，并执行基础 smoke；结束后汇总安装和 smoke 结果。
+4. 请运行部署安装脚本，安装 systemd unit、运行目录和日志轮转；安装结束后继续执行当前 Polymarket 真实市场验收。
 ```
 
 ### 检查配置后启动服务
 
-`install.sh` 会创建 `/home/PolyPulse/.env`，默认是 paper 模式；启动前先编辑 `.env` 并强制权限为 `600`。
+`install.sh` 会创建 `/home/PolyPulse/.env`；启动前必须编辑为 `live simulated` 或 `live real`，并强制权限为 `600`。
 
 ```bash
-# 进入服务器上的项目目录。
 cd /home/PolyPulse
-
-# 编辑服务器本地 .env，真实 secret 只放这里。
 vim /home/PolyPulse/.env
-
-# 强制 .env 只有当前用户可读写。
 chmod 600 /home/PolyPulse/.env
-
-# 启动 systemd monitor 服务。
 deploy/scripts/start.sh
-
-# 查看服务和 monitor 状态。
 deploy/scripts/status.sh
-
-# 执行部署健康检查。
 deploy/scripts/healthcheck.sh
 ```
 
-Codex 提示词版本（逐条对应上面的 6 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
-2. 请帮助我编辑 /home/PolyPulse/.env；不要在输出中展示真实 secret，编辑后检查必需配置是否齐全。
+2. 请帮助我编辑 /home/PolyPulse/.env；不要在输出中展示真实 secret，必须配置为 live simulated 或 live real，并确认读取当前 Polymarket 真实市场。
 3. 请把 /home/PolyPulse/.env 权限强制设置为 600，并确认权限结果。
 4. 请启动 systemd monitor 服务，并说明启动命令是否成功。
 5. 请查看服务和 PolyPulse monitor 状态，汇总 active 状态、最近运行和最近错误。
@@ -464,29 +320,17 @@ Codex 提示词版本（逐条对应上面的 6 条命令）：
 
 ### 部署后验证
 
-确认 systemd 服务 active，健康检查通过，并能看到最近 journal 和文件日志。
-
 ```bash
-# 进入服务器上的项目目录。
 cd /home/PolyPulse
-
-# 确认 systemd 服务处于 active。
 systemctl is-active polypulse-monitor.service
-
-# 查看 PolyPulse 聚合状态。
 deploy/scripts/status.sh
-
-# 再跑一次部署健康检查。
 deploy/scripts/healthcheck.sh
-
-# 查看最近 systemd journal。
 journalctl -u polypulse-monitor.service -n 100 --no-pager
-
-# 查看最近文件日志。
 tail -n 100 /home/PolyPulse/logs/polypulse-monitor.log
+node ./bin/polypulse.js market topics --env-file .env --limit 20
 ```
 
-Codex 提示词版本（逐条对应上面的 6 条命令）：
+Codex 提示词版本：
 
 ```text
 1. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
@@ -495,47 +339,53 @@ Codex 提示词版本（逐条对应上面的 6 条命令）：
 4. 请再跑一次部署健康检查，确认部署后状态仍然通过。
 5. 请查看 polypulse-monitor.service 最近 100 行 systemd journal，并提取错误、警告和关键启动信息。
 6. 请查看 /home/PolyPulse/logs/polypulse-monitor.log 最近 100 行，并提取错误、警告和最近交易/monitor 事件。
+7. 请用服务器 .env 抓取 20 个当前 Polymarket 真实市场 topic，确认部署后仍读取真实市场。
 ```
 
-### 切换概率估算 Provider
+## TODO
 
-PolyPulse 同时支持两个本地非交互 provider：Codex（`codex exec`）和 Claude Code（`claude --print`）。两者输出格式完全一致，`DecisionEngine`、`RiskEngine` 和 `OrderExecutor` 不感知 provider 切换。
+对比 `predict-raven` 的 orchestrator + executor 闭环后，PolyPulse `monitor run --loop` 主链仍缺以下能力。优先级按「能否形成开仓-持仓-平仓闭环」排列。
 
-只用其中一个或两个都不启用，由 `.env` 里这两行决定：
+### P0 平仓回路（当前完全缺失）
 
-```bash
-# 启用 Codex provider。需要本机有 codex CLI。
-AI_PROVIDER=codex
-AGENT_RUNTIME_PROVIDER=codex
+- [ ] 让 `DecisionEngine.decide` 不再硬编码 `side: "BUY"`，支持基于持仓的 `SELL` 决策。位置：`src/core/decision-engine.js:213`。
+- [ ] 在 `LiveBroker.submit` / `LivePolymarketClient.postMarketOrder` 中补 `SELL` 分支：现在余额校验只看 BUY (`src/brokers/live-broker.js:84`)，`postMarketOrder` 也未覆盖卖出 size 推导（参考 predict-raven `services/executor/src/lib/polymarket.ts` + `inferPaperSellAmount`）。
+- [ ] 新增 PositionReview 模块，对 `portfolio.positions` 逐仓产出 `hold / reduce / close`，参考 `predict-raven/services/orchestrator/src/review/position-review.ts` 的 5 类规则：
+  - 触及 `stop_loss_pct` → close
+  - Pulse 反向 → close
+  - Pulse 同向但 net edge ≤ -0.05 → close；< 0 → reduce 50%；< 0.05 → hold + humanReviewFlag
+  - 无 pulse 且接近 stop → reduce 50%
+  - 默认 → hold + humanReviewFlag
+- [ ] 在 `Scheduler.runMonitorRound` 中把 PositionReview 的 SELL 决策与新开仓候选合并后再交给 `OrderExecutor`，参考 predict-raven 的 `composePulseDirectDecisions`。
 
-# 启用 Claude Code provider。需要本机有 claude CLI（Claude Code）。
-AI_PROVIDER=claude-code
-AGENT_RUNTIME_PROVIDER=claude-code
+### P0 持仓与账户同步（当前不存在）
 
-# 走本地启发式估算，不调用任何外部 CLI。
-AI_PROVIDER=local
-AGENT_RUNTIME_PROVIDER=none
-```
+- [ ] 新增 portfolio sync 任务：从 Polymarket 拉真实 positions、用 CLOB book 重算 `currentPrice / currentValueUsd / unrealized_pnl_pct`，写回 `portfolio.positions`。`live-broker.sync()` 当前永远返回 `positions: []`（`src/brokers/live-broker.js:112`）。
+- [ ] 在 sync 路径里触发 `shouldTriggerStopLoss` 自动 SELL，参考 `predict-raven/services/executor/src/workers/queue-worker.ts:120`。
+- [ ] 把 sync 结果喂给 `RiskEngine.highWaterMark / drawdownPct`，让 `drawdownHaltPct` 能真正基于 mark-to-market 触发，而不仅靠 live collateral 余额。
+- [ ] 决定 sync 节奏：要么让 monitor loop 每轮先跑 sync 再跑 scan（单进程方案），要么独立一个 systemd timer / 第二条 loop（接近 predict-raven 的 `setInterval(SYNC_INTERVAL_SECONDS=30s)`）。
 
-Codex 提示词版本（逐条对应上面的 3 组配置）：
+### P1 结算追踪
 
-```text
-1. 请把 .env 切换为 Codex provider：设置 AI_PROVIDER=codex、AGENT_RUNTIME_PROVIDER=codex，然后运行 agent:check 验证配置。
-2. 请把 .env 切换为 Claude Code provider：设置 AI_PROVIDER=claude-code、AGENT_RUNTIME_PROVIDER=claude-code，然后运行 agent:check 验证配置。
-3. 请把 .env 切换为本地启发式估算：设置 AI_PROVIDER=local、AGENT_RUNTIME_PROVIDER=none，然后说明这个模式不会调用外部 CLI。
-```
+- [ ] 新增 resolution sweep：对每个 open position 抓 Polymarket 事件描述、提取外部仲裁 URL、做 SHA-256 内容差分，参考 `predict-raven/services/orchestrator/src/jobs/resolution.ts`（含 `evaluateTrackability` 的 `完全/部分/手动/不可` 分级）。
+- [ ] PolyPulse 的 `ResolutionEvidenceAdapter`（`src/adapters/evidence-crawler.js:119`）目前只把 `market.resolutionRules` 字符串塞给 LLM，未做外部源抓取与变更检测，应升级为带快照与 diff 的版本。
 
-Claude Code provider 相关 env 变量都在 `.env.example` 的 `CLAUDE_CODE_*` 段落：
+### P1 真实证据采集
 
-- `CLAUDE_CODE_COMMAND`：可选。提供模板化命令，覆盖默认的 `claude --print` 调用。需包含 `{{output_file}}` 占位符。
-- `CLAUDE_CODE_MODEL`：可选 model alias 或全名（例如 `sonnet`、`opus`、`claude-sonnet-4-6`）。
-- `CLAUDE_CODE_SKILL_ROOT_DIR` / `CLAUDE_CODE_SKILL_LOCALE` / `CLAUDE_CODE_SKILLS`：与 Codex 一致的 skill 目录/语言/skill id。
-- `CLAUDE_CODE_PERMISSION_MODE`：默认 `bypassPermissions`，配合下面的工具白名单使用；也可改为 `plan`、`default` 等。
-- `CLAUDE_CODE_ALLOWED_TOOLS`：默认 `Read,Glob,Grep`，限制 Claude Code 只能做只读访问。
-- `CLAUDE_CODE_EXTRA_ARGS`：追加给 `claude` CLI 的额外参数（按 shell 规则解析）。
-- `CLAUDE_CODE_MAX_BUDGET_USD`：可选预算上限，传给 `--max-budget-usd`。
+- [ ] `EvidenceCrawler` 当前两个 adapter 都只复述市场字段，没有真实网页/新闻/赛事数据爬取。考虑接入 predict-raven vendored `polymarket-market-pulse` 报告或独立 web scraper，至少给 `MIN_EVIDENCE_ITEMS` 提供有信息量的来源。
+- [ ] 在 evidence 不足时让 `RiskEngine` 的 `insufficient_evidence` 不仅仅是 warning（pulse-direct 默认 `requireEvidenceGuard=false`）。
 
-切换到 Claude Code 后再跑一次 `agent:check` 与 README 中其他 `predict` / `trade once` / `monitor run` 命令即可。CODEX_* 段落保持不变，可以随时切回 Codex provider。
+### P2 可靠性 / 可观测性
+
+- [ ] crash recovery 当前仅在 `inFlightRun` 上记一条 `recovered_after_crash`（`src/state/file-state-store.js:301`），没有做 in-flight 订单对账。补一条「上轮已 submit 但未确认的订单」回放或核对逻辑。
+- [ ] 文件状态单点：`runtime-artifacts/state/live-state.json` 同时承载 portfolio / risk / monitor / orders / runs，长期跑容易膨胀。考虑分文件、轮转 `runHistory`，或迁移到嵌入式 KV (sqlite/leveldb)。
+- [ ] `flatten` / `cancelOpenOrders` 入口缺失：predict-raven 提供了 `flattenPortfolio` 和 `cancelOpenOrders` 队列任务用于一键全清，PolyPulse 应至少提供 CLI 子命令（即便 v1 是 FOK，也方便手工兜底）。
+
+### P2 决策策略增强
+
+- [ ] PolyPulse 现在只有「pulse-direct」一种决策路径。若要保持与 predict-raven 同步，可补一条 `provider-runtime` 路径让 codex / claude-code agent 直接产出 `TradeDecisionSet`（受同样的 `applyTradeGuards` 裁剪）。
+
+每条 TODO 完成后请同步更新 `docs/KNOWN_LIMITATIONS.md` 与 `docs/ROADMAP.md`，并补对应的 live simulated 验收命令。
 
 ## 关键文档
 

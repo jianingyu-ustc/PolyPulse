@@ -3,45 +3,74 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const commands = [
-  ["env", "check", "--source", "mock"],
-  ["account", "balance", "--source", "mock"],
-  ["market", "topics", "--source", "mock", "--limit", "20"],
-  ["predict", "--source", "mock", "--market", "market-001"],
-  ["trade", "once", "--source", "mock", "--mode", "paper", "--market", "market-001", "--max-amount", "1"],
-  ["monitor", "status", "--source", "mock"],
-  ["monitor", "run", "--source", "mock", "--mode", "paper", "--rounds", "1", "--limit", "2", "--max-amount", "1"]
-];
-
 function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function option(args, name, fallback = null) {
+  const index = args.indexOf(name);
+  if (index < 0) {
+    return fallback;
+  }
+  const value = args[index + 1];
+  return value && !value.startsWith("--") ? value : fallback;
+}
+
+function commandName(args) {
+  return args.map((item) => item.replace(/[^a-zA-Z0-9_.-]+/g, "_")).join("-");
+}
+
+const envFile = option(process.argv.slice(2), "--env-file", ".env");
 const runId = timestamp();
 const artifactDir = path.resolve("runtime-artifacts", "test-runs", `${runId}-smoke`);
 mkdirSync(artifactDir, { recursive: true });
 
 const results = [];
-let failed = false;
-for (const args of commands) {
-  const result = spawnSync(process.execPath, ["./bin/polypulse.js", ...args], {
+
+function run(args) {
+  const fullArgs = ["./bin/polypulse.js", ...args];
+  const result = spawnSync(process.execPath, fullArgs, {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: {
-      ...process.env,
-      AI_PROVIDER: "local",
-      AGENT_RUNTIME_PROVIDER: "none",
-      CODEX_COMMAND: ""
-    }
+    env: process.env
   });
-  const name = args.join("-");
+  const name = commandName(args);
   writeFileSync(path.join(artifactDir, `${name}.stdout.log`), result.stdout ?? "", "utf8");
   writeFileSync(path.join(artifactDir, `${name}.stderr.log`), result.stderr ?? "", "utf8");
-  results.push({ command: `polypulse ${args.join(" ")}`, ok: result.status === 0, status: result.status });
+  const entry = { command: `polypulse ${args.join(" ")}`, ok: result.status === 0, status: result.status };
+  results.push(entry);
   if (result.status !== 0) {
-    failed = true;
-    break;
+    throw new Error(`smoke_command_failed: ${entry.command}`);
   }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+let failed = false;
+let skippedLiveExecution = false;
+try {
+  const envCheck = run(["env", "check", "--mode", "live", "--env-file", envFile]);
+  run(["account", "balance", "--mode", "live", "--env-file", envFile]);
+  const topics = run(["market", "topics", "--env-file", envFile, "--limit", "20"]);
+  const market = topics?.topics?.[0];
+  const marketId = market?.marketId ?? market?.marketSlug;
+  if (!marketId) {
+    throw new Error("smoke_no_polymarket_topic_returned");
+  }
+  run(["predict", "--env-file", envFile, "--market", marketId]);
+  run(["monitor", "status", "--mode", "live", "--env-file", envFile]);
+  if (envCheck?.report?.liveWalletMode === "simulated") {
+    run(["trade", "once", "--mode", "live", "--env-file", envFile, "--market", marketId, "--max-amount", "1", "--confirm", "LIVE"]);
+    run(["monitor", "run", "--mode", "live", "--env-file", envFile, "--rounds", "1", "--limit", "1", "--max-amount", "1", "--confirm", "LIVE"]);
+  } else {
+    skippedLiveExecution = true;
+  }
+} catch (error) {
+  failed = true;
+  results.push({ command: "smoke", ok: false, status: 1, error: error instanceof Error ? error.message : String(error) });
 }
 
 const summary = {
@@ -49,6 +78,7 @@ const summary = {
   commands: results.length,
   pass: results.filter((item) => item.ok).length,
   fail: results.filter((item) => !item.ok).length,
+  skippedLiveExecution,
   artifactDir: path.relative(process.cwd(), artifactDir)
 };
 writeFileSync(path.join(artifactDir, "summary.json"), `${JSON.stringify({ ...summary, results }, null, 2)}\n`, "utf8");
@@ -57,6 +87,7 @@ console.log(JSON.stringify({
   commands: summary.commands,
   pass: summary.pass,
   fail: summary.fail,
+  skippedLiveExecution,
   artifact: summary.ok ? undefined : summary.artifactDir
 }));
 

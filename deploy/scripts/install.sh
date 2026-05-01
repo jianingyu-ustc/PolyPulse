@@ -33,7 +33,7 @@ chmod 700 "$POLYPULSE_HOME/runtime-artifacts" "$POLYPULSE_HOME/runtime-artifacts
 if [ ! -f "$ENV_FILE" ]; then
   cp "$POLYPULSE_HOME/deploy/env.example" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  info "created $ENV_FILE from deploy/env.example; edit it before live mode"
+  info "created $ENV_FILE from deploy/env.example; edit it before starting live mode"
 else
   chmod 600 "$ENV_FILE"
   info "kept existing $ENV_FILE and enforced chmod 600"
@@ -56,7 +56,7 @@ LOGROTATE
 systemctl daemon-reload
 
 cd "$POLYPULSE_HOME"
-"$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --paper-smoke
+"$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --live-smoke
 
 info "installed systemd unit /etc/systemd/system/$SERVICE_NAME"
 info "start with: $POLYPULSE_HOME/deploy/scripts/start.sh"

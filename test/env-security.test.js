@@ -91,9 +91,17 @@ test(".env.example contains the required configuration fields", async () => {
 });
 
 test("live preflight fails when PRIVATE_KEY is missing", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-real-"));
+  const envPath = path.join(dir, "live.env");
+  await writeFile(envPath, [
+    "POLYPULSE_EXECUTION_MODE=live",
+    "POLYPULSE_LIVE_WALLET_MODE=real"
+  ].join("\n"), "utf8");
   const config = await loadEnvConfig({
+    envFile: envPath,
     overrides: {
       POLYPULSE_EXECUTION_MODE: "live",
+      POLYPULSE_LIVE_WALLET_MODE: "real",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
       SIGNATURE_TYPE: "1",
@@ -138,7 +146,7 @@ test("private key value is excluded from stdout, artifacts, and memory", async (
     "SIGNATURE_TYPE=1",
     "CHAIN_ID=137",
     "POLYMARKET_HOST=https://clob.polymarket.com",
-    "POLYPULSE_MARKET_SOURCE=mock",
+    "POLYPULSE_MARKET_SOURCE=polymarket",
     `STATE_DIR=${stateDir}`,
     `ARTIFACT_DIR=${artifactDir}`
   ].join("\n"), "utf8");

@@ -30,7 +30,7 @@ load_env() {
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
-  MODE="${POLYPULSE_EXECUTION_MODE:-paper}"
+  MODE="${POLYPULSE_EXECUTION_MODE:-live}"
 }
 
 check_node() {
@@ -50,42 +50,32 @@ preflight() {
   check_node
   load_env
   mkdir -p "${STATE_DIR:-$POLYPULSE_HOME/runtime-artifacts/state}" "${ARTIFACT_DIR:-$POLYPULSE_HOME/runtime-artifacts}" "$POLYPULSE_HOME/logs"
-  if [ "$MODE" = "live" ]; then
-    case "${POLYPULSE_LIVE_WALLET_MODE:-real}" in
-      real|simulated) ;;
-      *) fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated" ;;
-    esac
-    [ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live mode requires POLYPULSE_LIVE_CONFIRM=LIVE"
-    run_cli env check --mode live --env-file "$ENV_FILE" >/dev/null
-  else
-    run_cli env check --mode paper --env-file "$ENV_FILE" >/dev/null
-  fi
-  info "preflight ok mode=$MODE wallet=${POLYPULSE_LIVE_WALLET_MODE:-paper}"
-}
-
-paper_smoke() {
-  preflight
-  cd "$POLYPULSE_HOME"
-  run_cli env check --mode paper --source mock --env-file "$ENV_FILE" >/dev/null
-  run_cli account balance --mode paper --source mock --env-file "$ENV_FILE" >/dev/null
-  run_cli market topics --source mock --limit 3 --env-file "$ENV_FILE" >/dev/null
-  run_cli predict --source mock --market market-001 --env-file "$ENV_FILE" >/dev/null
-  info "paper smoke ok"
+  [ "$MODE" = "live" ] || fail "POLYPULSE_EXECUTION_MODE must be live"
+  case "${POLYPULSE_LIVE_WALLET_MODE:-real}" in
+    real|simulated) ;;
+    *) fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated" ;;
+  esac
+  [ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live mode requires POLYPULSE_LIVE_CONFIRM=LIVE"
+  [ "${POLYPULSE_MARKET_SOURCE:-polymarket}" = "polymarket" ] || fail "POLYPULSE_MARKET_SOURCE must be polymarket"
+  run_cli env check --mode live --env-file "$ENV_FILE" >/dev/null
+  info "preflight ok mode=$MODE wallet=${POLYPULSE_LIVE_WALLET_MODE:-real}"
 }
 
 case "${1:-}" in
   --preflight)
     preflight
     ;;
-  --paper-smoke)
-    paper_smoke
+  --live-smoke)
+    preflight
+    run_cli market topics --env-file "$ENV_FILE" --limit 1 >/dev/null
+    info "live smoke ok"
     ;;
   "")
     preflight
     if command -v systemctl >/dev/null 2>&1; then
       systemctl is-active polypulse-monitor.service || true
     fi
-    run_cli monitor status --mode "$MODE" --env-file "$ENV_FILE" >/dev/null || true
+    run_cli monitor status --mode live --env-file "$ENV_FILE" >/dev/null || true
     info "healthcheck ok"
     ;;
   *)

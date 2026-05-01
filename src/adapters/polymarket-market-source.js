@@ -87,15 +87,17 @@ export class PolymarketMarketSource {
       filters,
       pulseCompatible
     });
-    const cached = await this.readCache(key);
-    if (cached?.fresh) {
-      return {
-        ...cached.entry.scan,
-        source: "polymarket-gamma-cache",
-        fromCache: true,
-        fallback: false,
-        riskFlags: [...new Set([...(cached.entry.scan.riskFlags ?? []), "market_scan_cache_hit"])]
-      };
+    if (this.config.scan.cacheTtlSeconds > 0) {
+      const cached = await this.readCache(key);
+      if (cached?.fresh) {
+        return {
+          ...cached.entry.scan,
+          source: "polymarket-gamma-cache",
+          fromCache: true,
+          fallback: false,
+          riskFlags: [...new Set([...(cached.entry.scan.riskFlags ?? []), "market_scan_cache_hit"])]
+        };
+      }
     }
 
     const fetchedAt = new Date().toISOString();
@@ -120,7 +122,7 @@ export class PolymarketMarketSource {
     }
 
     if (rawRows.length === 0 && errors.length > 0) {
-      return this.fallbackScan({ cached, key, requestedLimit, filters, fetchedAt, errors });
+      throw new Error(`polymarket_market_scan_failed: ${errors.join("; ")}`);
     }
 
     const normalized = rawRows
@@ -169,15 +171,18 @@ export class PolymarketMarketSource {
   }
 
   async getMarket(marketIdOrSlug) {
-    const cached = await this.readAnyCachedMarkets();
-    const cachedMatch = cached.find((market) =>
-      market.marketId === marketIdOrSlug || market.marketSlug === marketIdOrSlug
-    );
-    if (cachedMatch) {
-      return cachedMatch;
-    }
-
     const fetchedAt = new Date().toISOString();
+    if (/^\d+$/.test(String(marketIdOrSlug))) {
+      try {
+        const payload = await this.fetchJson(`${this.config.polymarketGammaHost}/markets/${encodeURIComponent(marketIdOrSlug)}`);
+        const market = normalizePolymarketMarket(payload, { fetchedAt });
+        if (market.marketId === marketIdOrSlug || market.marketSlug === marketIdOrSlug) {
+          return market;
+        }
+      } catch {
+        // Fall through to the list endpoint and scan path below.
+      }
+    }
     try {
       const url = withQuery(`${this.config.polymarketGammaHost}/markets`, { slug: marketIdOrSlug });
       const payload = await this.fetchJson(url);
@@ -222,7 +227,7 @@ export class PolymarketMarketSource {
       availableUsd: portfolio?.cashUsd ?? 0,
       totalEquityUsd: portfolio?.totalEquityUsd ?? 0,
       openPositions: portfolio?.positions.length ?? 0,
-      source: this.config.executionMode === "paper" ? "paper-state" : "offline-preflight",
+      source: "polymarket-live-state",
       updatedAt: new Date().toISOString()
     };
   }
@@ -310,39 +315,6 @@ export class PolymarketMarketSource {
     return flags;
   }
 
-  async fallbackScan({ cached, requestedLimit, filters, fetchedAt, errors }) {
-    if (cached?.entry?.scan?.markets?.length) {
-      const markets = applyMarketFilters(cached.entry.scan.markets, filters).slice(0, requestedLimit);
-      return {
-        ...cached.entry.scan,
-        source: "polymarket-gamma-cache",
-        fetchedAt,
-        fromCache: true,
-        fallback: true,
-        totalReturned: markets.length,
-        markets,
-        riskFlags: [...new Set([...(cached.entry.scan.riskFlags ?? []), "market_source_fetch_failed", "stale_market_cache_used"])],
-        errors
-      };
-    }
-    return {
-      source: "polymarket-gamma-error",
-      fetchedAt,
-      fromCache: false,
-      fallback: true,
-      totalFetched: 0,
-      totalNormalized: 0,
-      filteredOut: 0,
-      totalReturned: 0,
-      cursor: null,
-      filters,
-      paging: null,
-      markets: [],
-      riskFlags: ["market_source_fetch_failed", "market_scan_empty"],
-      errors
-    };
-  }
-
   async readCache(key) {
     const store = await this.readCacheStore();
     const entry = store.entries?.[key] ?? null;
@@ -354,11 +326,6 @@ export class PolymarketMarketSource {
       entry,
       fresh: this.config.scan.cacheTtlSeconds > 0 && ageMs >= 0 && ageMs <= this.config.scan.cacheTtlSeconds * 1000
     };
-  }
-
-  async readAnyCachedMarkets() {
-    const store = await this.readCacheStore();
-    return Object.values(store.entries ?? {}).flatMap((entry) => entry.scan?.markets ?? []);
   }
 
   async readCacheStore() {

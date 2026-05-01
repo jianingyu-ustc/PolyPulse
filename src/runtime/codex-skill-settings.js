@@ -32,7 +32,7 @@ export function resolveEffectiveProvider(config) {
   if (runtimeProvider && runtimeProvider !== "none") {
     return runtimeProvider;
   }
-  return String(config.ai?.provider ?? "local").trim() || "local";
+  return String(config.ai?.provider ?? "codex").trim() || "codex";
 }
 
 export function resolveCodexSkillSettings(config) {

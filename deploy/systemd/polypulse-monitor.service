@@ -13,7 +13,7 @@ Environment=POLYPULSE_HOME=/home/PolyPulse
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--max-old-space-size=256
 ExecStartPre=/home/PolyPulse/deploy/scripts/healthcheck.sh --preflight
-ExecStart=/usr/bin/env bash -lc 'cd /home/PolyPulse; MODE="${POLYPULSE_EXECUTION_MODE:-paper}"; WALLET="${POLYPULSE_LIVE_WALLET_MODE:-real}"; if [ "$MODE" = "live" ]; then if [ "${POLYPULSE_LIVE_CONFIRM:-}" != "LIVE" ]; then echo "live monitor requires POLYPULSE_LIVE_CONFIRM=LIVE"; exit 9; fi; case "$WALLET" in real|simulated) ;; *) echo "POLYPULSE_LIVE_WALLET_MODE must be real or simulated"; exit 9;; esac; exec /usr/bin/env node ./bin/polypulse.js monitor run --mode live --env-file /home/PolyPulse/.env --confirm LIVE --loop; fi; exec /usr/bin/env node ./bin/polypulse.js monitor run --mode paper --env-file /home/PolyPulse/.env --loop'
+ExecStart=/usr/bin/env node ./bin/polypulse.js monitor run --mode live --env-file /home/PolyPulse/.env --confirm LIVE --loop
 Restart=always
 RestartSec=15
 TimeoutStartSec=180

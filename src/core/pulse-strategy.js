@@ -115,7 +115,7 @@ function seededHash(value) {
 }
 
 export function isPulseDirectStrategy(config = {}) {
-  return (config.pulse?.strategy ?? "legacy") === "pulse-direct";
+  return (config.pulse?.strategy ?? "pulse-direct") === "pulse-direct";
 }
 
 export function isShortTermPriceMarket(market, nowMs = Date.now()) {

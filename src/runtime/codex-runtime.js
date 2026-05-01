@@ -167,6 +167,27 @@ function extractJsonPayload(text) {
 }
 
 function buildProbabilityEstimateSchema() {
+  const evidenceProperties = {
+    evidenceId: { type: "string", minLength: 1 },
+    marketId: { type: "string" },
+    title: { type: "string", minLength: 1 },
+    summary: { type: "string" },
+    source: { type: "string" },
+    sourceUrl: { type: "string" },
+    url: { type: "string" },
+    timestamp: { type: "string" },
+    retrievedAt: { type: "string" },
+    relevanceScore: { type: "number" },
+    relevance_score: { type: "number" },
+    credibility: { type: "string" },
+    status: { type: "string" }
+  };
+  const evidenceItemSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: Object.keys(evidenceProperties),
+    properties: evidenceProperties
+  };
   return {
     type: "object",
     additionalProperties: false,
@@ -185,39 +206,11 @@ function buildProbabilityEstimateSchema() {
       reasoning_summary: { type: "string", minLength: 1 },
       key_evidence: {
         type: "array",
-        items: {
-          type: "object",
-          additionalProperties: true,
-          required: ["evidenceId", "title", "summary"],
-          properties: {
-            evidenceId: { type: "string", minLength: 1 },
-            title: { type: "string", minLength: 1 },
-            summary: { type: "string" },
-            source: { type: "string" },
-            sourceUrl: { type: "string" },
-            url: { type: "string" },
-            timestamp: { type: "string" },
-            relevanceScore: { type: "number" }
-          }
-        }
+        items: evidenceItemSchema
       },
       counter_evidence: {
         type: "array",
-        items: {
-          type: "object",
-          additionalProperties: true,
-          required: ["evidenceId", "title", "summary"],
-          properties: {
-            evidenceId: { type: "string", minLength: 1 },
-            title: { type: "string", minLength: 1 },
-            summary: { type: "string" },
-            source: { type: "string" },
-            sourceUrl: { type: "string" },
-            url: { type: "string" },
-            timestamp: { type: "string" },
-            relevanceScore: { type: "number" }
-          }
-        }
+        items: evidenceItemSchema
       },
       uncertainty_factors: {
         type: "array",
