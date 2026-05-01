@@ -217,6 +217,10 @@ export class ProbabilityEstimator {
       diagnostics: {
         provider: this.providerName,
         effectiveProvider: this.providerName,
+        decisionStrategy: this.config.pulse?.strategy ?? "legacy",
+        aiUsage: this.config.pulse?.strategy === "pulse-direct"
+          ? "pulse-direct-compatible_probability_only"
+          : "single_market_probability_only",
         model: this.config.ai?.model || "local-heuristic",
         generatedAt,
         missingEvidence: [...new Set(uncertainty)].filter((item) => item.includes("evidence")),

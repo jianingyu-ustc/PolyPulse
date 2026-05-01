@@ -22,6 +22,7 @@ function safeSlug(value) {
 function marketSummary(scan) {
   const riskFlags = scan.riskFlags?.length ? scan.riskFlags.join(", ") : "none";
   const filters = scan.filters ? JSON.stringify(scan.filters, null, 2) : "{}";
+  const pulse = scan.pulse ? JSON.stringify(scan.pulse, null, 2) : null;
   const rows = (scan.markets ?? []).slice(0, 20).map((market, index) => {
     const priceLine = market.outcomes
       .map((outcome) => `${outcome.label}:${outcome.impliedProbability ?? outcome.lastPrice ?? "n/a"}`)
@@ -44,6 +45,14 @@ function marketSummary(scan) {
     "```json",
     filters,
     "```",
+    ...(pulse ? [
+      "",
+      "## Pulse Selection",
+      "",
+      "```json",
+      pulse,
+      "```"
+    ] : []),
     "",
     "## Top Markets",
     "",
@@ -71,6 +80,10 @@ function predictionDecisionMarkdown({ market, estimate, decision }) {
     `- suggested_side: ${decision.suggested_side ?? "none"}`,
     `- market_implied_probability: ${decision.market_implied_probability ?? "n/a"}`,
     `- edge: ${decision.edge ?? "n/a"}`,
+    `- net_edge: ${decision.netEdge ?? "n/a"}`,
+    `- entry_fee_pct: ${decision.entryFeePct ?? "n/a"}`,
+    `- quarter_kelly_pct: ${decision.quarterKellyPct ?? "n/a"}`,
+    `- monthly_return: ${decision.monthlyReturn ?? "n/a"}`,
     `- expected_value: ${decision.expected_value ?? "n/a"}`,
     `- suggested_notional_before_risk: ${decision.suggested_notional_before_risk ?? 0}`,
     `- action: ${decision.action}`,
@@ -105,6 +118,9 @@ function onceRunSummary({ input, market, estimate, decision, risk, order, action
     `- ai_probability: ${estimate.ai_probability}`,
     `- market_probability: ${decision.market_implied_probability ?? decision.marketProbability ?? "n/a"}`,
     `- edge: ${decision.edge ?? decision.grossEdge ?? "n/a"}`,
+    `- net_edge: ${decision.netEdge ?? "n/a"}`,
+    `- quarter_kelly_pct: ${decision.quarterKellyPct ?? "n/a"}`,
+    `- monthly_return: ${decision.monthlyReturn ?? "n/a"}`,
     `- confidence: ${estimate.confidence}`,
     `- action: ${action}`,
     `- risk_allow: ${risk.allow ?? risk.allowed}`,

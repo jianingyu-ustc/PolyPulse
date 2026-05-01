@@ -47,7 +47,7 @@ export async function runTradeOnce({
   };
   const { market, evidence, estimate } = await buildPrediction(context, marketId, options);
   const portfolio = await context.stateStore.getPortfolio();
-  const decisionEngine = options.decisionEngine ?? new DecisionEngine();
+  const decisionEngine = options.decisionEngine ?? new DecisionEngine(context.config);
   const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd });
   const chosenSide = side ?? analysis.suggested_side ?? "yes";
   const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
@@ -94,10 +94,16 @@ export async function runTradeOnce({
   const summary = {
     ok: true,
     mode,
+    provider: estimate.diagnostics?.provider,
+    effectiveProvider: estimate.diagnostics?.effectiveProvider,
     market_question: market.question,
     ai_probability: estimate.ai_probability,
     market_probability: decision.market_implied_probability ?? decision.marketProbability ?? null,
     edge: decision.edge ?? decision.grossEdge ?? null,
+    net_edge: decision.netEdge ?? null,
+    entry_fee_pct: decision.entryFeePct ?? null,
+    quarter_kelly_pct: decision.quarterKellyPct ?? null,
+    monthly_return: decision.monthlyReturn ?? null,
     action,
     artifact: artifacts.summary.path
   };

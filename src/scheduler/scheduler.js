@@ -176,7 +176,7 @@ export class Scheduler {
     this.artifactWriter = artifactWriter;
     this.evidenceCrawler = options.evidenceCrawler ?? new EvidenceCrawler(config);
     this.probabilityEstimator = options.probabilityEstimator ?? new ProbabilityEstimator(config);
-    this.decisionEngine = options.decisionEngine ?? new DecisionEngine();
+    this.decisionEngine = options.decisionEngine ?? new DecisionEngine(config);
     this.riskEngine = options.riskEngine ?? new RiskEngine(config, { stateStore });
     this.paperBroker = options.paperBroker ?? new PaperBroker(stateStore);
     this.liveBroker = options.liveBroker ?? new LiveBroker(config);

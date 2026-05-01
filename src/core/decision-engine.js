@@ -1,4 +1,5 @@
 import { assertSchema } from "../domain/schemas.js";
+import { buildPulseTradePlan, isPulseDirectStrategy } from "./pulse-strategy.js";
 
 const FEE_ALLOWANCE = 0.005;
 const SLIPPAGE_ALLOWANCE = 0.005;
@@ -98,6 +99,60 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   });
 }
 
+export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now() }) {
+  const wantedSide = normalizeSide(side);
+  const outcome = outcomeForSide(market, wantedSide);
+  const outcomeEstimate = estimateForSide(estimate, wantedSide);
+  const implied = marketProbability(outcome, outcomeEstimate);
+  if (!outcome || !outcomeEstimate || implied == null) {
+    return null;
+  }
+
+  const aiProbability = round(outcomeEstimate.aiProbability);
+  const bankrollUsd = Number(portfolio?.totalEquityUsd ?? amountUsd ?? 0);
+  const plan = buildPulseTradePlan({
+    market,
+    side: wantedSide,
+    aiProb: aiProbability,
+    marketProb: implied,
+    bankrollUsd,
+    nowMs
+  });
+  const notional = plan.suggestedNotionalUsd;
+  const expectedValue = round(plan.netEdge * notional, 4);
+  const noTradeReason = plan.action === "open" ? null : "quarter_kelly_not_positive";
+
+  return assertSchema("TradeCandidate", {
+    marketId: market.marketId,
+    tokenId: outcome.tokenId,
+    side: wantedSide,
+    marketProbability: implied,
+    aiProbability,
+    grossEdge: plan.grossEdge,
+    netEdge: plan.netEdge,
+    confidence: outcomeEstimate.confidence ?? estimate.confidence,
+    market_implied_probability: implied,
+    marketImpliedProbability: implied,
+    edge: plan.grossEdge,
+    expected_value: expectedValue,
+    expectedValue,
+    suggested_side: wantedSide,
+    suggestedSide: wantedSide,
+    suggested_notional_before_risk: notional,
+    suggestedNotionalUsd: notional,
+    action: noTradeReason ? "skip" : "open",
+    noTradeReason,
+    categorySlug: plan.categorySlug,
+    entryFeePct: plan.entryFeePct,
+    roundTripFeePct: plan.roundTripFeePct,
+    fullKellyPct: plan.fullKellyPct,
+    quarterKellyPct: plan.quarterKellyPct,
+    monthlyReturn: plan.monthlyReturn,
+    daysToResolution: plan.daysToResolution,
+    resolutionSource: plan.resolutionSource
+  });
+}
+
 function chooseBestCandidate(candidates) {
   return candidates
     .filter(Boolean)
@@ -105,12 +160,20 @@ function chooseBestCandidate(candidates) {
 }
 
 export class DecisionEngine {
+  constructor(config = {}) {
+    this.config = config;
+    this.pulseDirect = isPulseDirectStrategy(config);
+  }
+
   analyze({ market, estimate, portfolio = null, amountUsd = 1 }) {
+    const buildCandidate = this.pulseDirect ? buildPulseTradeCandidate : buildTradeCandidate;
     const candidates = [
-      buildTradeCandidate({ market, estimate, side: "yes", portfolio, amountUsd }),
-      buildTradeCandidate({ market, estimate, side: "no", portfolio, amountUsd })
+      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd }),
+      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd })
     ];
-    const candidate = chooseBestCandidate(candidates);
+    const candidate = this.pulseDirect
+      ? candidates.filter(Boolean).sort((a, b) => (b.monthlyReturn ?? -Infinity) - (a.monthlyReturn ?? -Infinity))[0] ?? null
+      : chooseBestCandidate(candidates);
     if (!candidate) {
       return {
         action: "skip",
@@ -139,7 +202,9 @@ export class DecisionEngine {
   }
 
   decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null }) {
-    const candidate = buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
+    const candidate = this.pulseDirect
+      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd })
+      : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
     const common = {
       marketId: market.marketId,
       eventId: market.eventId,
@@ -194,7 +259,15 @@ export class DecisionEngine {
       suggestedSide: candidate.suggestedSide,
       suggested_notional_before_risk: candidate.suggested_notional_before_risk,
       suggestedNotionalUsd: candidate.suggestedNotionalUsd,
-      noTradeReason: candidate.noTradeReason
+      noTradeReason: candidate.noTradeReason,
+      categorySlug: candidate.categorySlug,
+      entryFeePct: candidate.entryFeePct,
+      roundTripFeePct: candidate.roundTripFeePct,
+      fullKellyPct: candidate.fullKellyPct,
+      quarterKellyPct: candidate.quarterKellyPct,
+      monthlyReturn: candidate.monthlyReturn,
+      daysToResolution: candidate.daysToResolution,
+      resolutionSource: candidate.resolutionSource
     });
   }
 }

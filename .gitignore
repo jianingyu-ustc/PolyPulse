@@ -3,5 +3,7 @@
 !.env.example
 runtime-artifacts/
 state/
+!src/state/
+!src/state/file-state-store.js
 node_modules/
 .DS_Store

@@ -1,6 +1,7 @@
 import { assertSchema } from "../domain/schemas.js";
 import { maskAddress } from "../config/env.js";
 import { applyMarketFilters, describeMarketFilters } from "./market-filters.js";
+import { applyPulseMarketSelection, isPulseDirectStrategy } from "../core/pulse-strategy.js";
 
 const fetchedAt = () => new Date().toISOString();
 
@@ -88,10 +89,21 @@ export class MockMarketSource {
   }
 
   async scan(request = {}) {
+    const pulseCompatible = request.pulseCompatible ?? isPulseDirectStrategy(this.config);
     const limit = Math.max(1, Number(request.limit ?? this.config.scan.marketScanLimit));
-    const filters = describeMarketFilters(request);
+    const filters = describeMarketFilters({
+      ...request,
+      minLiquidityUsd: request.minLiquidityUsd ?? request.minLiquidity ?? (pulseCompatible ? this.config.pulse?.minLiquidityUsd : null)
+    });
     const normalized = SAMPLE_MARKETS.map((item) => ({ ...item, fetchedAt: fetchedAt() }));
-    const markets = applyMarketFilters(normalized, filters).slice(0, limit);
+    const filterPool = applyMarketFilters(normalized, filters);
+    const pulseSelection = pulseCompatible
+      ? applyPulseMarketSelection(filterPool, {
+        maxCandidates: limit,
+        minLiquidityUsd: filters.minLiquidityUsd ?? this.config.pulse?.minLiquidityUsd ?? 0
+      })
+      : null;
+    const markets = pulseSelection ? pulseSelection.markets : filterPool.slice(0, limit);
     return {
       source: "mock-polymarket",
       fetchedAt: fetchedAt(),
@@ -103,9 +115,22 @@ export class MockMarketSource {
       totalReturned: markets.length,
       cursor: null,
       filters,
+      pulse: pulseCompatible ? {
+        strategy: "pulse-direct",
+        dimensions: this.config.pulse?.fetchDimensions ?? pulseSelection?.dimensions ?? [],
+        minLiquidityUsd: filters.minLiquidityUsd ?? null,
+        preFilterCount: pulseSelection?.preFilterCount ?? filterPool.length,
+        postFilterCount: pulseSelection?.postFilterCount ?? markets.length,
+        removed: pulseSelection?.removed ?? {}
+      } : null,
       paging: null,
       markets,
-      riskFlags: markets.length === 0 ? ["market_scan_empty"] : [],
+      riskFlags: [
+        ...(markets.length === 0 ? ["market_scan_empty"] : []),
+        ...(pulseSelection?.removed.shortTermPrice > 0 ? ["pulse_short_term_price_filtered"] : []),
+        ...(pulseSelection?.removed.lowLiquidity > 0 ? ["pulse_low_liquidity_filtered"] : []),
+        ...(pulseSelection?.removed.missingClobTokenIds > 0 ? ["pulse_missing_clob_token_filtered"] : [])
+      ],
       errors: []
     };
   }

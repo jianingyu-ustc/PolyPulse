@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { assertSchema } from "../domain/schemas.js";
 import { validateEnvConfig } from "../config/env.js";
+import { isPulseDirectStrategy } from "./pulse-strategy.js";
 
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
@@ -98,6 +99,8 @@ export class RiskEngine {
     const appliedLimits = {};
     const requestedUsdRaw = Number(decision.requestedUsd);
     const suggestedUsd = Number(decision.suggested_notional_before_risk ?? decision.suggestedNotionalUsd);
+    const pulseDirect = isPulseDirectStrategy(this.config);
+    const requireEvidenceGuard = !pulseDirect || this.config.pulse?.requireEvidenceGuard;
     let adjusted = Number.isFinite(suggestedUsd)
       ? Math.min(requestedUsdRaw, suggestedUsd)
       : requestedUsdRaw;
@@ -144,14 +147,26 @@ export class RiskEngine {
       blockedReasons.push("market_not_tradable");
     }
     if (marketAgeSeconds(market) > this.config.risk.marketMaxAgeSeconds) {
-      blockedReasons.push("market_data_stale");
+      if (pulseDirect) {
+        warnings.push("market_data_stale");
+      } else {
+        blockedReasons.push("market_data_stale");
+      }
     }
     if (evidenceInsufficient({ evidence, estimate, minEvidenceItems: this.config.evidence.minEvidenceItems })) {
-      blockedReasons.push("insufficient_evidence");
+      if (requireEvidenceGuard) {
+        blockedReasons.push("insufficient_evidence");
+      } else {
+        warnings.push("insufficient_evidence");
+      }
     }
     const aiConfidence = estimate?.confidence ?? decision.confidence;
     if (confidenceBelow(aiConfidence, this.config.risk.minAiConfidence)) {
-      blockedReasons.push("ai_confidence_below_minimum");
+      if (requireEvidenceGuard) {
+        blockedReasons.push("ai_confidence_below_minimum");
+      } else {
+        warnings.push("ai_confidence_below_minimum");
+      }
     }
 
     const existingPosition = (portfolio.positions ?? []).find((position) => position.tokenId === decision.tokenId);

@@ -191,6 +191,13 @@ export function normalizePolymarketMarket(row, options = {}) {
     ...normalizeTags(firstValue(row, ["tags"])),
     ...normalizeTags(firstValue(event, ["tags"]))
   ];
+  const feeSchedule = firstValue(row, ["feeSchedule", "fee_schedule"]);
+  const normalizedFeeSchedule = feeSchedule && typeof feeSchedule === "object"
+    ? {
+      feeRate: asOptionalNumber(firstValue(feeSchedule, ["feeRate", "fee_rate", "r"])),
+      exponent: asOptionalNumber(firstValue(feeSchedule, ["exponent", "e"]))
+    }
+    : null;
 
   if (!firstValue(row, ["id", "marketId", "market_id", "conditionId", "condition_id", "questionID", "question_id"])) {
     riskFlags.push("missing_market_id");
@@ -230,6 +237,11 @@ export function normalizePolymarketMarket(row, options = {}) {
     active,
     closed,
     tradable,
+    negRisk: asBoolean(firstValue(row, ["negRisk", "neg_risk"]), false),
+    feesEnabled: asBoolean(firstValue(row, ["feesEnabled", "fees_enabled"]), false),
+    feeSchedule: normalizedFeeSchedule?.feeRate != null && normalizedFeeSchedule?.exponent != null
+      ? normalizedFeeSchedule
+      : null,
     source: "polymarket-gamma",
     riskFlags,
     fetchedAt: now

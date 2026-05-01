@@ -109,6 +109,7 @@ async function commandTopics(args) {
     totalFetched: scan.totalFetched,
     totalReturned: scan.totalReturned,
     riskFlags: scan.riskFlags,
+    pulse: scan.pulse,
     artifacts,
     artifact: artifacts.markets
   });
@@ -122,7 +123,7 @@ async function commandPredict(args) {
   }
   const prediction = await buildPrediction(context, marketId);
   const portfolio = await context.stateStore.getPortfolio();
-  const decision = new DecisionEngine().analyze({
+  const decision = new DecisionEngine(context.config).analyze({
     market: prediction.market,
     estimate: prediction.estimate,
     portfolio,
@@ -135,10 +136,17 @@ async function commandPredict(args) {
   print({
     ok: true,
     mode: "predict",
+    provider: prediction.estimate.diagnostics?.provider,
+    effectiveProvider: prediction.estimate.diagnostics?.effectiveProvider,
     market_question: prediction.market.question,
     ai_probability: prediction.estimate.ai_probability,
     market_implied_probability: decision.market_implied_probability,
     edge: decision.edge,
+    net_edge: decision.netEdge,
+    entry_fee_pct: decision.entryFeePct,
+    quarter_kelly_pct: decision.quarterKellyPct,
+    monthly_return: decision.monthlyReturn,
+    suggested_notional_before_risk: decision.suggested_notional_before_risk,
     confidence: prediction.estimate.confidence,
     action: "predict-only",
     artifact: artifacts.decision.path
@@ -167,10 +175,16 @@ async function commandTradeOnce(args) {
   print({
     ok: true,
     mode: result.mode,
+    provider: result.provider,
+    effectiveProvider: result.effectiveProvider,
     market_question: result.market_question,
     ai_probability: result.ai_probability,
     market_probability: result.market_probability,
     edge: result.edge,
+    net_edge: result.decision?.netEdge,
+    entry_fee_pct: result.decision?.entryFeePct,
+    quarter_kelly_pct: result.decision?.quarterKellyPct,
+    monthly_return: result.decision?.monthlyReturn,
     action: result.action,
     artifact: result.artifact
   });

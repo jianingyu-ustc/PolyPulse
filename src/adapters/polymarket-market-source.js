@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { maskAddress } from "../config/env.js";
 import { applyMarketFilters, describeMarketFilters } from "./market-filters.js";
 import { normalizePolymarketMarket } from "./market-normalizer.js";
+import { applyPulseMarketSelection, isPulseDirectStrategy } from "../core/pulse-strategy.js";
 
 function cacheKey(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 24);
@@ -62,11 +63,17 @@ export class PolymarketMarketSource {
   }
 
   async scan(request = {}) {
+    const pulseCompatible = request.pulseCompatible ?? isPulseDirectStrategy(this.config);
     const requestedLimit = clampLimit(request.limit, this.config.scan.marketScanLimit);
-    const pageSize = Math.min(this.config.scan.pageSize, requestedLimit);
+    const fetchTarget = pulseCompatible
+      ? Math.max(requestedLimit, this.config.scan.minFetchedMarkets ?? requestedLimit)
+      : requestedLimit;
+    const fetchLimit = clampLimit(fetchTarget, this.config.scan.marketScanLimit);
+    const pageSize = Math.min(this.config.scan.pageSize, fetchLimit);
     const startOffset = parseOffset(request.cursor ?? request.offset);
     const filters = describeMarketFilters({
       ...request,
+      minLiquidityUsd: request.minLiquidityUsd ?? request.minLiquidity ?? (pulseCompatible ? this.config.pulse?.minLiquidityUsd : null),
       activeOnly: request.activeOnly ?? request.active ?? true,
       closedOnly: request.closedOnly ?? request.closed ?? false,
       tradableOnly: request.tradableOnly ?? request.tradable ?? true
@@ -74,9 +81,11 @@ export class PolymarketMarketSource {
     const key = cacheKey({
       host: this.config.polymarketGammaHost,
       requestedLimit,
+      fetchLimit,
       pageSize,
       startOffset,
-      filters
+      filters,
+      pulseCompatible
     });
     const cached = await this.readCache(key);
     if (cached?.fresh) {
@@ -95,7 +104,7 @@ export class PolymarketMarketSource {
     let offset = startOffset;
     let exhausted = false;
 
-    for (let page = 0; page < this.config.scan.maxPages && rawRows.length < requestedLimit; page += 1) {
+    for (let page = 0; page < this.config.scan.maxPages && rawRows.length < fetchLimit; page += 1) {
       try {
         const rows = await this.fetchMarketPage({ limit: pageSize, offset, filters });
         rawRows.push(...rows);
@@ -117,8 +126,15 @@ export class PolymarketMarketSource {
     const normalized = rawRows
       .filter((row) => row && typeof row === "object")
       .map((row) => normalizePolymarketMarket(row, { fetchedAt }));
-    const filtered = applyMarketFilters(normalized, filters).slice(0, requestedLimit);
-    const riskFlags = this.scanRiskFlags({ normalized, filtered, errors, requestedLimit });
+    const filterPool = applyMarketFilters(normalized, filters);
+    const pulseSelection = pulseCompatible
+      ? applyPulseMarketSelection(filterPool, {
+        maxCandidates: requestedLimit,
+        minLiquidityUsd: filters.minLiquidityUsd ?? this.config.pulse?.minLiquidityUsd ?? 0
+      })
+      : null;
+    const filtered = pulseSelection ? pulseSelection.markets : filterPool.slice(0, requestedLimit);
+    const riskFlags = this.scanRiskFlags({ normalized, filtered, errors, requestedLimit, pulseSelection });
     const scan = {
       source: "polymarket-gamma",
       fetchedAt,
@@ -130,6 +146,14 @@ export class PolymarketMarketSource {
       totalReturned: filtered.length,
       cursor: exhausted ? null : String(offset),
       filters,
+      pulse: pulseCompatible ? {
+        strategy: "pulse-direct",
+        dimensions: this.config.pulse?.fetchDimensions ?? pulseSelection?.dimensions ?? [],
+        minLiquidityUsd: filters.minLiquidityUsd ?? null,
+        preFilterCount: pulseSelection?.preFilterCount ?? filterPool.length,
+        postFilterCount: pulseSelection?.postFilterCount ?? filtered.length,
+        removed: pulseSelection?.removed ?? {}
+      } : null,
       paging: {
         pageSize,
         startOffset,
@@ -260,12 +284,15 @@ export class PolymarketMarketSource {
     this.lastRequestAt = Date.now();
   }
 
-  scanRiskFlags({ normalized, filtered, errors, requestedLimit }) {
+  scanRiskFlags({ normalized, filtered, errors, requestedLimit, pulseSelection = null }) {
     const flags = [];
     if (errors.length > 0) {
       flags.push("market_source_partial_failure");
     }
-    if (normalized.length < Math.min(requestedLimit, this.config.scan.minFetchedMarkets)) {
+    const minimumFetched = pulseSelection
+      ? this.config.scan.minFetchedMarkets
+      : Math.min(requestedLimit, this.config.scan.minFetchedMarkets);
+    if (normalized.length < minimumFetched) {
       flags.push("market_scan_result_below_minimum");
     }
     if (filtered.length === 0) {
@@ -273,6 +300,12 @@ export class PolymarketMarketSource {
     }
     if (normalized.some((market) => market.riskFlags.length > 0)) {
       flags.push("market_rows_have_risk_flags");
+    }
+    if (pulseSelection) {
+      if (pulseSelection.removed.missingClobTokenIds > 0) flags.push("pulse_missing_clob_token_filtered");
+      if (pulseSelection.removed.lowLiquidity > 0) flags.push("pulse_low_liquidity_filtered");
+      if (pulseSelection.removed.shortTermPrice > 0) flags.push("pulse_short_term_price_filtered");
+      if (pulseSelection.postFilterCount < requestedLimit) flags.push("pulse_candidate_pool_below_requested_limit");
     }
     return flags;
   }

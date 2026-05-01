@@ -26,14 +26,21 @@ const DEFAULTS = {
   MARKET_MAX_AGE_SECONDS: "600",
   MIN_AI_CONFIDENCE: "medium",
   MIN_TRADE_USD: "1",
-  MARKET_SCAN_LIMIT: "1000",
-  MARKET_PAGE_SIZE: "100",
+  MARKET_SCAN_LIMIT: "5000",
+  MARKET_PAGE_SIZE: "500",
   MARKET_MAX_PAGES: "20",
   MARKET_CACHE_TTL_SECONDS: "300",
   MARKET_REQUEST_TIMEOUT_MS: "10000",
   MARKET_REQUEST_RETRIES: "2",
   MARKET_RATE_LIMIT_MS: "250",
-  MARKET_MIN_FETCHED: "20",
+  MARKET_MIN_FETCHED: "5000",
+  PULSE_STRATEGY: "pulse-direct",
+  PULSE_MIN_LIQUIDITY_USD: "5000",
+  PULSE_MAX_CANDIDATES: "20",
+  PULSE_REPORT_CANDIDATES: "4",
+  PULSE_BATCH_CAP_PCT: "0.2",
+  PULSE_FETCH_DIMENSIONS: "volume24hr,liquidity,startDate,competitive",
+  PULSE_REQUIRE_EVIDENCE_GUARD: "false",
   EVIDENCE_CACHE_TTL_SECONDS: "1800",
   EVIDENCE_REQUEST_TIMEOUT_MS: "10000",
   EVIDENCE_REQUEST_RETRIES: "1",
@@ -184,7 +191,7 @@ export async function loadEnvConfig(options = {}) {
       minTradeUsd: readNumber(values, "MIN_TRADE_USD", 1)
     },
     scan: {
-      marketScanLimit: Math.max(1, Math.floor(readNumber(values, "MARKET_SCAN_LIMIT", 1000))),
+      marketScanLimit: Math.max(1, Math.floor(readNumber(values, "MARKET_SCAN_LIMIT", 5000))),
       pageSize: Math.max(1, Math.min(500, Math.floor(readNumber(values, "MARKET_PAGE_SIZE", 100)))),
       maxPages: Math.max(1, Math.floor(readNumber(values, "MARKET_MAX_PAGES", 20))),
       cacheTtlSeconds: Math.max(0, Math.floor(readNumber(values, "MARKET_CACHE_TTL_SECONDS", 300))),
@@ -192,6 +199,15 @@ export async function loadEnvConfig(options = {}) {
       requestRetries: Math.max(0, Math.floor(readNumber(values, "MARKET_REQUEST_RETRIES", 2))),
       rateLimitMs: Math.max(0, Math.floor(readNumber(values, "MARKET_RATE_LIMIT_MS", 250))),
       minFetchedMarkets: Math.max(0, Math.floor(readNumber(values, "MARKET_MIN_FETCHED", 20)))
+    },
+    pulse: {
+      strategy: values.PULSE_STRATEGY === "legacy" ? "legacy" : "pulse-direct",
+      minLiquidityUsd: readNumber(values, "PULSE_MIN_LIQUIDITY_USD", 5000),
+      maxCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_MAX_CANDIDATES", 20))),
+      reportCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_REPORT_CANDIDATES", 4))),
+      batchCapPct: readNumber(values, "PULSE_BATCH_CAP_PCT", 0.2),
+      fetchDimensions: parseList(values.PULSE_FETCH_DIMENSIONS || DEFAULTS.PULSE_FETCH_DIMENSIONS),
+      requireEvidenceGuard: String(values.PULSE_REQUIRE_EVIDENCE_GUARD ?? "false").toLowerCase() === "true"
     },
     monitor: {
       intervalSeconds: Math.max(1, Math.floor(readNumber(values, "MONITOR_INTERVAL_SECONDS", 300))),
@@ -250,6 +266,13 @@ function check(key, ok, summary, blocking = true) {
 export function validateEnvConfig(config, options = {}) {
   const mode = normalizeMode(options.mode ?? config.executionMode);
   const walletMode = normalizeWalletMode(config.liveWalletMode);
+  const pulse = {
+    strategy: config.pulse?.strategy ?? "legacy",
+    minLiquidityUsd: config.pulse?.minLiquidityUsd ?? 0,
+    maxCandidates: config.pulse?.maxCandidates ?? 1,
+    reportCandidates: config.pulse?.reportCandidates ?? 1,
+    batchCapPct: config.pulse?.batchCapPct ?? 0.2
+  };
   const checks = [
     check("execution-mode", ["paper", "live"].includes(mode), `mode=${mode}`),
     check("market-source", ["mock", "polymarket"].includes(config.marketSource), `marketSource=${config.marketSource}`),
@@ -269,6 +292,11 @@ export function validateEnvConfig(config, options = {}) {
     check("scan.pageSize", config.scan.pageSize > 0 && config.scan.pageSize <= 500, "MARKET_PAGE_SIZE must be in [1, 500]."),
     check("scan.maxPages", config.scan.maxPages > 0, "MARKET_MAX_PAGES must be > 0."),
     check("scan.requestTimeoutMs", config.scan.requestTimeoutMs >= 1000, "MARKET_REQUEST_TIMEOUT_MS must be >= 1000."),
+    check("pulse.strategy", ["pulse-direct", "legacy"].includes(pulse.strategy), "PULSE_STRATEGY must be pulse-direct or legacy."),
+    check("pulse.minLiquidityUsd", pulse.minLiquidityUsd >= 0, "PULSE_MIN_LIQUIDITY_USD must be >= 0."),
+    check("pulse.maxCandidates", pulse.maxCandidates > 0, "PULSE_MAX_CANDIDATES must be > 0."),
+    check("pulse.reportCandidates", pulse.reportCandidates > 0, "PULSE_REPORT_CANDIDATES must be > 0."),
+    check("pulse.batchCapPct", pulse.batchCapPct > 0 && pulse.batchCapPct <= 1, "PULSE_BATCH_CAP_PCT must be in (0, 1]."),
     check("evidence.requestTimeoutMs", config.evidence.requestTimeoutMs >= 1000, "EVIDENCE_REQUEST_TIMEOUT_MS must be >= 1000."),
     check("monitor.maxTradesPerRound", (config.monitor?.maxTradesPerRound ?? 0) >= 0, "MONITOR_MAX_TRADES_PER_ROUND must be >= 0."),
     check("monitor.maxDailyTradeUsd", (config.monitor?.maxDailyTradeUsd ?? 0) >= 0, "MONITOR_MAX_DAILY_TRADE_USD must be >= 0."),
@@ -321,7 +349,8 @@ export function summarizeEnvConfig(config, options = {}) {
     liveWalletMode: normalizeWalletMode(config.liveWalletMode),
     funderAddress: maskAddress(config.funderAddress || config.simulatedWalletAddress),
     polymarketHost: config.polymarketHost || "-",
-    marketSource: config.marketSource
+    marketSource: config.marketSource,
+    pulseStrategy: config.pulse?.strategy ?? "legacy"
   };
 }
 
