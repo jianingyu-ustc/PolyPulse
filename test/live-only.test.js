@@ -1,0 +1,148 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
+import { FileStateStore } from "../src/state/file-state-store.js";
+import { PolymarketMarketSource } from "../src/adapters/polymarket-market-source.js";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cliPath = path.join(repoRoot, "bin", "polypulse.js");
+
+function execCli(args, options = {}) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [cliPath, ...args], { cwd: repoRoot, ...options }, (error, stdout, stderr) => {
+      resolve({ error, stdout, stderr, status: error?.code ?? 0 });
+    });
+  });
+}
+
+function liveEnvLines({ stateDir, artifactDir, walletMode = "simulated" }) {
+  return [
+    "POLYPULSE_EXECUTION_MODE=live",
+    "POLYPULSE_LIVE_CONFIRM=LIVE",
+    `POLYPULSE_LIVE_WALLET_MODE=${walletMode}`,
+    "SIMULATED_WALLET_BALANCE_USD=100",
+    "POLYPULSE_MARKET_SOURCE=polymarket",
+    "POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com",
+    "CHAIN_ID=137",
+    "POLYMARKET_HOST=https://clob.polymarket.com",
+    "AI_PROVIDER=codex",
+    "AGENT_RUNTIME_PROVIDER=codex",
+    "MARKET_SCAN_LIMIT=50",
+    "MARKET_PAGE_SIZE=50",
+    "MARKET_MAX_PAGES=2",
+    "MARKET_MIN_FETCHED=20",
+    "MARKET_REQUEST_TIMEOUT_MS=5000",
+    "MARKET_REQUEST_RETRIES=0",
+    "MARKET_RATE_LIMIT_MS=0",
+    "PULSE_MIN_LIQUIDITY_USD=0",
+    `STATE_DIR=${stateDir}`,
+    `ARTIFACT_DIR=${artifactDir}`
+  ];
+}
+
+async function createConfig(overrides = {}) {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-only-"));
+  const stateDir = path.join(dir, "state");
+  const artifactDir = path.join(dir, "artifacts");
+  const envPath = path.join(dir, "live.env");
+  await writeFile(envPath, liveEnvLines({ stateDir, artifactDir }).join("\n"), "utf8");
+  const config = await loadEnvConfig({
+    envFile: envPath,
+    overrides
+  });
+  return { config, envPath, stateDir, artifactDir };
+}
+
+async function requireGamma(t, config) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const url = `${config.polymarketGammaHost}/markets?limit=1&active=true&closed=false`;
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      t.skip(`Polymarket Gamma unavailable: HTTP ${response.status}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    t.skip(`Polymarket Gamma unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+test("live env accepts only Polymarket as the market source", async () => {
+  const { config } = await createConfig();
+  const report = validateEnvConfig(config, { mode: "live" });
+  assert.equal(report.ok, true);
+  assert.equal(report.mode, "live");
+  assert.equal(config.marketSource, "polymarket");
+
+  const invalid = await loadEnvConfig({
+    envFile: config.envFilePath,
+    overrides: { POLYPULSE_MARKET_SOURCE: "alternate-source" }
+  });
+  const invalidReport = validateEnvConfig(invalid, { mode: "live" });
+  assert.equal(invalidReport.ok, false);
+  assert.ok(invalidReport.checks.some((item) => item.key === "market-source" && !item.ok));
+});
+
+test("CLI rejects removed source override", async () => {
+  const { envPath } = await createConfig();
+  const result = await execCli(["market", "topics", "--source", "alternate-source", "--env-file", envPath], {
+    env: { ...process.env }
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr || result.stdout, /unsupported_option/);
+});
+
+test("market source reads current Polymarket markets from Gamma", async (t) => {
+  const { config } = await createConfig();
+  if (!await requireGamma(t, config)) return;
+  const source = new PolymarketMarketSource(config, new FileStateStore(config));
+  const scan = await source.scan({ limit: 3, minLiquidityUsd: 0 });
+
+  assert.equal(scan.source, "polymarket-gamma");
+  assert.equal(scan.fromCache, false);
+  assert.ok(scan.totalFetched > 0, "expected Gamma to return current market rows");
+  assert.ok(scan.markets.length > 0, "expected at least one current Polymarket market");
+  assert.ok(scan.markets.every((market) => market.source === "polymarket-gamma"));
+  assert.ok(scan.markets.every((market) => market.marketId || market.marketSlug));
+});
+
+test("CLI market topics returns current Polymarket topics", async (t) => {
+  const { config, envPath } = await createConfig();
+  if (!await requireGamma(t, config)) return;
+  const result = await execCli(["market", "topics", "--env-file", envPath, "--limit", "3"], {
+    env: { ...process.env }
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+
+  assert.equal(output.ok, true);
+  assert.equal(output.source, "polymarket-gamma");
+  assert.ok(output.totalFetched > 0);
+  assert.ok(output.topics.length > 0);
+  assert.ok(output.topics.every((market) => market.marketId || market.marketSlug));
+});
+
+test("live simulated balance uses the live broker path", async () => {
+  const { envPath } = await createConfig();
+  const result = await execCli(["account", "balance", "--mode", "live", "--env-file", envPath], {
+    env: { ...process.env }
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+
+  assert.equal(output.ok, true);
+  assert.equal(output.executionMode, "live");
+  assert.equal(output.wallet.walletMode, "simulated");
+  assert.equal(output.collateral.source, "simulated-live-wallet");
+  assert.equal(output.collateralBalance, 100);
+});

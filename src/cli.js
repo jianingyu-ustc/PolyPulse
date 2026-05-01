@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { loadEnvConfig, summarizeEnvConfig, validateEnvConfig } from "./config/env.js";
-import { MockMarketSource } from "./adapters/mock-market-source.js";
 import { PolymarketMarketSource } from "./adapters/polymarket-market-source.js";
 import { DecisionEngine } from "./core/decision-engine.js";
 import { FileStateStore } from "./state/file-state-store.js";
@@ -28,20 +27,31 @@ function print(value) {
 
 async function createContext(args, overrides = {}) {
   const envFile = option(args, "--env-file");
-  const source = option(args, "--source");
+  if (args.includes("--source")) {
+    throw new Error("unsupported_option: --source has been removed; PolyPulse only reads Polymarket markets");
+  }
   const config = await loadEnvConfig({
     envFile,
-    overrides: {
-      ...overrides,
-      ...(source ? { POLYPULSE_MARKET_SOURCE: source } : {})
-    }
+    overrides
   });
+  if (config.executionMode !== "live") {
+    throw new Error(`unsupported_execution_mode: ${config.executionMode}; only live is supported`);
+  }
+  if (config.marketSource !== "polymarket") {
+    throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
+  }
   const stateStore = new FileStateStore(config);
   const artifactWriter = new ArtifactWriter(config);
-  const marketSource = config.marketSource === "mock"
-    ? new MockMarketSource(config, stateStore)
-    : new PolymarketMarketSource(config, stateStore);
+  const marketSource = new PolymarketMarketSource(config, stateStore);
   return { config, stateStore, artifactWriter, marketSource };
+}
+
+function liveModeFromArgs(args) {
+  const mode = option(args, "--mode", "live");
+  if (mode !== "live") {
+    throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+  }
+  return mode;
 }
 
 function parseAmount(args) {
@@ -61,7 +71,7 @@ function parseOptionalBoolean(args, name) {
 }
 
 async function commandEnv(args) {
-  const mode = option(args, "--mode");
+  const mode = liveModeFromArgs(args);
   const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
   const report = validateEnvConfig(context.config, { mode: mode ?? context.config.executionMode });
   const runId = randomUUID();
@@ -70,7 +80,7 @@ async function commandEnv(args) {
 }
 
 async function commandBalance(args) {
-  const mode = option(args, "--mode");
+  const mode = liveModeFromArgs(args);
   const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
   const service = new AccountService({ config: context.config, stateStore: context.stateStore });
   const balance = await service.getBalance({ mode: mode ?? context.config.executionMode });
@@ -154,7 +164,7 @@ async function commandPredict(args) {
 }
 
 async function commandTradeOnce(args) {
-  const mode = option(args, "--mode", "paper");
+  const mode = liveModeFromArgs(args);
   const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
   const marketId = option(args, "--market");
   const side = option(args, "--side");
@@ -191,7 +201,7 @@ async function commandTradeOnce(args) {
 }
 
 async function commandMonitorRun(args) {
-  const mode = option(args, "--mode", "paper");
+  const mode = liveModeFromArgs(args);
   const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
   const scheduler = new Scheduler(context);
   const roundsOption = option(args, "--rounds");
@@ -229,7 +239,7 @@ async function commandMonitorRun(args) {
 }
 
 async function commandMonitor(args) {
-  const mode = option(args, "--mode", "paper");
+  const mode = liveModeFromArgs(args);
   const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
   if (args[1] === "run") {
     return await commandMonitorRun(args);
@@ -296,11 +306,8 @@ function help() {
       "polypulse market topics --limit 20 --min-liquidity 1000 --min-volume 500 --category politics --tradable true",
       "Use topics[].marketId or topics[].marketSlug as --market.",
       "polypulse predict --market <market-id-or-slug>",
-      "polypulse trade once --mode paper --market <id> --max-amount 1",
       "polypulse trade once --mode live --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
       "polypulse risk status|pause|halt|resume",
-      "polypulse monitor run --mode paper --rounds 1",
-      "polypulse monitor run --mode paper --loop",
       "polypulse monitor run --mode live --env-file <path> --confirm LIVE --rounds 1",
       "polypulse monitor status|stop|resume"
     ]

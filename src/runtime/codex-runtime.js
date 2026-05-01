@@ -167,6 +167,27 @@ function extractJsonPayload(text) {
 }
 
 function buildProbabilityEstimateSchema() {
+  const evidenceProperties = {
+    evidenceId: { type: "string", minLength: 1 },
+    marketId: { type: "string" },
+    title: { type: "string", minLength: 1 },
+    summary: { type: "string" },
+    source: { type: "string" },
+    sourceUrl: { type: "string" },
+    url: { type: "string" },
+    timestamp: { type: "string" },
+    retrievedAt: { type: "string" },
+    relevanceScore: { type: "number" },
+    relevance_score: { type: "number" },
+    credibility: { type: "string" },
+    status: { type: "string" }
+  };
+  const evidenceItemSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: Object.keys(evidenceProperties),
+    properties: evidenceProperties
+  };
   return {
     type: "object",
     additionalProperties: false,
@@ -185,39 +206,11 @@ function buildProbabilityEstimateSchema() {
       reasoning_summary: { type: "string", minLength: 1 },
       key_evidence: {
         type: "array",
-        items: {
-          type: "object",
-          additionalProperties: true,
-          required: ["evidenceId", "title", "summary"],
-          properties: {
-            evidenceId: { type: "string", minLength: 1 },
-            title: { type: "string", minLength: 1 },
-            summary: { type: "string" },
-            source: { type: "string" },
-            sourceUrl: { type: "string" },
-            url: { type: "string" },
-            timestamp: { type: "string" },
-            relevanceScore: { type: "number" }
-          }
-        }
+        items: evidenceItemSchema
       },
       counter_evidence: {
         type: "array",
-        items: {
-          type: "object",
-          additionalProperties: true,
-          required: ["evidenceId", "title", "summary"],
-          properties: {
-            evidenceId: { type: "string", minLength: 1 },
-            title: { type: "string", minLength: 1 },
-            summary: { type: "string" },
-            source: { type: "string" },
-            sourceUrl: { type: "string" },
-            url: { type: "string" },
-            timestamp: { type: "string" },
-            relevanceScore: { type: "number" }
-          }
-        }
+        items: evidenceItemSchema
       },
       uncertainty_factors: {
         type: "array",
@@ -362,8 +355,7 @@ async function runCodex({
   tempDir,
   outputPath,
   schemaPath,
-  timeoutMs,
-  spawnImpl = spawn
+  timeoutMs
 }) {
   const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
   const args = [
@@ -393,7 +385,7 @@ async function runCodex({
   args.push("-");
 
   await new Promise((resolve, reject) => {
-    const child = spawnImpl("codex", args, {
+    const child = spawn("codex", args, {
       cwd: repoRoot,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -460,90 +452,6 @@ async function runCodex({
   });
 }
 
-function applyTemplate(command, replacements) {
-  let result = command;
-  for (const [key, value] of Object.entries(replacements)) {
-    result = result.replaceAll(`{{${key}}}`, value);
-  }
-  return result;
-}
-
-async function runTemplateCommand({
-  template,
-  replacements,
-  timeoutMs,
-  tempDir,
-  outputPath,
-  spawnImpl = spawn
-}) {
-  const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
-  const command = applyTemplate(template, replacements);
-  await new Promise((resolve, reject) => {
-    const child = spawnImpl("/bin/sh", ["-lc", command], {
-      cwd: replacements.repo_root,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    let stderr = "";
-    const startedAt = Date.now();
-    const heartbeat = setInterval(() => {}, RUNTIME_HEARTBEAT_INTERVAL_MS);
-    const timeout = effectiveTimeoutMs == null
-      ? null
-      : setTimeout(() => {
-        clearInterval(heartbeat);
-        child.kill?.("SIGTERM");
-        reject(new Error(
-          `provider command timed out after ${effectiveTimeoutMs}ms\n` +
-          `${buildRuntimeHeartbeatDetail({
-            stage: "Probability runtime is running",
-            providerDetail: "template provider",
-            startedAt,
-            timeoutMs: effectiveTimeoutMs,
-            tempDir,
-            outputPath
-          })}`
-        ));
-      }, effectiveTimeoutMs);
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      clearInterval(heartbeat);
-      if (timeout) clearTimeout(timeout);
-      reject(new Error(
-        `${error.message}\n` +
-        `${buildRuntimeHeartbeatDetail({
-          stage: "Probability runtime is running",
-          providerDetail: "template provider",
-          startedAt,
-          timeoutMs: effectiveTimeoutMs,
-          tempDir,
-          outputPath
-        })}`,
-        { cause: error }
-      ));
-    });
-    child.on("close", (code) => {
-      clearInterval(heartbeat);
-      if (timeout) clearTimeout(timeout);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(
-        `${stderr || `provider command exited with code ${code}`}\n` +
-        `${buildRuntimeHeartbeatDetail({
-          stage: "Probability runtime is running",
-          providerDetail: "template provider",
-          startedAt,
-          timeoutMs: effectiveTimeoutMs,
-          tempDir,
-          outputPath
-        })}`
-      ));
-    });
-  });
-}
-
 async function archiveRuntimeLog({ config, settings, rawOutput, promptMetrics, schemaMetrics, inputMetrics, tempDir, outputPath }) {
   const artifactDir = path.join(config.artifactDir, "codex-runtime", timestampId());
   await mkdir(artifactDir, { recursive: true });
@@ -577,9 +485,8 @@ async function archiveRuntimeLog({ config, settings, rawOutput, promptMetrics, s
 }
 
 export class CodexProbabilityProvider {
-  constructor(config = {}, options = {}) {
+  constructor(config = {}) {
     this.config = config;
-    this.spawnImpl = options.spawnImpl ?? spawn;
   }
 
   async estimate({ market, evidence }) {
@@ -620,36 +527,15 @@ export class CodexProbabilityProvider {
       const schemaMetrics = measureText(schemaContent);
       const inputMetrics = combineTextMetrics([marketMetrics, evidenceMetrics, riskDocMetrics, ...skillMetrics]);
 
-      if (settings.command) {
-        await runTemplateCommand({
-          template: settings.command,
-          replacements: {
-            repo_root: repoRoot,
-            prompt_file: promptPath,
-            output_file: outputPath,
-            schema_file: schemaPath,
-            skill_root: settings.skillRootDir,
-            market_json: marketPath,
-            evidence_json: evidencePath,
-            risk_doc: riskDocPath
-          },
-          timeoutMs,
-          tempDir,
-          outputPath,
-          spawnImpl: this.spawnImpl
-        });
-      } else {
-        await runCodex({
-          prompt,
-          settings,
-          repoRoot,
-          tempDir,
-          outputPath,
-          schemaPath,
-          timeoutMs,
-          spawnImpl: this.spawnImpl
-        });
-      }
+      await runCodex({
+        prompt,
+        settings,
+        repoRoot,
+        tempDir,
+        outputPath,
+        schemaPath,
+        timeoutMs
+      });
 
       const rawOutput = await readFile(outputPath, "utf8");
       const parsed = extractJsonPayload(rawOutput);
@@ -702,6 +588,5 @@ export const codexRuntimeInternals = {
   buildPrompt,
   extractJsonPayload,
   normalizeSourceUrl,
-  runCodex,
-  runTemplateCommand
+  runCodex
 };

@@ -60,9 +60,8 @@ function extractAllowance(raw) {
 }
 
 export class LivePolymarketClient {
-  constructor(config, options = {}) {
+  constructor(config) {
     this.config = config;
-    this.clientFactory = options.clientFactory ?? null;
     this.cachedClient = null;
   }
 
@@ -77,10 +76,6 @@ export class LivePolymarketClient {
 
   async getClient() {
     if (this.cachedClient) {
-      return this.cachedClient;
-    }
-    if (this.clientFactory) {
-      this.cachedClient = await this.clientFactory(this.config);
       return this.cachedClient;
     }
     let clobModule;
@@ -105,7 +100,7 @@ export class LivePolymarketClient {
           if (method === "eth_accounts" || method === "eth_requestAccounts") {
             return [account.address];
           }
-          throw new Error(`Unsupported offline wallet RPC method: ${method}`);
+          throw new Error(`Unsupported wallet RPC method: ${method}`);
         }
       })
     });

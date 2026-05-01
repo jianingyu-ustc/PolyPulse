@@ -36,27 +36,26 @@ set -a
 . "$ENV_FILE"
 set +a
 
-MODE="${POLYPULSE_EXECUTION_MODE:-paper}"
+MODE="${POLYPULSE_EXECUTION_MODE:-live}"
 WALLET_MODE="${POLYPULSE_LIVE_WALLET_MODE:-real}"
 if [ -n "$WALLET_MODE_ARG" ] && [ "$WALLET_MODE_ARG" != "$WALLET_MODE" ]; then
   fail "--wallet $WALLET_MODE_ARG does not match POLYPULSE_LIVE_WALLET_MODE=$WALLET_MODE in $ENV_FILE"
 fi
-if [ "$MODE" = "live" ]; then
-  [ "$CONFIRM" = "LIVE" ] || fail "live start requires ./deploy/scripts/start.sh --confirm LIVE"
-  [ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live start requires POLYPULSE_LIVE_CONFIRM=LIVE in $ENV_FILE"
-  case "$WALLET_MODE" in
-    real)
-      [ -n "${PRIVATE_KEY:-}" ] || fail "real live wallet requires PRIVATE_KEY"
-      [ -n "${FUNDER_ADDRESS:-}" ] || fail "real live wallet requires FUNDER_ADDRESS"
-      ;;
-    simulated)
-      [ -n "${SIMULATED_WALLET_BALANCE_USD:-}" ] || fail "simulated live wallet requires SIMULATED_WALLET_BALANCE_USD"
-      ;;
-    *)
-      fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated"
-      ;;
-  esac
-fi
+[ "$MODE" = "live" ] || fail "POLYPULSE_EXECUTION_MODE must be live"
+[ "$CONFIRM" = "LIVE" ] || fail "live start requires ./deploy/scripts/start.sh --confirm LIVE"
+[ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live start requires POLYPULSE_LIVE_CONFIRM=LIVE in $ENV_FILE"
+case "$WALLET_MODE" in
+  real)
+    [ -n "${PRIVATE_KEY:-}" ] || fail "real live wallet requires PRIVATE_KEY"
+    [ -n "${FUNDER_ADDRESS:-}" ] || fail "real live wallet requires FUNDER_ADDRESS"
+    ;;
+  simulated)
+    [ -n "${SIMULATED_WALLET_BALANCE_USD:-}" ] || fail "simulated live wallet requires SIMULATED_WALLET_BALANCE_USD"
+    ;;
+  *)
+    fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated"
+    ;;
+esac
 
 "$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --preflight
 systemctl daemon-reload

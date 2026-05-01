@@ -3,25 +3,23 @@ import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
-import { PaperBroker } from "../brokers/paper-broker.js";
 import { LiveBroker } from "../brokers/live-broker.js";
-import { AccountService } from "../account/account-service.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 
 function oneShotAction({ mode, risk, orderResult }) {
   if (!risk.allowed || !risk.order || orderResult?.status === "blocked") {
     return "no-trade";
   }
-  return mode === "live" ? "live-order" : "paper-order";
+  return "live-order";
 }
 
-export async function buildPrediction(context, marketId, options = {}) {
+export async function buildPrediction(context, marketId) {
   const market = await context.marketSource.getMarket(marketId);
   if (!market) {
     throw new Error(`Market not found: ${marketId}`);
   }
-  const evidenceCrawler = options.evidenceCrawler ?? new EvidenceCrawler(context.config);
-  const probabilityEstimator = options.probabilityEstimator ?? new ProbabilityEstimator(context.config);
+  const evidenceCrawler = new EvidenceCrawler(context.config);
+  const probabilityEstimator = new ProbabilityEstimator(context.config);
   const evidence = await evidenceCrawler.collect({ market });
   const estimate = await probabilityEstimator.estimate({ market, evidence });
   return { market, evidence, estimate };
@@ -30,12 +28,14 @@ export async function buildPrediction(context, marketId, options = {}) {
 export async function runTradeOnce({
   context,
   marketId,
-  mode = "paper",
+  mode = "live",
   side = null,
   maxAmountUsd = 1,
-  confirmation = null,
-  options = {}
+  confirmation = null
 }) {
+  if (mode !== "live") {
+    throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+  }
   const input = {
     command: "trade once",
     mode,
@@ -45,24 +45,19 @@ export async function runTradeOnce({
     confirm_live: confirmation === "LIVE",
     env: summarizeEnvConfig(context.config, { mode })
   };
-  const { market, evidence, estimate } = await buildPrediction(context, marketId, options);
+  const { market, evidence, estimate } = await buildPrediction(context, marketId);
   const portfolio = await context.stateStore.getPortfolio();
-  const decisionEngine = options.decisionEngine ?? new DecisionEngine(context.config);
+  const decisionEngine = new DecisionEngine(context.config);
   const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd });
   const chosenSide = side ?? analysis.suggested_side ?? "yes";
   const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
 
-  const liveBroker = options.liveBroker ?? new LiveBroker(context.config);
-  const paperBroker = options.paperBroker ?? new PaperBroker(context.stateStore);
+  const liveBroker = new LiveBroker(context.config);
   let liveBalance = null;
   let liveBalanceError = null;
-  if (mode === "live" && confirmation === "LIVE") {
+  if (confirmation === "LIVE") {
     try {
-      liveBalance = await new AccountService({
-        config: context.config,
-        stateStore: context.stateStore,
-        liveBroker
-      }).getBalance({ mode: "live" });
+      liveBalance = await liveBroker.getBalance();
     } catch (error) {
       liveBalanceError = error instanceof Error ? error.message : String(error);
     }
@@ -79,7 +74,7 @@ export async function runTradeOnce({
     liveBalance,
     liveBalanceError
   });
-  const orderResult = await new OrderExecutor({ paperBroker, liveBroker }).execute({ risk, market, mode, confirmation });
+  const orderResult = await new OrderExecutor({ liveBroker }).execute({ risk, market, mode, confirmation });
   const action = oneShotAction({ mode, risk, orderResult });
   const artifacts = await context.artifactWriter.writeOnceRun({
     input,

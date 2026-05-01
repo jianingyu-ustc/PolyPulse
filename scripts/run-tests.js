@@ -39,6 +39,7 @@ const summary = {
   tests: parseCount(combined, "tests"),
   pass: parseCount(combined, "pass"),
   fail: parseCount(combined, "fail"),
+  skipped: parseCount(combined, "skipped"),
   artifactDir: path.relative(process.cwd(), artifactDir)
 };
 
@@ -52,6 +53,7 @@ console.log(JSON.stringify({
   tests: summary.tests,
   pass: summary.pass,
   fail: summary.fail,
+  skipped: summary.skipped,
   durationMs: summary.durationMs,
   artifact: summary.ok ? undefined : summary.artifactDir
 }));

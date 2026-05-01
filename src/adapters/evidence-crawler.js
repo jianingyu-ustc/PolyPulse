@@ -152,9 +152,9 @@ class ResolutionEvidenceAdapter {
 }
 
 export class EvidenceCrawler {
-  constructor(config = {}, options = {}) {
+  constructor(config = {}) {
     this.config = config;
-    this.adapters = options.adapters ?? [
+    this.adapters = [
       new MarketMetadataEvidenceAdapter(),
       new ResolutionEvidenceAdapter()
     ];

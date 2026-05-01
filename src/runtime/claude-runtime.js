@@ -14,7 +14,7 @@ import { resolveClaudeSkillSettings } from "./claude-skill-settings.js";
 import { codexRuntimeInternals } from "./codex-runtime.js";
 
 const RUNTIME_HEARTBEAT_INTERVAL_MS = 5000;
-const { buildProbabilityEstimateSchema, buildPrompt, extractJsonPayload, runTemplateCommand } = codexRuntimeInternals;
+const { buildProbabilityEstimateSchema, buildPrompt, extractJsonPayload } = codexRuntimeInternals;
 
 function timestampId(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
@@ -133,14 +133,13 @@ async function runClaude({
   tempDir,
   outputPath,
   schemaPath,
-  timeoutMs,
-  spawnImpl = spawn
+  timeoutMs
 }) {
   const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
   const args = buildClaudeArgs({ settings, repoRoot, schemaPath });
 
   await new Promise((resolve, reject) => {
-    const child = spawnImpl("claude", args, {
+    const child = spawn("claude", args, {
       cwd: repoRoot,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -252,9 +251,8 @@ async function archiveRuntimeLog({ config, settings, rawOutput, promptMetrics, s
 }
 
 export class ClaudeProbabilityProvider {
-  constructor(config = {}, options = {}) {
+  constructor(config = {}) {
     this.config = config;
-    this.spawnImpl = options.spawnImpl ?? spawn;
   }
 
   async estimate({ market, evidence }) {
@@ -295,36 +293,15 @@ export class ClaudeProbabilityProvider {
       const schemaMetrics = measureText(schemaContent);
       const inputMetrics = combineTextMetrics([marketMetrics, evidenceMetrics, riskDocMetrics, ...skillMetrics]);
 
-      if (settings.command) {
-        await runTemplateCommand({
-          template: settings.command,
-          replacements: {
-            repo_root: repoRoot,
-            prompt_file: promptPath,
-            output_file: outputPath,
-            schema_file: schemaPath,
-            skill_root: settings.skillRootDir,
-            market_json: marketPath,
-            evidence_json: evidencePath,
-            risk_doc: riskDocPath
-          },
-          timeoutMs,
-          tempDir,
-          outputPath,
-          spawnImpl: this.spawnImpl
-        });
-      } else {
-        await runClaude({
-          prompt,
-          settings,
-          repoRoot,
-          tempDir,
-          outputPath,
-          schemaPath,
-          timeoutMs,
-          spawnImpl: this.spawnImpl
-        });
-      }
+      await runClaude({
+        prompt,
+        settings,
+        repoRoot,
+        tempDir,
+        outputPath,
+        schemaPath,
+        timeoutMs
+      });
 
       const rawOutput = await readFile(outputPath, "utf8");
       const parsed = extractJsonPayload(rawOutput);

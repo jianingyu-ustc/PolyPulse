@@ -32,7 +32,7 @@ export function resolveEffectiveProvider(config) {
   if (runtimeProvider && runtimeProvider !== "none") {
     return runtimeProvider;
   }
-  return String(config.ai?.provider ?? "local").trim() || "local";
+  return String(config.ai?.provider ?? "codex").trim() || "codex";
 }
 
 export function resolveCodexSkillSettings(config) {
@@ -43,7 +43,6 @@ export function resolveCodexSkillSettings(config) {
   const skillLocale = SKILL_LOCALES.has(providerConfig.skillLocale) ? providerConfig.skillLocale : "zh";
   const normalized = {
     provider: "codex",
-    command: providerConfig.command ?? "",
     model: providerConfig.model ?? "",
     skillLocale,
     locale: skillLocale,

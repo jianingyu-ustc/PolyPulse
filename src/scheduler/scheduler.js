@@ -4,9 +4,7 @@ import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
-import { PaperBroker } from "../brokers/paper-broker.js";
 import { LiveBroker } from "../brokers/live-broker.js";
-import { AccountService } from "../account/account-service.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 
 function nowIso() {
@@ -169,24 +167,25 @@ async function withTimeout(promiseFactory, timeoutMs, label) {
 }
 
 export class Scheduler {
-  constructor({ config, marketSource, stateStore, artifactWriter }, options = {}) {
+  constructor({ config, marketSource, stateStore, artifactWriter }) {
     this.config = config;
     this.marketSource = marketSource;
     this.stateStore = stateStore;
     this.artifactWriter = artifactWriter;
-    this.evidenceCrawler = options.evidenceCrawler ?? new EvidenceCrawler(config);
-    this.probabilityEstimator = options.probabilityEstimator ?? new ProbabilityEstimator(config);
-    this.decisionEngine = options.decisionEngine ?? new DecisionEngine(config);
-    this.riskEngine = options.riskEngine ?? new RiskEngine(config, { stateStore });
-    this.paperBroker = options.paperBroker ?? new PaperBroker(stateStore);
-    this.liveBroker = options.liveBroker ?? new LiveBroker(config);
-    this.orderExecutor = options.orderExecutor ?? new OrderExecutor({
-      paperBroker: this.paperBroker,
+    this.evidenceCrawler = new EvidenceCrawler(config);
+    this.probabilityEstimator = new ProbabilityEstimator(config);
+    this.decisionEngine = new DecisionEngine(config);
+    this.riskEngine = new RiskEngine(config, { stateStore });
+    this.liveBroker = new LiveBroker(config);
+    this.orderExecutor = new OrderExecutor({
       liveBroker: this.liveBroker
     });
   }
 
-  async runOnce({ mode = "paper", confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
+  async runOnce({ mode = "live", confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
+    if (mode !== "live") {
+      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
     const runId = randomUUID();
     const run = await this.stateStore.createRun({ runId, stage: "started" });
     const market = marketId
@@ -226,11 +225,7 @@ export class Scheduler {
       return { liveBalance: null, liveBalanceError: null };
     }
     try {
-      const balance = await new AccountService({
-        config: this.config,
-        stateStore: this.stateStore,
-        liveBroker: this.liveBroker
-      }).getBalance({ mode: "live" });
+      const balance = await this.liveBroker.getBalance();
       return { liveBalance: balance, liveBalanceError: null };
     } catch (error) {
       return {
@@ -297,7 +292,10 @@ export class Scheduler {
     return { decision: boundedDecision, risk, order };
   }
 
-  async runMonitorRound({ mode = "paper", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
+  async runMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
+    if (mode !== "live") {
+      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
     const runId = monitorRunId();
     const startedAt = nowIso();
     const recoveredRun = await this.stateStore.recoverMonitorRun();
@@ -418,9 +416,7 @@ export class Scheduler {
         candidates: accumulator.candidates.filter((item) => item.selected).length,
         predictions: accumulator.predictions.length,
         orders: accumulator.orders.filter((order) => order.status === "filled").length,
-        action: accumulator.orders.some((order) => order.status === "filled")
-          ? `${mode}-orders`
-          : "no-trade",
+        action: accumulator.orders.some((order) => order.status === "filled") ? "live-orders" : "no-trade",
         artifact: artifacts.summary.path
       };
     } catch (error) {
@@ -442,7 +438,10 @@ export class Scheduler {
     return await this.runMonitorRound(options);
   }
 
-  async monitorLoop({ mode = "paper", confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, onRound = null } = {}) {
+  async monitorLoop({ mode = "live", confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, onRound = null } = {}) {
+    if (mode !== "live") {
+      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
     const results = [];
     let completed = 0;
     while (rounds == null || completed < rounds) {

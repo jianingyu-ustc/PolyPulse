@@ -16,18 +16,21 @@ function roundUsd(value) {
 }
 
 function modeFor(config) {
-  return config.executionMode === "live" ? "live" : "paper";
+  return "live";
 }
 
 function stateFilePath(config) {
   return path.join(config.stateDir, `${modeFor(config)}-state.json`);
 }
 
-function emptyPortfolio(now = nowIso()) {
+function emptyPortfolio(config, now = nowIso()) {
+  const startingCash = config.liveWalletMode === "simulated"
+    ? roundUsd(config.simulatedWalletBalanceUsd)
+    : 0;
   return assertSchema("PortfolioSnapshot", {
-    accountId: "paper",
-    cashUsd: 1000,
-    totalEquityUsd: 1000,
+    accountId: config.funderAddress || config.simulatedWalletAddress || `live-${config.liveWalletMode ?? "real"}`,
+    cashUsd: startingCash,
+    totalEquityUsd: startingCash,
     positions: [],
     updatedAt: now
   });
@@ -68,7 +71,7 @@ function emptyMonitorState(now = nowIso()) {
 
 function defaultState(config) {
   const now = nowIso();
-  const portfolio = emptyPortfolio(now);
+  const portfolio = emptyPortfolio(config, now);
   return {
     version: 1,
     mode: modeFor(config),
@@ -232,74 +235,6 @@ export class FileStateStore {
       updatedAt: now
     };
     return (await this.writeState(state)).riskState;
-  }
-
-  async applyPaperFill(order, market, avgPrice) {
-    const state = await this.readState();
-    const price = Number(avgPrice) > 0 ? Number(avgPrice) : 0.5;
-    const amountUsd = roundUsd(order.amountUsd);
-    const positions = [...state.portfolio.positions];
-    const index = positions.findIndex((item) => item.tokenId === order.tokenId);
-    const existing = index >= 0 ? positions[index] : null;
-    let filledUsd = amountUsd;
-
-    if (order.side === "SELL") {
-      if (!existing || Number(existing.size) <= 0) {
-        throw new Error("paper_position_not_found");
-      }
-      const requestedSize = amountUsd / price;
-      const filledSize = Math.min(Number(existing.size), requestedSize);
-      filledUsd = roundUsd(filledSize * price);
-      const remainingSize = roundUsd(Number(existing.size) - filledSize);
-      if (remainingSize <= 0) {
-        positions.splice(index, 1);
-      } else {
-        positions[index] = {
-          ...existing,
-          size: remainingSize,
-          currentValueUsd: roundUsd(remainingSize * price),
-          updatedAt: nowIso()
-        };
-      }
-      state.portfolio.cashUsd = roundUsd(state.portfolio.cashUsd + filledUsd);
-    } else {
-      if (amountUsd > state.portfolio.cashUsd) {
-        throw new Error("paper_insufficient_cash");
-      }
-      const size = amountUsd / price;
-      if (existing) {
-        const oldSize = Number(existing.size);
-        const newSize = oldSize + size;
-        const cost = (oldSize * Number(existing.avgPrice)) + amountUsd;
-        positions[index] = {
-          ...existing,
-          size: roundUsd(newSize),
-          avgPrice: roundUsd(cost / newSize),
-          currentValueUsd: roundUsd(newSize * price),
-          updatedAt: nowIso()
-        };
-      } else {
-        positions.push({
-          marketId: market.marketId,
-          marketSlug: market.marketSlug,
-          eventId: market.eventId,
-          eventSlug: market.eventSlug,
-          tokenId: order.tokenId,
-          side: order.side,
-          size: roundUsd(size),
-          avgPrice: roundUsd(price),
-          currentValueUsd: amountUsd,
-          openedAt: nowIso(),
-          updatedAt: nowIso()
-        });
-      }
-      state.portfolio.cashUsd = roundUsd(state.portfolio.cashUsd - amountUsd);
-    }
-
-    state.portfolio.positions = positions;
-    this.updatePortfolioTotals(state);
-    await this.writeState(state);
-    return { filledUsd };
   }
 
   updatePortfolioTotals(state) {

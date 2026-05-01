@@ -92,7 +92,6 @@ export function resolveClaudeSkillSettings(config) {
   const maxBudgetUsd = providerConfig.maxBudgetUsd ? Number(providerConfig.maxBudgetUsd) : null;
   const normalized = {
     provider: "claude-code",
-    command: providerConfig.command ?? "",
     model: providerConfig.model ?? "",
     skillLocale,
     locale: skillLocale,

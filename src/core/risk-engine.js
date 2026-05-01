@@ -101,23 +101,30 @@ export class RiskEngine {
     const suggestedUsd = Number(decision.suggested_notional_before_risk ?? decision.suggestedNotionalUsd);
     const pulseDirect = isPulseDirectStrategy(this.config);
     const requireEvidenceGuard = !pulseDirect || this.config.pulse?.requireEvidenceGuard;
+    const liveCollateral = availableLiveCollateral(liveBalance);
+    const portfolioEquityUsd = mode === "live" && liveCollateral != null
+      ? liveCollateral
+      : Number(portfolio.totalEquityUsd ?? 0);
     let adjusted = Number.isFinite(suggestedUsd)
       ? Math.min(requestedUsdRaw, suggestedUsd)
       : requestedUsdRaw;
     const tokenIds = new Set((market.outcomes ?? []).map((outcome) => outcome.tokenId).filter(Boolean));
 
-    const riskState = systemState ?? (this.stateStore ? await this.stateStore.getRiskState() : { status: "active", highWaterMarkUsd: portfolio.totalEquityUsd });
+    const riskState = systemState ?? (this.stateStore ? await this.stateStore.getRiskState() : { status: "active", highWaterMarkUsd: portfolioEquityUsd });
     warnings.push(...positionLossWarnings(portfolio, this.config.risk.maxPositionLossPct));
 
+    if (mode !== "live") {
+      blockedReasons.push(`unsupported_execution_mode:${mode}`);
+    }
     if (riskState.status === "paused") {
       blockedReasons.push("system_paused");
     }
     if (riskState.status === "halted") {
       blockedReasons.push("system_halted_requires_explicit_resume");
     }
-    const highWaterMark = Number(riskState.highWaterMarkUsd ?? portfolio.totalEquityUsd);
+    const highWaterMark = Number(riskState.highWaterMarkUsd ?? portfolioEquityUsd);
     if (highWaterMark > 0) {
-      const drawdownPct = (highWaterMark - portfolio.totalEquityUsd) / highWaterMark;
+      const drawdownPct = (highWaterMark - portfolioEquityUsd) / highWaterMark;
       addLimit(appliedLimits, "drawdownPct", Number(Math.max(0, drawdownPct).toFixed(6)));
       if (drawdownPct >= this.config.risk.drawdownHaltPct) {
         blockedReasons.push("drawdown_halt_threshold_exceeded");
@@ -174,14 +181,14 @@ export class RiskEngine {
       blockedReasons.push("above_max_position_count");
     }
 
-    const maxTradeUsd = roundUsd(portfolio.totalEquityUsd * this.config.risk.maxTradePct);
+    const maxTradeUsd = roundUsd(portfolioEquityUsd * this.config.risk.maxTradePct);
     if (adjusted > maxTradeUsd) {
       adjusted = maxTradeUsd;
       addLimit(appliedLimits, "maxTradeUsd", maxTradeUsd);
     }
 
     const currentExposure = (portfolio.positions ?? []).reduce((sum, position) => sum + Number(position.currentValueUsd ?? 0), 0);
-    const maxTotalExposureUsd = roundUsd(portfolio.totalEquityUsd * this.config.risk.maxTotalExposurePct);
+    const maxTotalExposureUsd = roundUsd(portfolioEquityUsd * this.config.risk.maxTotalExposurePct);
     const totalExposureRoom = roundUsd(maxTotalExposureUsd - currentExposure);
     if (adjusted > totalExposureRoom) {
       adjusted = totalExposureRoom;
@@ -191,7 +198,7 @@ export class RiskEngine {
     const eventExposure = (portfolio.positions ?? [])
       .filter((position) => position.marketId === market.marketId || position.eventId === market.eventId)
       .reduce((sum, position) => sum + Number(position.currentValueUsd ?? 0), 0);
-    const maxEventExposureUsd = roundUsd(portfolio.totalEquityUsd * this.config.risk.maxEventExposurePct);
+    const maxEventExposureUsd = roundUsd(portfolioEquityUsd * this.config.risk.maxEventExposurePct);
     const eventExposureRoom = roundUsd(maxEventExposureUsd - eventExposure);
     if (adjusted > eventExposureRoom) {
       adjusted = eventExposureRoom;
@@ -218,23 +225,20 @@ export class RiskEngine {
       blockedReasons.push("adjusted_notional_below_min_trade_usd");
     }
 
-    if (mode === "live" && confirmation !== "LIVE") {
+    if (confirmation !== "LIVE") {
       blockedReasons.push("live_requires_confirm_live");
     }
-    if (mode === "live") {
-      const preflight = validateEnvConfig(this.config, { mode: "live" });
-      if (!preflight.ok) {
-        blockedReasons.push("live_preflight_failed");
-      }
-      const collateral = availableLiveCollateral(liveBalance);
-      if (liveBalanceError) {
-        blockedReasons.push("live_balance_check_failed");
-        warnings.push(`live_balance_error:${liveBalanceError}`);
-      } else if (collateral == null) {
-        blockedReasons.push("live_balance_check_missing");
-      } else if (decision.side === "BUY" && collateral < adjusted) {
-        blockedReasons.push("insufficient_live_collateral");
-      }
+    const preflight = validateEnvConfig(this.config, { mode: "live" });
+    if (!preflight.ok) {
+      blockedReasons.push("live_preflight_failed");
+    }
+    if (liveBalanceError) {
+      blockedReasons.push("live_balance_check_failed");
+      warnings.push(`live_balance_error:${liveBalanceError}`);
+    } else if (liveCollateral == null) {
+      blockedReasons.push("live_balance_check_missing");
+    } else if (decision.side === "BUY" && liveCollateral < adjusted) {
+      blockedReasons.push("insufficient_live_collateral");
     }
 
     const uniqueReasons = [...new Set(blockedReasons)];

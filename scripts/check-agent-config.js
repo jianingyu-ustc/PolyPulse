@@ -97,7 +97,6 @@ async function main(args = process.argv.slice(2)) {
   let codex = {
     enabled: codexEnabled,
     commandMode: "not-used",
-    customCommand: false,
     model: "",
     providerTimeoutSeconds: config.providerTimeoutSeconds,
     skillLocale: "",
@@ -112,8 +111,7 @@ async function main(args = process.argv.slice(2)) {
       settings = resolveCodexSkillSettings(config);
       codex = {
         ...codex,
-        commandMode: settings.command ? "custom-command" : "codex-cli",
-        customCommand: Boolean(settings.command),
+        commandMode: "codex-cli",
         model: settings.model,
         skillLocale: settings.skillLocale,
         skillRootDir: settings.skillRootDir,
@@ -127,18 +125,9 @@ async function main(args = process.argv.slice(2)) {
       addCheck(checks, "codex-skills", false, error instanceof Error ? error.message : String(error));
     }
 
-    if (settings?.command) {
-      addCheck(
-        checks,
-        "CODEX_COMMAND_OUTPUT_FILE",
-        settings.command.includes("{{output_file}}"),
-        "CODEX_COMMAND must write provider JSON to {{output_file}}"
-      );
-    } else {
-      const cli = checkCodexCli();
-      codex.cli = cli;
-      addCheck(checks, "codex-cli", cli.ok, cli.ok ? `codex=${cli.version}` : cli.error);
-    }
+    const cli = checkCodexCli();
+    codex.cli = cli;
+    addCheck(checks, "codex-cli", cli.ok, cli.ok ? `codex=${cli.version}` : cli.error);
 
     addCheck(
       checks,
@@ -153,7 +142,6 @@ async function main(args = process.argv.slice(2)) {
   let claudeCode = {
     enabled: claudeEnabled,
     commandMode: "not-used",
-    customCommand: false,
     model: "",
     providerTimeoutSeconds: config.providerTimeoutSeconds,
     skillLocale: "",
@@ -170,8 +158,7 @@ async function main(args = process.argv.slice(2)) {
       settings = resolveClaudeSkillSettings(config);
       claudeCode = {
         ...claudeCode,
-        commandMode: settings.command ? "custom-command" : "claude-cli",
-        customCommand: Boolean(settings.command),
+        commandMode: "claude-cli",
         model: settings.model,
         skillLocale: settings.skillLocale,
         skillRootDir: settings.skillRootDir,
@@ -187,18 +174,9 @@ async function main(args = process.argv.slice(2)) {
       addCheck(checks, "claude-code-skills", false, error instanceof Error ? error.message : String(error));
     }
 
-    if (settings?.command) {
-      addCheck(
-        checks,
-        "CLAUDE_CODE_COMMAND_OUTPUT_FILE",
-        settings.command.includes("{{output_file}}"),
-        "CLAUDE_CODE_COMMAND must write provider JSON to {{output_file}}"
-      );
-    } else {
-      const cli = checkClaudeCli();
-      claudeCode.cli = cli;
-      addCheck(checks, "claude-code-cli", cli.ok, cli.ok ? `claude=${cli.version}` : cli.error);
-    }
+    const cli = checkClaudeCli();
+    claudeCode.cli = cli;
+    addCheck(checks, "claude-code-cli", cli.ok, cli.ok ? `claude=${cli.version}` : cli.error);
 
     addCheck(
       checks,

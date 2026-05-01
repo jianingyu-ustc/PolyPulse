@@ -13,19 +13,20 @@ function blockedOrderResult({ risk, mode }) {
 }
 
 export class OrderExecutor {
-  constructor({ paperBroker, liveBroker }) {
-    this.paperBroker = paperBroker;
+  constructor({ liveBroker }) {
     this.liveBroker = liveBroker;
   }
 
-  async execute({ risk, market, mode = "paper", confirmation = null }) {
+  async execute({ risk, market, mode = "live", confirmation = null }) {
+    if (mode !== "live") {
+      return blockedOrderResult({ risk: { order: risk?.order, reasons: [`unsupported_execution_mode:${mode}`] }, mode });
+    }
     if (!risk?.allowed || !risk.order) {
       return blockedOrderResult({ risk: risk ?? { reasons: ["missing_risk_decision"] }, mode });
     }
-    const broker = mode === "live" ? this.liveBroker : this.paperBroker;
-    if (!broker) {
-      return blockedOrderResult({ risk: { order: risk.order, reasons: [`${mode}_broker_unavailable`] }, mode });
+    if (!this.liveBroker) {
+      return blockedOrderResult({ risk: { order: risk.order, reasons: ["live_broker_unavailable"] }, mode });
     }
-    return await broker.submit(risk.order, market, confirmation);
+    return await this.liveBroker.submit(risk.order, market, confirmation);
   }
 }

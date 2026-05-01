@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULTS = {
-  POLYPULSE_EXECUTION_MODE: "paper",
+  POLYPULSE_EXECUTION_MODE: "live",
   POLYPULSE_LIVE_WALLET_MODE: "real",
   SIMULATED_WALLET_ADDRESS: "",
   SIMULATED_WALLET_BALANCE_USD: "100",
@@ -11,7 +11,7 @@ const DEFAULTS = {
   FUNDER_ADDRESS: "",
   SIGNATURE_TYPE: "",
   CHAIN_ID: "137",
-  POLYMARKET_HOST: "",
+  POLYMARKET_HOST: "https://clob.polymarket.com",
   POLYPULSE_MARKET_SOURCE: "polymarket",
   POLYMARKET_GAMMA_HOST: "https://gamma-api.polymarket.com",
   STATE_DIR: "runtime-artifacts/state",
@@ -29,7 +29,7 @@ const DEFAULTS = {
   MARKET_SCAN_LIMIT: "5000",
   MARKET_PAGE_SIZE: "500",
   MARKET_MAX_PAGES: "20",
-  MARKET_CACHE_TTL_SECONDS: "300",
+  MARKET_CACHE_TTL_SECONDS: "0",
   MARKET_REQUEST_TIMEOUT_MS: "10000",
   MARKET_REQUEST_RETRIES: "2",
   MARKET_RATE_LIMIT_MS: "250",
@@ -55,17 +55,14 @@ const DEFAULTS = {
   MONITOR_BLOCKLIST: "",
   ARTIFACT_RETENTION_DAYS: "14",
   ARTIFACT_MAX_RUNS: "500",
-  AI_PROVIDER: "local",
+  AI_PROVIDER: "codex",
   AI_MODEL: "",
-  AI_COMMAND: "",
-  AGENT_RUNTIME_PROVIDER: "none",
+  AGENT_RUNTIME_PROVIDER: "codex",
   PROVIDER_TIMEOUT_SECONDS: "0",
-  CODEX_COMMAND: "",
   CODEX_MODEL: "",
   CODEX_SKILL_ROOT_DIR: "skills",
   CODEX_SKILL_LOCALE: "zh",
   CODEX_SKILLS: "polypulse-market-agent",
-  CLAUDE_CODE_COMMAND: "",
   CLAUDE_CODE_MODEL: "",
   CLAUDE_CODE_SKILL_ROOT_DIR: "skills",
   CLAUDE_CODE_SKILL_LOCALE: "zh",
@@ -120,7 +117,7 @@ function readNumber(values, key, fallback) {
 }
 
 function normalizeMode(value) {
-  return value === "live" ? "live" : "paper";
+  return String(value ?? "live").trim().toLowerCase() || "live";
 }
 
 function normalizeWalletMode(value) {
@@ -128,12 +125,20 @@ function normalizeWalletMode(value) {
 }
 
 function normalizeMarketSource(value) {
-  return value === "mock" ? "mock" : "polymarket";
+  return String(value ?? "polymarket").trim().toLowerCase() || "polymarket";
 }
 
 function normalizeRuntimeProvider(value) {
   const trimmed = String(value ?? "").trim();
   return trimmed || "none";
+}
+
+function effectiveAiProvider(config) {
+  const runtimeProvider = normalizeRuntimeProvider(config.agentRuntimeProvider);
+  if (runtimeProvider && runtimeProvider !== "none") {
+    return runtimeProvider;
+  }
+  return String(config.ai?.provider ?? "codex").trim() || "codex";
 }
 
 function trimTrailingSlash(value) {
@@ -194,14 +199,14 @@ export async function loadEnvConfig(options = {}) {
       marketScanLimit: Math.max(1, Math.floor(readNumber(values, "MARKET_SCAN_LIMIT", 5000))),
       pageSize: Math.max(1, Math.min(500, Math.floor(readNumber(values, "MARKET_PAGE_SIZE", 100)))),
       maxPages: Math.max(1, Math.floor(readNumber(values, "MARKET_MAX_PAGES", 20))),
-      cacheTtlSeconds: Math.max(0, Math.floor(readNumber(values, "MARKET_CACHE_TTL_SECONDS", 300))),
+      cacheTtlSeconds: Math.max(0, Math.floor(readNumber(values, "MARKET_CACHE_TTL_SECONDS", 0))),
       requestTimeoutMs: Math.max(1000, Math.floor(readNumber(values, "MARKET_REQUEST_TIMEOUT_MS", 10000))),
       requestRetries: Math.max(0, Math.floor(readNumber(values, "MARKET_REQUEST_RETRIES", 2))),
       rateLimitMs: Math.max(0, Math.floor(readNumber(values, "MARKET_RATE_LIMIT_MS", 250))),
       minFetchedMarkets: Math.max(0, Math.floor(readNumber(values, "MARKET_MIN_FETCHED", 20)))
     },
     pulse: {
-      strategy: values.PULSE_STRATEGY === "legacy" ? "legacy" : "pulse-direct",
+      strategy: values.PULSE_STRATEGY === "pulse-direct" ? "pulse-direct" : String(values.PULSE_STRATEGY ?? "pulse-direct").trim(),
       minLiquidityUsd: readNumber(values, "PULSE_MIN_LIQUIDITY_USD", 5000),
       maxCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_MAX_CANDIDATES", 20))),
       reportCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_REPORT_CANDIDATES", 4))),
@@ -230,22 +235,19 @@ export async function loadEnvConfig(options = {}) {
       minEvidenceItems: Math.max(0, Math.floor(readNumber(values, "MIN_EVIDENCE_ITEMS", 2)))
     },
     ai: {
-      provider: values.AI_PROVIDER ?? "local",
-      model: values.AI_MODEL ?? "",
-      command: values.AI_COMMAND ?? ""
+      provider: values.AI_PROVIDER ?? "codex",
+      model: values.AI_MODEL ?? ""
     },
     agentRuntimeProvider: normalizeRuntimeProvider(values.AGENT_RUNTIME_PROVIDER),
     providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 0))),
     providers: {
       codex: {
-        command: values.CODEX_COMMAND || (values.AI_PROVIDER === "codex" ? values.AI_COMMAND ?? "" : ""),
         model: values.CODEX_MODEL || values.AI_MODEL || "",
         skillRootDir: path.resolve(repoRoot, values.CODEX_SKILL_ROOT_DIR || DEFAULTS.CODEX_SKILL_ROOT_DIR),
         skillLocale: ["en", "zh"].includes(values.CODEX_SKILL_LOCALE) ? values.CODEX_SKILL_LOCALE : "zh",
         skills: values.CODEX_SKILLS || DEFAULTS.CODEX_SKILLS
       },
       claudeCode: {
-        command: values.CLAUDE_CODE_COMMAND || (values.AI_PROVIDER === "claude-code" ? values.AI_COMMAND ?? "" : ""),
         model: values.CLAUDE_CODE_MODEL || values.AI_MODEL || "",
         skillRootDir: path.resolve(repoRoot, values.CLAUDE_CODE_SKILL_ROOT_DIR || DEFAULTS.CLAUDE_CODE_SKILL_ROOT_DIR),
         skillLocale: ["en", "zh"].includes(values.CLAUDE_CODE_SKILL_LOCALE) ? values.CLAUDE_CODE_SKILL_LOCALE : "zh",
@@ -267,15 +269,18 @@ export function validateEnvConfig(config, options = {}) {
   const mode = normalizeMode(options.mode ?? config.executionMode);
   const walletMode = normalizeWalletMode(config.liveWalletMode);
   const pulse = {
-    strategy: config.pulse?.strategy ?? "legacy",
+    strategy: config.pulse?.strategy ?? "pulse-direct",
     minLiquidityUsd: config.pulse?.minLiquidityUsd ?? 0,
     maxCandidates: config.pulse?.maxCandidates ?? 1,
     reportCandidates: config.pulse?.reportCandidates ?? 1,
     batchCapPct: config.pulse?.batchCapPct ?? 0.2
   };
+  const provider = effectiveAiProvider(config);
   const checks = [
-    check("execution-mode", ["paper", "live"].includes(mode), `mode=${mode}`),
-    check("market-source", ["mock", "polymarket"].includes(config.marketSource), `marketSource=${config.marketSource}`),
+    check("execution-mode", mode === "live", `mode=${mode}; only live is supported.`),
+    check("market-source", config.marketSource === "polymarket", `marketSource=${config.marketSource}; only polymarket is supported.`),
+    check("AI_PROVIDER", ["codex", "claude-code"].includes(String(config.ai?.provider ?? "")), `AI_PROVIDER=${config.ai?.provider}; only codex or claude-code is supported.`),
+    check("AGENT_RUNTIME_PROVIDER", ["codex", "claude-code"].includes(provider), `effectiveProvider=${provider}; only codex or claude-code is supported.`),
     check("polymarket-gamma-host", Boolean(config.polymarketGammaHost), `POLYMARKET_GAMMA_HOST=${config.polymarketGammaHost}`),
     check("state-dir", Boolean(config.stateDir), `stateDir=${config.stateDir}`),
     check("artifact-dir", Boolean(config.artifactDir), `artifactDir=${config.artifactDir}`),
@@ -292,7 +297,7 @@ export function validateEnvConfig(config, options = {}) {
     check("scan.pageSize", config.scan.pageSize > 0 && config.scan.pageSize <= 500, "MARKET_PAGE_SIZE must be in [1, 500]."),
     check("scan.maxPages", config.scan.maxPages > 0, "MARKET_MAX_PAGES must be > 0."),
     check("scan.requestTimeoutMs", config.scan.requestTimeoutMs >= 1000, "MARKET_REQUEST_TIMEOUT_MS must be >= 1000."),
-    check("pulse.strategy", ["pulse-direct", "legacy"].includes(pulse.strategy), "PULSE_STRATEGY must be pulse-direct or legacy."),
+    check("pulse.strategy", pulse.strategy === "pulse-direct", "PULSE_STRATEGY must be pulse-direct."),
     check("pulse.minLiquidityUsd", pulse.minLiquidityUsd >= 0, "PULSE_MIN_LIQUIDITY_USD must be >= 0."),
     check("pulse.maxCandidates", pulse.maxCandidates > 0, "PULSE_MAX_CANDIDATES must be > 0."),
     check("pulse.reportCandidates", pulse.reportCandidates > 0, "PULSE_REPORT_CANDIDATES must be > 0."),
@@ -306,26 +311,24 @@ export function validateEnvConfig(config, options = {}) {
     check("artifacts.maxRuns", (config.artifacts?.maxRuns ?? 0) >= 0, "ARTIFACT_MAX_RUNS must be >= 0.")
   ];
 
-  if (mode === "live") {
+  checks.push(
+    check("env-file", Boolean(config.envFilePath), "live mode requires an explicit env file or .env."),
+    check("POLYPULSE_LIVE_WALLET_MODE", ["real", "simulated"].includes(walletMode), "POLYPULSE_LIVE_WALLET_MODE must be real or simulated."),
+    check("CHAIN_ID", config.chainId === 137, "CHAIN_ID must be 137 for Polygon mainnet.")
+  );
+  if (walletMode === "real") {
     checks.push(
-      check("env-file", Boolean(config.envFilePath), "live mode requires an explicit env file or .env."),
-      check("POLYPULSE_LIVE_WALLET_MODE", ["real", "simulated"].includes(walletMode), "POLYPULSE_LIVE_WALLET_MODE must be real or simulated."),
-      check("CHAIN_ID", config.chainId === 137, "CHAIN_ID must be 137 for Polygon mainnet.")
+      check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required for live mode with a real wallet."),
+      check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required for live mode with a real wallet."),
+      check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
+      check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required for live mode with a real wallet."),
+      check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required for live mode with a real wallet.")
     );
-    if (walletMode === "real") {
-      checks.push(
-        check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required for live mode with a real wallet."),
-        check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required for live mode with a real wallet."),
-        check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
-        check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required for live mode with a real wallet."),
-        check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required for live mode with a real wallet.")
-      );
-    } else {
-      checks.push(
-        check("SIMULATED_WALLET_BALANCE_USD", Number(config.simulatedWalletBalanceUsd) >= 0, "SIMULATED_WALLET_BALANCE_USD must be >= 0."),
-        check("SIMULATED_WALLET_ADDRESS_FORMAT", !config.simulatedWalletAddress || /^0x[a-fA-F0-9]{40}$/.test(config.simulatedWalletAddress), "SIMULATED_WALLET_ADDRESS must be blank or a 20-byte hex address.")
-      );
-    }
+  } else {
+    checks.push(
+      check("SIMULATED_WALLET_BALANCE_USD", Number(config.simulatedWalletBalanceUsd) >= 0, "SIMULATED_WALLET_BALANCE_USD must be >= 0."),
+      check("SIMULATED_WALLET_ADDRESS_FORMAT", !config.simulatedWalletAddress || /^0x[a-fA-F0-9]{40}$/.test(config.simulatedWalletAddress), "SIMULATED_WALLET_ADDRESS must be blank or a 20-byte hex address.")
+    );
   }
 
   return {
@@ -350,7 +353,7 @@ export function summarizeEnvConfig(config, options = {}) {
     funderAddress: maskAddress(config.funderAddress || config.simulatedWalletAddress),
     polymarketHost: config.polymarketHost || "-",
     marketSource: config.marketSource,
-    pulseStrategy: config.pulse?.strategy ?? "legacy"
+    pulseStrategy: config.pulse?.strategy ?? "pulse-direct"
   };
 }
 

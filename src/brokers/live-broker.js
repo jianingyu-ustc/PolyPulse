@@ -16,14 +16,12 @@ function blockedResult(order, reason) {
 }
 
 export class LiveBroker {
-  constructor(config, options = {}) {
+  constructor(config) {
     this.kind = "live";
     this.config = config;
-    this.client = options.client ?? (
-      config.liveWalletMode === "simulated"
-        ? new SimulatedLiveWalletClient(config)
-        : new LivePolymarketClient(config, options)
-    );
+    this.client = config.liveWalletMode === "simulated"
+      ? new SimulatedLiveWalletClient(config)
+      : new LivePolymarketClient(config);
   }
 
   async preflight() {
