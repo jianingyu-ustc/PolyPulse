@@ -11,6 +11,9 @@ Last updated: 2026-05-06
 - `--confirm LIVE` is required for executable orders.
 - `live real` requires `PRIVATE_KEY`, `FUNDER_ADDRESS`, `SIGNATURE_TYPE`, and
   `POLYMARKET_HOST`.
+- `live real` must pass `account audit` before real execution. Audit verifies
+  CLOB collateral, allowance, remote positions, remote trades, local
+  cancellations/rejections, win rate, net return, and drawdown.
 - `live simulated` requires non-negative `SIMULATED_WALLET_BALANCE_USD`.
 
 ## Market Gates
@@ -23,7 +26,7 @@ Last updated: 2026-05-06
 
 - Single trade, total exposure, event exposure, drawdown, position count, and
   minimum notional limits are enforced in `RiskEngine`.
-- `live real` buy orders require sufficient CLOB collateral.
+- `live real` buy orders require sufficient CLOB collateral and allowance.
 - `live simulated` buy orders require sufficient simulated live balance.
 
 ## AI Boundary

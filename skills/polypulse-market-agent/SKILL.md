@@ -43,7 +43,7 @@ node ./bin/polypulse.js env check --mode live --env-file .env
 ### Market Topics
 
 ```bash
-node ./bin/polypulse.js market topics --env-file .env --limit 20
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
 ```
 
 输出中从 `topics[].marketId` 或 `topics[].marketSlug` 复制后续测试用市场标识。
@@ -52,6 +52,15 @@ node ./bin/polypulse.js market topics --env-file .env --limit 20
 
 ```bash
 node ./bin/polypulse.js account balance --mode live --env-file .env
+node ./bin/polypulse.js account audit --mode live --env-file .env
+```
+
+`account audit` 必须核对 collateral allowance、已有仓位、远端成交、本地撤单/拒单记录、已平仓胜率、净收益率和最大回撤；如果返回 blocking reasons，停止真实下单。
+
+只有用户明确确认真实授权风险时，才可以运行：
+
+```bash
+node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
 ```
 
 ### Single-Market Prediction
@@ -77,7 +86,6 @@ node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 
 ```bash
 POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_CONFIRM=LIVE
 POLYPULSE_LIVE_WALLET_MODE=simulated
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
@@ -95,7 +103,6 @@ node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-
 
 ```bash
 POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_CONFIRM=LIVE
 POLYPULSE_LIVE_WALLET_MODE=real
 PRIVATE_KEY=<server-local-secret>
 FUNDER_ADDRESS=<0x...>

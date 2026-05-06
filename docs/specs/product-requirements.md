@@ -24,13 +24,16 @@ No other execution mode is supported.
 - Sizing, fees, edge, Kelly, monthly return, token selection, and order creation
   are computed in code.
 - `live real` requires private key, funder address, signature type, chain id
-  `137`, CLOB host, balance check, `RiskEngine`, and `--confirm LIVE`.
+  `137`, CLOB host, balance check, allowance check, account audit, `RiskEngine`,
+  and `--confirm LIVE`.
 - `live simulated` must still use current Polymarket markets and the live broker
   interface, but must not connect a real wallet or submit real orders.
 
 ## Acceptance
 
 - `market topics` returns current Polymarket topics.
+- `account audit` verifies real collateral, allowance, open positions, remote
+  trades, local cancellations/rejections, win rate, net return, and drawdown.
 - `predict` uses a returned `marketId` or `marketSlug`.
 - `trade once` rejects non-live mode and missing `--confirm LIVE`.
 - `monitor run` rejects non-live mode and reads current Polymarket markets.

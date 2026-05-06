@@ -8,7 +8,8 @@ Last updated: 2026-05-06
 - `live simulated` reads current Polymarket markets and exercises the live
   broker, risk, artifact, and monitor path without connecting a real wallet.
 - `live real` connects the real Polymarket CLOB client and can submit orders
-  after env preflight, balance check, `RiskEngine`, and `--confirm LIVE`.
+  only after env preflight, balance and allowance checks, `account audit`,
+  `RiskEngine`, and `--confirm LIVE`.
 - Operator acceptance is still required before running `live real` commands that
   may spend funds.
 

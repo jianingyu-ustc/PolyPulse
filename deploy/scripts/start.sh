@@ -43,7 +43,6 @@ if [ -n "$WALLET_MODE_ARG" ] && [ "$WALLET_MODE_ARG" != "$WALLET_MODE" ]; then
 fi
 [ "$MODE" = "live" ] || fail "POLYPULSE_EXECUTION_MODE must be live"
 [ "$CONFIRM" = "LIVE" ] || fail "live start requires ./deploy/scripts/start.sh --confirm LIVE"
-[ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live start requires POLYPULSE_LIVE_CONFIRM=LIVE in $ENV_FILE"
 case "$WALLET_MODE" in
   real)
     [ -n "${PRIVATE_KEY:-}" ] || fail "real live wallet requires PRIVATE_KEY"
@@ -57,7 +56,7 @@ case "$WALLET_MODE" in
     ;;
 esac
 
-"$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --preflight
+"$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --live-smoke
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null
 systemctl restart "$SERVICE_NAME"

@@ -18,9 +18,10 @@ under:
 runtime-artifacts/test-runs/<timestamp>/
 ```
 
-`npm run smoke` uses `.env`, checks live env and balance, fetches current
-Polymarket topics, runs prediction on a returned `marketId` or `marketSlug`, and
-only runs live execution when `.env` is configured as `live simulated`.
+`npm run smoke` uses `.env`, checks live env, balance, account audit, fetches
+current Polymarket topics with `--quick`, runs prediction on a returned
+`marketId` or `marketSlug`, and only runs live execution when `.env` is
+configured as `live simulated`.
 
 ## Test Boundary
 
@@ -30,6 +31,10 @@ only runs live execution when `.env` is configured as `live simulated`.
 - CLI tests verify removed overrides are rejected.
 - Balance tests use the live broker path. In `live simulated`, the broker uses
   the configured simulated live wallet and does not connect a real wallet.
+- Account audit tests verify real-account checks are present while keeping
+  `live simulated` local-only; real trading must stop if audit returns blockers.
+- Risk tests verify BUY orders require both sufficient collateral balance and
+  sufficient CLOB allowance.
 - Provider tests validate Codex or Claude Code configuration and require the
   selected real provider CLI to be installed.
 - Automated tests do not carry hardcoded markets, injected providers, injected

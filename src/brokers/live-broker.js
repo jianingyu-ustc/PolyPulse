@@ -65,6 +65,38 @@ export class LiveBroker {
     }
   }
 
+  async approveCollateralAllowance() {
+    const preflight = await this.preflight();
+    if (!preflight.ok) {
+      throw new Error(`live_preflight_failed: ${preflight.client?.error ?? "env"}`);
+    }
+    try {
+      const updated = await this.client.updateCollateralAllowance();
+      return {
+        source: this.config.liveWalletMode === "simulated" ? "simulated-live-wallet" : "polymarket-clob",
+        collateralBalance: updated.collateralBalance,
+        allowance: updated.allowance,
+        raw: redactSecrets(updated.raw)
+      };
+    } catch (error) {
+      throw new Error(`live_allowance_update_failed: ${summarizeLiveClientError(error)}`);
+    }
+  }
+
+  async getOpenOrders(params = {}) {
+    if (typeof this.client.getOpenOrders !== "function") {
+      return [];
+    }
+    return await this.client.getOpenOrders(params);
+  }
+
+  async getTrades(params = {}) {
+    if (typeof this.client.getTrades !== "function") {
+      return [];
+    }
+    return await this.client.getTrades(params);
+  }
+
   async submit(order, _market, confirmation = null) {
     if (confirmation !== "LIVE") {
       return blockedResult(order, "live_requires_confirm_live");
@@ -81,6 +113,9 @@ export class LiveBroker {
     }
     if (order.side === "BUY" && Number(balance.collateralBalance) < order.amountUsd) {
       return blockedResult(order, "insufficient_live_collateral");
+    }
+    if (order.side === "BUY" && Number(balance.allowance) < order.amountUsd) {
+      return blockedResult(order, "insufficient_live_allowance");
     }
     try {
       const posted = await this.client.postMarketOrder(order);

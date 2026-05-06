@@ -55,7 +55,6 @@ preflight() {
     real|simulated) ;;
     *) fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated" ;;
   esac
-  [ "${POLYPULSE_LIVE_CONFIRM:-}" = "LIVE" ] || fail "live mode requires POLYPULSE_LIVE_CONFIRM=LIVE"
   [ "${POLYPULSE_MARKET_SOURCE:-polymarket}" = "polymarket" ] || fail "POLYPULSE_MARKET_SOURCE must be polymarket"
   run_cli env check --mode live --env-file "$ENV_FILE" >/dev/null
   info "preflight ok mode=$MODE wallet=${POLYPULSE_LIVE_WALLET_MODE:-real}"
@@ -67,7 +66,9 @@ case "${1:-}" in
     ;;
   --live-smoke)
     preflight
-    run_cli market topics --env-file "$ENV_FILE" --limit 1 >/dev/null
+    run_cli account balance --mode live --env-file "$ENV_FILE" >/dev/null
+    run_cli account audit --mode live --env-file "$ENV_FILE" >/dev/null
+    run_cli market topics --env-file "$ENV_FILE" --limit 1 --quick >/dev/null
     info "live smoke ok"
     ;;
   "")

@@ -54,7 +54,8 @@ let skippedLiveExecution = false;
 try {
   const envCheck = run(["env", "check", "--mode", "live", "--env-file", envFile]);
   run(["account", "balance", "--mode", "live", "--env-file", envFile]);
-  const topics = run(["market", "topics", "--env-file", envFile, "--limit", "20"]);
+  run(["account", "audit", "--mode", "live", "--env-file", envFile]);
+  const topics = run(["market", "topics", "--env-file", envFile, "--limit", "20", "--quick"]);
   const market = topics?.topics?.[0];
   const marketId = market?.marketId ?? market?.marketSlug;
   if (!marketId) {

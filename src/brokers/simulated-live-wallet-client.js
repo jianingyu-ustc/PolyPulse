@@ -30,8 +30,23 @@ export class SimulatedLiveWalletClient {
       raw: redactSecrets({
         walletMode: "simulated",
         address: maskAddress(this.address),
-        balanceUsd: this.balanceUsd
+        balanceUsd: this.balanceUsd,
+        allowanceUsd: this.balanceUsd
       })
+    };
+  }
+
+  async updateCollateralAllowance() {
+    return {
+      ok: true,
+      collateralBalance: this.balanceUsd,
+      allowance: this.balanceUsd,
+      raw: {
+        walletMode: "simulated",
+        address: maskAddress(this.address),
+        balanceUsd: this.balanceUsd,
+        allowanceUsd: this.balanceUsd
+      }
     };
   }
 

@@ -14,12 +14,11 @@ Confirm:
 - `POLYPULSE_MARKET_SOURCE=polymarket`
 - `POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com`
 - `CHAIN_ID=137`
-- `POLYPULSE_LIVE_CONFIRM=LIVE`
 
 ## Current Markets
 
 ```bash
-node ./bin/polypulse.js market topics --env-file .env --limit 20
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
 ```
 
 Choose a returned `marketId` or `marketSlug`.
@@ -39,6 +38,18 @@ Only for `POLYPULSE_LIVE_WALLET_MODE=real`:
 
 ```bash
 node ./bin/polypulse.js account balance --mode live --env-file .env
+node ./bin/polypulse.js account audit --mode live --env-file .env
+```
+
+Proceed only if `account audit` returns `ok=true` with no blocking reasons for
+collateral, allowance, open position exposure, historical trades, win rate,
+net return, or market readability.
+
+Run only after explicit operator approval if CLOB collateral allowance is
+insufficient:
+
+```bash
+node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
 ```
 
 ## One-Time Execution

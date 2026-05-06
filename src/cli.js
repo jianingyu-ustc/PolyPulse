@@ -97,9 +97,61 @@ async function commandBalance(args) {
   });
 }
 
+async function commandAccountAudit(args) {
+  const mode = liveModeFromArgs(args);
+  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
+  const service = new AccountService({ config: context.config, stateStore: context.stateStore });
+  const audit = await service.audit({ mode: mode ?? context.config.executionMode });
+  const artifact = await context.artifactWriter.writeAccountAudit(audit);
+  print({
+    ok: audit.ok,
+    executionMode: audit.executionMode,
+    scope: audit.scope ?? "real-remote",
+    envFilePath: audit.env.envFilePath,
+    chainId: audit.env.chainId,
+    wallet: audit.wallet,
+    collateral: audit.collateral,
+    positionSummary: audit.positionSummary,
+    positions: audit.positions.slice(0, 50),
+    closedPositions: audit.closedPositions.slice(0, 50),
+    performance: audit.performance,
+    tradeSummary: audit.tradeSummary,
+    recentTrades: audit.trades.slice(0, 50),
+    openOrderSummary: audit.openOrderSummary,
+    openOrders: audit.openOrders.slice(0, 50),
+    localState: audit.localState,
+    warnings: audit.warnings ?? [],
+    errors: audit.errors,
+    blockingReasons: audit.blockingReasons,
+    artifact
+  });
+}
+
+async function commandAccountApprove(args) {
+  const mode = liveModeFromArgs(args);
+  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
+  const service = new AccountService({ config: context.config, stateStore: context.stateStore });
+  const approval = await service.approveCollateral({
+    mode: mode ?? context.config.executionMode,
+    confirmation: option(args, "--confirm")
+  });
+  const artifact = await context.artifactWriter.writeAccountApproval(approval);
+  print({
+    ok: true,
+    executionMode: approval.executionMode,
+    envFilePath: approval.env.envFilePath,
+    chainId: approval.env.chainId,
+    wallet: approval.wallet,
+    before: approval.before,
+    after: approval.after,
+    artifact
+  });
+}
+
 async function commandTopics(args) {
   const context = await createContext(args);
   const limit = Number(option(args, "--limit", String(context.config.scan.marketScanLimit)));
+  const quick = flag(args, "--quick") || flag(args, "--preflight");
   const scan = await context.marketSource.scan({
     limit,
     minLiquidityUsd: option(args, "--min-liquidity"),
@@ -109,11 +161,13 @@ async function commandTopics(args) {
     endsBefore: option(args, "--ends-before"),
     tradableOnly: parseOptionalBoolean(args, "--tradable"),
     activeOnly: parseOptionalBoolean(args, "--active"),
-    closedOnly: parseOptionalBoolean(args, "--closed")
+    closedOnly: parseOptionalBoolean(args, "--closed"),
+    pulseCompatible: quick ? false : undefined
   });
   const artifacts = await context.artifactWriter.writeMarketScan(scan);
   print({
     ok: true,
+    quick,
     source: scan.source,
     topics: scan.markets,
     totalFetched: scan.totalFetched,
@@ -302,7 +356,10 @@ function help() {
     commands: [
       "polypulse env check",
       "polypulse account balance --env-file <path>",
+      "polypulse account audit --mode live --env-file <path>",
+      "polypulse account approve --mode live --env-file <path> --confirm APPROVE",
       "polypulse market topics --limit 20",
+      "polypulse market topics --quick --limit 20",
       "polypulse market topics --limit 20 --min-liquidity 1000 --min-volume 500 --category politics --tradable true",
       "Use topics[].marketId or topics[].marketSlug as --market.",
       "polypulse predict --market <market-id-or-slug>",
@@ -322,6 +379,8 @@ export async function main(args = []) {
   }
   if (group === "env" && command === "check") return await commandEnv(args);
   if (group === "account" && command === "balance") return await commandBalance(args);
+  if (group === "account" && command === "audit") return await commandAccountAudit(args);
+  if (group === "account" && command === "approve") return await commandAccountApprove(args);
   if (group === "market" && command === "topics") return await commandTopics(args);
   if (group === "predict") return await commandPredict(args);
   if (group === "trade" && command === "once") return await commandTradeOnce(args);

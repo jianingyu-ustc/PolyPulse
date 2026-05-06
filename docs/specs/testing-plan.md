@@ -18,6 +18,9 @@ Tests must use the same live-only boundaries as production commands.
 - If Gamma is unreachable, report a skipped market check instead of substituting
   another source.
 - Validate `live simulated` balance uses the live broker path.
+- Validate `account audit` reports real-account blockers and stays local-only
+  for `live simulated`.
+- Validate BUY orders are blocked when live collateral allowance is insufficient.
 
 ## Smoke
 
@@ -25,9 +28,11 @@ Tests must use the same live-only boundaries as production commands.
 
 1. env preflight
 2. account balance
-3. current Polymarket topics
-4. prediction on a returned market
-5. monitor status
-6. live simulated once and monitor run when wallet mode is `simulated`
+3. account audit
+4. current Polymarket topics using `--quick`
+5. prediction on a returned market
+6. monitor status
+7. live simulated once and monitor run when wallet mode is `simulated`
 
-`live real` order smoke is manual and requires explicit operator approval.
+`live real` order smoke is manual and requires `account audit` to pass plus
+explicit operator approval.

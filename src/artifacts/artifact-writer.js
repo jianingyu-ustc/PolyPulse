@@ -300,6 +300,36 @@ export class ArtifactWriter {
     });
   }
 
+  async writeAccountAudit(audit) {
+    const now = new Date();
+    const runId = safeTimestamp(now);
+    const dir = path.join(this.config.artifactDir, "account", runId);
+    await mkdir(dir, { recursive: true });
+    const auditPath = path.join(dir, "audit.json");
+    await writeFile(auditPath, JSON.stringify(redactSecrets(audit), null, 2), "utf8");
+    return assertSchema("RunArtifact", {
+      kind: "account-audit",
+      runId,
+      path: path.relative(process.cwd(), auditPath),
+      publishedAt: now.toISOString()
+    });
+  }
+
+  async writeAccountApproval(approval) {
+    const now = new Date();
+    const runId = safeTimestamp(now);
+    const dir = path.join(this.config.artifactDir, "account", runId);
+    await mkdir(dir, { recursive: true });
+    const approvalPath = path.join(dir, "allowance-approval.json");
+    await writeFile(approvalPath, JSON.stringify(redactSecrets(approval), null, 2), "utf8");
+    return assertSchema("RunArtifact", {
+      kind: "account-allowance-approval",
+      runId,
+      path: path.relative(process.cwd(), approvalPath),
+      publishedAt: now.toISOString()
+    });
+  }
+
   async writeOnceRun({ input, market, evidence, estimate, decision, risk, order, action }) {
     const now = new Date();
     const runId = `${safeTimestamp(now)}-once`;

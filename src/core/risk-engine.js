@@ -67,13 +67,23 @@ function availableLiveCollateral(liveBalance) {
   if (!liveBalance) {
     return null;
   }
-  return Number(
+  const value =
     liveBalance.collateralBalance
       ?? liveBalance.collateral?.balanceUsd
       ?? liveBalance.balanceUsd
-      ?? liveBalance.availableUsd
-      ?? 0
-  );
+      ?? liveBalance.availableUsd;
+  return value == null ? null : Number(value);
+}
+
+function availableLiveAllowance(liveBalance) {
+  if (!liveBalance) {
+    return null;
+  }
+  const value =
+    liveBalance.allowance
+      ?? liveBalance.collateral?.allowanceUsd
+      ?? liveBalance.allowanceUsd;
+  return value == null ? null : Number(value);
 }
 
 export class RiskEngine {
@@ -102,6 +112,7 @@ export class RiskEngine {
     const pulseDirect = isPulseDirectStrategy(this.config);
     const requireEvidenceGuard = !pulseDirect || this.config.pulse?.requireEvidenceGuard;
     const liveCollateral = availableLiveCollateral(liveBalance);
+    const liveAllowance = availableLiveAllowance(liveBalance);
     const portfolioEquityUsd = mode === "live" && liveCollateral != null
       ? liveCollateral
       : Number(portfolio.totalEquityUsd ?? 0);
@@ -239,6 +250,13 @@ export class RiskEngine {
       blockedReasons.push("live_balance_check_missing");
     } else if (decision.side === "BUY" && liveCollateral < adjusted) {
       blockedReasons.push("insufficient_live_collateral");
+    }
+    if (decision.side === "BUY") {
+      if (liveAllowance == null) {
+        blockedReasons.push("live_allowance_check_missing");
+      } else if (liveAllowance < adjusted) {
+        blockedReasons.push("insufficient_live_allowance");
+      }
     }
 
     const uniqueReasons = [...new Set(blockedReasons)];

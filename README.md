@@ -31,7 +31,6 @@ Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接
 
 ```bash
 POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_CONFIRM=LIVE
 POLYPULSE_LIVE_WALLET_MODE=simulated
 SIMULATED_WALLET_BALANCE_USD=100
 POLYPULSE_MARKET_SOURCE=polymarket
@@ -42,7 +41,6 @@ POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 
 ```bash
 POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_CONFIRM=LIVE
 POLYPULSE_LIVE_WALLET_MODE=real
 PRIVATE_KEY=<server-local-secret>
 FUNDER_ADDRESS=<0x...>
@@ -62,26 +60,33 @@ node ./bin/polypulse.js env check --mode live --env-file .env
 # 2. 查询真实 Polymarket CLOB collateral balance 和 allowance。
 node ./bin/polypulse.js account balance --mode live --env-file .env
 
-# 3. 确认仍在读取当前 Polymarket 真实市场。
-node ./bin/polypulse.js market topics --env-file .env --limit 20
+# 3. 一次性审计真实账户仓位、历史成交、撤单/拒单、本地记录、胜率和收益质量。
+node ./bin/polypulse.js account audit --mode live --env-file .env
+
+# 4. 确认仍在读取当前 Polymarket 真实市场；quick 只做轻量实时可读性检查。
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
+
+# 5. 如果 allowance 不足，只能在明确接受真实授权风险后执行。
+node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
 ```
 
 真实钱包交易必须确认：
 
-- `POLYPULSE_LIVE_WALLET_MODE=real`，且 `POLYPULSE_LIVE_CONFIRM=LIVE`。
+- `POLYPULSE_LIVE_WALLET_MODE=real`。
 - `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`CHAIN_ID=137`、`POLYMARKET_HOST=https://clob.polymarket.com` 已配置。
 - `FUNDER_ADDRESS` 是预期真实资金地址；不要在日志、README、issue 或提示词中输出 secret。
-- `account balance` 返回的 CLOB collateral balance 足以覆盖计划下单金额，allowance 不为 0 且满足下单需要。
-- `market topics` 能读取当前 Polymarket 真实市场；如果市场源、余额、allowance 或 env preflight 任一失败，停止真实下单。
+- `account balance` 返回的 CLOB collateral balance 足以覆盖计划下单金额，allowance 不为 0 且满足下单需要；allowance 不足时先停止下单，再决定是否手动运行 `account approve --confirm APPROVE`。
+- `account audit` 必须返回 `ok=true`，并能核对已有仓位：market、outcome、token、size、avg cost、current value、unrealized PnL、到期/结算状态；如有未知仓位或风险暴露超限，停止真实下单。
+- `account audit` 必须核对历史交易记录：最近成交、撤单/拒单、买入/卖出方向、成交均价、费用估算、realized PnL，并与 `runtime-artifacts` 中的 runs、monitor、account artifact 交叉检查。
+- `account audit` 必须统计真实账户胜率和收益质量：已结算/已平仓交易的 wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤；胜率或净收益异常时暂停真实下单并复盘预测和风控。
+- `market topics --quick` 能读取当前 Polymarket 真实市场；如果市场源、余额、allowance、真实账户审计或 env preflight 任一失败，停止真实下单。
 
 Codex 提示词版本：
 
 ```text
 1. 请检查 .env 是否是 live simulated 或 live real，并确认 POLYPULSE_MARKET_SOURCE=polymarket、POLYMARKET_GAMMA_HOST 指向真实 Gamma API。
 2. 如果是 live simulated，请确认它会读取真实 Polymarket 市场，但不会连接真实钱包或提交真实订单。
-3. 如果是 live real，请确认 POLYPULSE_LIVE_CONFIRM=LIVE、PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST 已配置，并提醒这是会触发真实资金路径的配置。
-4. 请运行 env check、account balance 和 market topics；不要输出真实 secret，汇总 funder 地址是否符合预期、collateral balance、allowance、真实市场读取结果和任何阻断原因。
-5. 如果真实余额不足、allowance 不足、CLOB client/preflight 失败或无法读取当前 Polymarket 真实市场，请停止真实下单。
+3. 如果是 live real，请一次性完成真实账户检查：确认 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST；运行 env check、account balance、account audit 和 market topics --quick；不要输出真实 secret；汇总 funder 地址、collateral balance、allowance、真实市场读取结果、已有仓位（market、outcome、size、avg cost、current value、unrealized PnL、到期/结算状态）、历史交易（最近成交、撤单/拒单、费用、realized PnL）和胜率收益质量（wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤）；如果真实余额不足、allowance 不足、已有仓位风险暴露超限、历史交易/胜率无法核对、CLOB client/preflight 失败或无法读取当前 Polymarket 真实市场，请停止真实下单。只有我明确要求授权时，才可以运行 account approve --confirm APPROVE。
 ```
 
 ### Predict-Raven Pulse 策略配置
@@ -155,7 +160,7 @@ Codex 提示词版本：
 
 ```bash
 node ./bin/polypulse.js env check --mode live --env-file .env
-node ./bin/polypulse.js market topics --env-file .env --limit 20
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
 node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 ```
 
@@ -170,6 +175,7 @@ find runtime-artifacts -type f | sort | tail -n 30
 
 ```bash
 node ./bin/polypulse.js account balance --mode live --env-file .env
+node ./bin/polypulse.js account audit --mode live --env-file .env
 node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
@@ -177,10 +183,10 @@ Codex 提示词版本：
 
 ```text
 1. 请检查 live env，并确认当前 .env 是 live simulated 或 live real，且读取当前 Polymarket 真实市场。
-2. 请抓取 20 个当前 Polymarket 真实市场 topic，并挑选可用于验收的 marketId 或 marketSlug。
+2. 请用 market topics --quick 抓取 20 个当前 Polymarket 真实市场 topic，并挑选可用于验收的 marketId 或 marketSlug。
 3. 请对选出的真实市场运行 predict，汇总 provider、概率、隐含概率、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
 4. 如果是 live simulated，请运行 trade once 验收，并确认不连接真实钱包、不提交真实订单。
-5. 如果是 live real，请先查询真实 Polymarket CLOB collateral balance；只在我明确确认接受真实资金风险后运行 trade once。
+5. 如果是 live real，请先运行 account balance 和 account audit；只在我明确确认接受真实资金风险且 audit 无阻断后运行 trade once。
 ```
 
 ### 持续 Monitor
@@ -196,7 +202,7 @@ Codex 提示词版本：
 ```text
 1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
 2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场但不连接真实钱包、不提交真实订单。
-3. 如果是 live real，请先检查真实余额，并只在我明确确认真实交易风险后启动 monitor。
+3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
 4. 启动后请汇总 monitor 状态、风控状态、artifact 和日志位置。
 ```
 
@@ -268,7 +274,8 @@ deploy/scripts/status.sh
 deploy/scripts/healthcheck.sh
 journalctl -u polypulse-monitor.service -n 100 --no-pager
 tail -n 100 /home/PolyPulse/logs/polypulse-monitor.log
-node ./bin/polypulse.js market topics --env-file .env --limit 20
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
+node ./bin/polypulse.js account audit --mode live --env-file .env
 ```
 
 Codex 提示词版本：
@@ -278,7 +285,7 @@ Codex 提示词版本：
 2. 请登录 root@43.165.166.171，在 /home/PolyPulse 运行部署安装脚本，并确认 systemd unit、运行目录和日志轮转安装成功。
 3. 请检查 /home/PolyPulse/.env；不要输出真实 secret，必须配置为 live simulated 或 live real，并确认读取当前 Polymarket 真实市场。
 4. 请把 /home/PolyPulse/.env 权限设置为 600，启动 systemd monitor 服务，并执行 status 和 healthcheck。
-5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log 和 market topics 输出，确认部署后仍读取当前 Polymarket 真实市场。
+5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log、account audit 和 market topics --quick 输出，确认部署后仍读取当前 Polymarket 真实市场且真实账户检查通过。
 ```
 
 ## todo

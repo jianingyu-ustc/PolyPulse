@@ -56,7 +56,7 @@ function extractAllowance(raw) {
     raw?.collateral_allowance
   ];
   const value = candidates.find((item) => item != null);
-  return numberFrom(value, 0);
+  return decimalFromCollateralUnits(value, 0);
 }
 
 export class LivePolymarketClient {
@@ -134,6 +134,30 @@ export class LivePolymarketClient {
       allowance: extractAllowance(raw),
       raw: redactSecrets(raw)
     };
+  }
+
+  async updateCollateralAllowance() {
+    const client = await this.getClient();
+    const clobModule = await import("@polymarket/clob-client-v2").catch(() => ({}));
+    const assetType = clobModule.AssetType?.COLLATERAL ?? "COLLATERAL";
+    const raw = await client.updateBalanceAllowance({ asset_type: assetType });
+    const balance = await this.getCollateralBalance();
+    return {
+      ok: true,
+      collateralBalance: balance.collateralBalance,
+      allowance: balance.allowance,
+      raw: redactSecrets(raw ?? balance.raw)
+    };
+  }
+
+  async getOpenOrders(params = {}) {
+    const client = await this.getClient();
+    return await client.getOpenOrders(params);
+  }
+
+  async getTrades(params = {}) {
+    const client = await this.getClient();
+    return await client.getTrades(params, true);
   }
 
   async postMarketOrder(order) {
