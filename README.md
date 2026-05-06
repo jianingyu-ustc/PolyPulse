@@ -21,7 +21,7 @@ Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接
 
 ## 使用方法
 
-每个命令块后面的 `Codex 提示词版本` 可以直接复制到 Codex 中执行；提示词与上方命令或配置步骤按编号一一对应，由 Codex 负责运行同等检查、真实市场测试和失败原因汇总。
+只保留必要配置和命令；所有命令都使用 `.env`，并读取当前 Polymarket 真实市场。每个关键流程保留 `Codex 提示词版本`，可直接交给 Codex 代跑；`live real` 必须先确认真实资金风险。
 
 ### 必需运行模式
 
@@ -53,12 +53,35 @@ POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 ```
 
+`live real` 下单前还必须完成真实钱包检查：
+
+```bash
+# 1. 检查 live real env、secret 必填项和 Polymarket CLOB client。
+node ./bin/polypulse.js env check --mode live --env-file .env
+
+# 2. 查询真实 Polymarket CLOB collateral balance 和 allowance。
+node ./bin/polypulse.js account balance --mode live --env-file .env
+
+# 3. 确认仍在读取当前 Polymarket 真实市场。
+node ./bin/polypulse.js market topics --env-file .env --limit 20
+```
+
+真实钱包交易必须确认：
+
+- `POLYPULSE_LIVE_WALLET_MODE=real`，且 `POLYPULSE_LIVE_CONFIRM=LIVE`。
+- `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`CHAIN_ID=137`、`POLYMARKET_HOST=https://clob.polymarket.com` 已配置。
+- `FUNDER_ADDRESS` 是预期真实资金地址；不要在日志、README、issue 或提示词中输出 secret。
+- `account balance` 返回的 CLOB collateral balance 足以覆盖计划下单金额，allowance 不为 0 且满足下单需要。
+- `market topics` 能读取当前 Polymarket 真实市场；如果市场源、余额、allowance 或 env preflight 任一失败，停止真实下单。
+
 Codex 提示词版本：
 
 ```text
 1. 请检查 .env 是否是 live simulated 或 live real，并确认 POLYPULSE_MARKET_SOURCE=polymarket、POLYMARKET_GAMMA_HOST 指向真实 Gamma API。
 2. 如果是 live simulated，请确认它会读取真实 Polymarket 市场，但不会连接真实钱包或提交真实订单。
-3. 如果是 live real，请确认 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST 已配置，并提醒这是会触发真实资金路径的配置。
+3. 如果是 live real，请确认 POLYPULSE_LIVE_CONFIRM=LIVE、PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST 已配置，并提醒这是会触发真实资金路径的配置。
+4. 请运行 env check、account balance 和 market topics；不要输出真实 secret，汇总 funder 地址是否符合预期、collateral balance、allowance、真实市场读取结果和任何阻断原因。
+5. 如果真实余额不足、allowance 不足、CLOB client/preflight 失败或无法读取当前 Polymarket 真实市场，请停止真实下单。
 ```
 
 ### Predict-Raven Pulse 策略配置
@@ -112,6 +135,13 @@ CLAUDE_CODE_PERMISSION_MODE=bypassPermissions
 CLAUDE_CODE_ALLOWED_TOOLS=Read,Glob,Grep
 ```
 
+验证当前 provider：
+
+```bash
+# 如果使用 Claude Code，把 expect 改成 claude-code。
+npm run agent:check -- --env-file .env --expect codex
+```
+
 Codex 提示词版本：
 
 ```text
@@ -119,79 +149,43 @@ Codex 提示词版本：
 2. 请运行 agent:check 验证当前 provider、runtime provider 和 skill 配置。
 ```
 
-### Live Simulated 验收
+### 一次性验收
 
-以下命令全部读取当前 Polymarket 真实市场；`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=simulated`。
+先检查 `.env`、抓取当前 Polymarket 真实市场，并对选定市场做预测：
 
 ```bash
-# 0. 检查 provider 配置；如果使用 Claude Code，把 expect 改成 claude-code。
-npm run agent:check -- --env-file .env --expect codex
-
-# 1. 检查 live env。
 node ./bin/polypulse.js env check --mode live --env-file .env
-
-# 2. 抓取当前 Polymarket 真实市场话题；从 topics[] 复制 marketId 或 marketSlug。
 node ./bin/polypulse.js market topics --env-file .env --limit 20
-
-# 3. 对真实市场做推荐不下单预测。
 node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
+```
 
-# 4. 走 live simulated 一次性验收；不连接真实钱包、不提交真实订单。
+`live simulated` 不连接真实钱包、不提交真实订单：
+
+```bash
 node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-
-# 5. 查看最近 artifact。
 find runtime-artifacts -type f | sort | tail -n 30
 ```
 
-Codex 提示词版本：
-
-```text
-0. 请检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
-1. 请检查 live env，并确认当前是 live simulated、读取真实 Polymarket 市场、不连接真实钱包。
-2. 请用 .env 抓取 20 个当前 Polymarket 真实市场 topic，并告诉我可用于后续测试的 marketId 或 marketSlug。
-3. 请对选出的真实市场运行 predict，记录实际 provider，输出 action=predict-only，并汇总概率、隐含概率、edge、net_edge、entry_fee_pct、quarter_kelly_pct、monthly_return 和 artifact 路径。
-4. 请用同一个真实市场运行 live simulated trade once，max-amount=1，confirm LIVE，确认不会连接真实钱包或提交真实订单，并汇总 DecisionEngine、RiskEngine、broker 和 artifact 结果。
-5. 请列出 runtime-artifacts 下最近 30 个文件，并按 markets、predictions、runs、runtime log 分类说明哪些是本次真实市场测试产生的。
-```
-
-### Live Real 验收
-
-以下命令会连接真实钱包，并可能在风控允许后提交真实订单。执行前必须确认 `.env` 是 `POLYPULSE_LIVE_WALLET_MODE=real`，并且你接受真实资金风险。
+`live real` 会连接真实钱包，并可能在风控允许后提交真实订单：
 
 ```bash
-# 0. 检查 provider 配置；如果使用 Claude Code，把 expect 改成 claude-code。
-npm run agent:check -- --env-file .env --expect codex
-
-# 1. 检查 live real env。
-node ./bin/polypulse.js env check --mode live --env-file .env
-
-# 2. 查询真实 Polymarket CLOB collateral balance。
 node ./bin/polypulse.js account balance --mode live --env-file .env
-
-# 3. 抓取当前 Polymarket 真实市场话题。
-node ./bin/polypulse.js market topics --env-file .env --limit 20
-
-# 4. 对真实市场做推荐不下单预测。
-node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-
-# 5. 真实 live 一次性小额下单验收；会在风控允许后提交真实订单。
 node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
 Codex 提示词版本：
 
 ```text
-0. 请检查 .env 是否启用了 Codex provider；如果我指定 Claude Code，就改为检查 claude-code provider。
-1. 请检查 live real env，尤其是 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST。
-2. 请查询真实 Polymarket CLOB collateral balance；如果不是 live real wallet，请停止并说明原因。
-3. 请抓取 20 个当前 Polymarket 真实市场 topic，并挑选适合小额验收的 marketId 或 marketSlug。
-4. 请对选出的真实市场运行 predict，汇总 evidence、概率估算、隐含概率、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
-5. 请只在我明确确认接受真实资金风险后，运行真实 live once 小额验收；如果缺少确认或前置检查失败，请停止并说明原因。
+1. 请检查 live env，并确认当前 .env 是 live simulated 或 live real，且读取当前 Polymarket 真实市场。
+2. 请抓取 20 个当前 Polymarket 真实市场 topic，并挑选可用于验收的 marketId 或 marketSlug。
+3. 请对选出的真实市场运行 predict，汇总 provider、概率、隐含概率、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
+4. 如果是 live simulated，请运行 trade once 验收，并确认不连接真实钱包、不提交真实订单。
+5. 如果是 live real，请先查询真实 Polymarket CLOB collateral balance；只在我明确确认接受真实资金风险后运行 trade once。
 ```
 
-### Live Simulated Monitor
+### 持续 Monitor
 
-`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=simulated`。该模式持续读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不提交真实订单。
+同一个命令用于 `live simulated` 和 `live real`；区别由 `.env` 的 `POLYPULSE_LIVE_WALLET_MODE` 决定。`live real` 会连接真实钱包，并可能提交真实订单。
 
 ```bash
 node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
@@ -200,24 +194,13 @@ node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE -
 Codex 提示词版本：
 
 ```text
-1. 请在 .env 使用 live simulated wallet 时启动 monitor，确认它读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包或提交真实订单。
+1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
+2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场但不连接真实钱包、不提交真实订单。
+3. 如果是 live real，请先检查真实余额，并只在我明确确认真实交易风险后启动 monitor。
+4. 启动后请汇总 monitor 状态、风控状态、artifact 和日志位置。
 ```
 
-### Live Real Monitor
-
-`.env` 必须是 `POLYPULSE_LIVE_WALLET_MODE=real`，并配置真实钱包。该模式持续读取当前 Polymarket 真实市场，并可能在风控允许后提交真实订单。
-
-```bash
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
-```
-
-Codex 提示词版本：
-
-```text
-1. 请只在我明确确认真实钱包和真实交易风险后启动 live real monitor；启动前检查 live env、真实余额和 confirm LIVE，启动后汇总服务状态、风控状态、artifact 和日志位置。
-```
-
-### 停止和恢复 Monitor
+### Monitor 管理
 
 ```bash
 # 写入 monitor stop 状态，用于暂停持续运行。
@@ -226,21 +209,6 @@ node ./bin/polypulse.js monitor stop --env-file .env --reason manual_stop
 # 清除 stop 状态，允许 monitor 再次运行。
 node ./bin/polypulse.js monitor resume --env-file .env
 
-# 恢复后重新启动 live monitor。
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
-```
-
-Codex 提示词版本：
-
-```text
-1. 请写入 monitor stop 状态，reason=manual_stop，用于暂停持续运行。
-2. 请清除 monitor stop 状态，让 monitor 允许再次运行。
-3. 请在恢复后重新启动 live monitor，并确认读取当前 Polymarket 真实市场。
-```
-
-### 查看 Monitor 和风险状态
-
-```bash
 # 查看 monitor 状态、最近运行和最近错误。
 node ./bin/polypulse.js monitor status --env-file .env
 
@@ -251,13 +219,14 @@ node ./bin/polypulse.js risk status --env-file .env
 Codex 提示词版本：
 
 ```text
-1. 请查看 monitor 状态，汇总最近运行、最近错误、暂停状态和 stop/resume 状态。
-2. 请查看系统级风控状态，说明当前是否允许继续运行以及阻断原因。
+1. 请根据需要执行 monitor stop 或 resume，并说明 stop/resume 状态。
+2. 请查看 monitor status，汇总最近运行、最近错误、暂停状态和 stop/resume 状态。
+3. 请查看 risk status，说明当前是否允许继续运行以及阻断原因。
 ```
 
-### 同步项目到服务器
+### 服务器部署
 
-在 macOS 本机把当前项目文件复制到 `/home/PolyPulse`，同时排除本地 secret、运行产物、依赖目录和 git 元数据。
+在 macOS 本机同步项目到 `/home/PolyPulse`，排除本地 secret、运行产物、依赖目录和 git 元数据：
 
 ```bash
 rsync -az --delete \
@@ -270,13 +239,7 @@ rsync -az --delete \
   root@43.165.166.171:/home/PolyPulse/
 ```
 
-Codex 提示词版本：
-
-```text
-1. 请在我的 macOS 本机把当前 PolyPulse 项目同步到 root@43.165.166.171:/home/PolyPulse/，同步时排除 .git、.env、.env.*、runtime-artifacts 和 node_modules，并汇总传输结果。
-```
-
-### 服务器安装
+登录服务器安装服务：
 
 ```bash
 ssh root@43.165.166.171
@@ -285,18 +248,7 @@ chmod +x deploy/scripts/*.sh
 deploy/scripts/install.sh
 ```
 
-Codex 提示词版本：
-
-```text
-1. 请登录 root@43.165.166.171 这台 Ubuntu 服务器，后续命令都在服务器上执行。
-2. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
-3. 请确保 deploy/scripts/*.sh 都有可执行权限。
-4. 请运行部署安装脚本，安装 systemd unit、运行目录和日志轮转；安装结束后继续执行当前 Polymarket 真实市场验收。
-```
-
-### 检查配置后启动服务
-
-`install.sh` 会创建 `/home/PolyPulse/.env`；启动前必须编辑为 `live simulated` 或 `live real`，并强制权限为 `600`。
+`install.sh` 会创建 `/home/PolyPulse/.env`；启动前必须编辑为 `live simulated` 或 `live real`，并强制权限为 `600`：
 
 ```bash
 cd /home/PolyPulse
@@ -307,18 +259,7 @@ deploy/scripts/status.sh
 deploy/scripts/healthcheck.sh
 ```
 
-Codex 提示词版本：
-
-```text
-1. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
-2. 请帮助我编辑 /home/PolyPulse/.env；不要在输出中展示真实 secret，必须配置为 live simulated 或 live real，并确认读取当前 Polymarket 真实市场。
-3. 请把 /home/PolyPulse/.env 权限强制设置为 600，并确认权限结果。
-4. 请启动 systemd monitor 服务，并说明启动命令是否成功。
-5. 请查看服务和 PolyPulse monitor 状态，汇总 active 状态、最近运行和最近错误。
-6. 请执行部署健康检查，汇总通过项、失败项和需要处理的配置问题。
-```
-
-### 部署后验证
+验证服务、日志和真实市场读取：
 
 ```bash
 cd /home/PolyPulse
@@ -333,14 +274,27 @@ node ./bin/polypulse.js market topics --env-file .env --limit 20
 Codex 提示词版本：
 
 ```text
-1. 请进入服务器上的 /home/PolyPulse 项目目录，并确认当前目录正确。
-2. 请确认 polypulse-monitor.service 是否处于 active 状态。
-3. 请查看 PolyPulse 聚合状态，汇总服务、monitor 和风险状态。
-4. 请再跑一次部署健康检查，确认部署后状态仍然通过。
-5. 请查看 polypulse-monitor.service 最近 100 行 systemd journal，并提取错误、警告和关键启动信息。
-6. 请查看 /home/PolyPulse/logs/polypulse-monitor.log 最近 100 行，并提取错误、警告和最近交易/monitor 事件。
-7. 请用服务器 .env 抓取 20 个当前 Polymarket 真实市场 topic，确认部署后仍读取真实市场。
+1. 请在我的 macOS 本机把当前 PolyPulse 项目同步到 root@43.165.166.171:/home/PolyPulse/，同步时排除 .git、.env、.env.*、runtime-artifacts 和 node_modules。
+2. 请登录 root@43.165.166.171，在 /home/PolyPulse 运行部署安装脚本，并确认 systemd unit、运行目录和日志轮转安装成功。
+3. 请检查 /home/PolyPulse/.env；不要输出真实 secret，必须配置为 live simulated 或 live real，并确认读取当前 Polymarket 真实市场。
+4. 请把 /home/PolyPulse/.env 权限设置为 600，启动 systemd monitor 服务，并执行 status 和 healthcheck。
+5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log 和 market topics 输出，确认部署后仍读取当前 Polymarket 真实市场。
 ```
+
+## todo
+
+以下只保留直接影响预测成功率、概率校准和净收益率的待办项；所有项保持 live-only，并读取当前 Polymarket 真实市场。
+
+- [ ] 建立预测效果评估报表：按 category、tag、到期时间、流动性分桶统计 hit rate、Brier score、calibration、edge 误差、真实结算收益率和年化/月化收益率。
+- [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
+- [ ] 扩展证据抓取以提高概率质量：补 resolution source、官方链接、外部公开证据、Polymarket 事件详情和评论，并为每条证据记录 freshness、relevance、source quality。
+- [ ] 增加概率校准层：按市场类型、时间跨度、流动性和证据质量对 AI 概率做校准，输出 raw probability、calibrated probability、confidence 和校准原因。
+- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
+- [ ] 改进收益排序：先生成全轮推荐，再按 calibrated edge、fee、slippage、quarter Kelly、monthly return、days-to-resolution 和 downside risk 排序，而不是逐候选即时执行。
+- [ ] 把 order book 深度、fee-rate、spread 和滑点纳入 expected return，避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
+- [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
+- [ ] 增加收益归因 artifact：区分预测误差、市场价格变化、fee、slippage、仓位大小、持仓时间和退出决策对最终收益的影响。
+- [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
 
 ## 关键文档
 
