@@ -6,6 +6,7 @@ import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
+import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -173,13 +174,19 @@ export class Scheduler {
     this.stateStore = stateStore;
     this.artifactWriter = artifactWriter;
     this.evidenceCrawler = new EvidenceCrawler(config);
-    this.probabilityEstimator = new ProbabilityEstimator(config);
+    const probabilityConfig = config.liveWalletMode === "simulated"
+      ? { ...config, suppressProviderRuntimeArtifacts: true }
+      : config;
+    this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
     this.decisionEngine = new DecisionEngine(config);
     this.riskEngine = new RiskEngine(config, { stateStore });
     this.liveBroker = new LiveBroker(config);
     this.orderExecutor = new OrderExecutor({
       liveBroker: this.liveBroker
     });
+    this.simulatedLedger = config.liveWalletMode === "simulated"
+      ? new SimulatedMonitorLedger(config)
+      : null;
   }
 
   async runOnce({ mode = "live", confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
@@ -216,6 +223,13 @@ export class Scheduler {
   async predictCandidate(candidate) {
     const market = candidate.market;
     const evidence = await this.evidenceCrawler.collect({ market });
+    const estimate = await this.probabilityEstimator.estimate({ market, evidence });
+    return { market, evidence, estimate };
+  }
+
+  async predictCandidateNoCache(candidate) {
+    const market = candidate.market;
+    const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
     const estimate = await this.probabilityEstimator.estimate({ market, evidence });
     return { market, evidence, estimate };
   }
@@ -292,9 +306,291 @@ export class Scheduler {
     return { decision: boundedDecision, risk, order };
   }
 
+  async reviewSimulatedPositions({ runId, accumulator }) {
+    const ledger = this.simulatedLedger;
+    await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
+    const signalClosed = await ledger.closeBySignals();
+    for (const closed of signalClosed) {
+      accumulator.orders.push({
+        marketId: closed.marketId,
+        marketSlug: closed.marketSlug,
+        orderId: `sim-close-${closed.positionId}`,
+        status: "filled",
+        mode: "live",
+        requestedUsd: 0,
+        filledUsd: closed.proceedsUsd,
+        avgPrice: closed.currentPrice,
+        reason: closed.closeReason,
+        paper: true,
+        type: "close"
+      });
+    }
+
+    for (const position of [...ledger.positions]) {
+      const market = await this.marketSource.getMarket(position.marketId || position.marketSlug, { noCache: true });
+      if (!market) {
+        await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
+        continue;
+      }
+      const prediction = await this.predictCandidateNoCache({ market });
+      const portfolio = ledger.portfolio();
+      const analysis = this.decisionEngine.analyze({
+        market: prediction.market,
+        estimate: prediction.estimate,
+        portfolio,
+        amountUsd: this.config.risk.minTradeUsd
+      });
+      const chosenSide = analysis.suggested_side ?? position.side ?? "yes";
+      const decision = this.decisionEngine.decide({
+        market: prediction.market,
+        estimate: prediction.estimate,
+        side: chosenSide,
+        amountUsd: this.config.risk.minTradeUsd,
+        portfolio
+      });
+      prediction.decision = decision;
+      prediction.phase = "position-review";
+      accumulator.predictions.push(prediction);
+      accumulator.decisions.push({
+        marketId: prediction.market.marketId,
+        marketSlug: prediction.market.marketSlug,
+        question: prediction.market.question,
+        phase: "position-review",
+        ...decision
+      });
+      await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "position-review" });
+      const closed = await ledger.closeOnDecision({ position, decision });
+      if (closed) {
+        accumulator.orders.push({
+          marketId: closed.marketId,
+          marketSlug: closed.marketSlug,
+          orderId: `sim-close-${closed.positionId}`,
+          status: "filled",
+          mode: "live",
+          requestedUsd: 0,
+          filledUsd: closed.proceedsUsd,
+          avgPrice: closed.currentPrice,
+          reason: closed.closeReason,
+          paper: true,
+          type: "close"
+        });
+      }
+    }
+    await ledger.log("positions.reviewed", {
+      run_id: runId,
+      open_positions: ledger.positions.length,
+      closed_positions: ledger.closedTrades.length
+    });
+  }
+
+  async evaluateAndMaybeSimulatedOrder({ prediction, mode, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun }) {
+    const ledger = this.simulatedLedger;
+    const portfolio = ledger.portfolio();
+    const analysis = this.decisionEngine.analyze({
+      market: prediction.market,
+      estimate: prediction.estimate,
+      portfolio,
+      amountUsd: maxAmountUsd
+    });
+    const chosenSide = analysis.suggested_side ?? "yes";
+    const decision = this.decisionEngine.decide({
+      market: prediction.market,
+      estimate: prediction.estimate,
+      side: chosenSide,
+      amountUsd: maxAmountUsd,
+      portfolio
+    });
+
+    if (orderCount >= this.config.monitor.maxTradesPerRound) {
+      const risk = blockedRisk("monitor_round_trade_limit_reached");
+      await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "open-scan" });
+      await ledger.logRisk({ market: prediction.market, risk });
+      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_round_trade_limit_reached" }) };
+    }
+
+    const maxDaily = this.config.monitor.maxDailyTradeUsd;
+    const dailyUsed = asNumber(ledger.dailyTradeUsd?.amountUsd);
+    const remainingDaily = Math.max(0, maxDaily - dailyUsed - filledUsdThisRun);
+    if (remainingDaily < this.config.risk.minTradeUsd) {
+      const risk = blockedRisk("monitor_daily_trade_limit_reached");
+      await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "open-scan" });
+      await ledger.logRisk({ market: prediction.market, risk });
+      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_daily_trade_limit_reached" }) };
+    }
+
+    const amountUsd = Math.min(maxAmountUsd, remainingDaily);
+    const boundedDecision = this.decisionEngine.decide({
+      market: prediction.market,
+      estimate: prediction.estimate,
+      side: chosenSide,
+      amountUsd,
+      portfolio
+    });
+    const risk = await new RiskEngine(this.config).evaluate({
+      decision: boundedDecision,
+      market: prediction.market,
+      portfolio,
+      mode,
+      confirmation,
+      evidence: prediction.evidence,
+      estimate: prediction.estimate,
+      systemState: ledger.riskState(),
+      liveBalance: ledger.liveBalance(),
+      liveBalanceError: null
+    });
+    await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision: boundedDecision, phase: "open-scan" });
+    await ledger.logRisk({ market: prediction.market, risk });
+    const order = await ledger.openPosition({ market: prediction.market, decision: boundedDecision, risk });
+    if (order.status !== "filled") {
+      await ledger.log("order.blocked", {
+        market: prediction.market.marketSlug,
+        status: order.status,
+        reason: order.reason ?? "none"
+      });
+    }
+    return { decision: boundedDecision, risk, order };
+  }
+
+  async runSimulatedMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
+    if (mode !== "live") {
+      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
+    const runId = monitorRunId();
+    const startedAt = nowIso();
+    const ledger = this.simulatedLedger;
+    const accumulator = {
+      runId,
+      mode,
+      startedAt,
+      completedAt: null,
+      scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
+      candidates: [],
+      predictions: [],
+      decisions: [],
+      risks: [],
+      orders: [],
+      errors: [],
+      recoveredRun: null
+    };
+
+    await ledger.beginRound({ runId, limit, maxAmountUsd });
+
+    try {
+      await withTimeout(async () => {
+        accumulator.scan = await this.marketSource.scan({
+          limit: limit ?? this.config.scan.marketScanLimit,
+          noCache: true
+        });
+        await ledger.logScan(accumulator.scan);
+        await this.reviewSimulatedPositions({ runId, accumulator });
+        const candidateEntries = buildCandidates({
+          markets: accumulator.scan.markets ?? [],
+          monitorState: ledger.monitorState(),
+          portfolio: ledger.portfolio(),
+          config: this.config
+        });
+        accumulator.candidates = candidateEntries.map((item) => item.summary);
+        for (const candidate of accumulator.candidates) {
+          await ledger.log("candidate", {
+            market: candidate.marketSlug,
+            selected: candidate.selected,
+            reasons: (candidate.skipped_reasons ?? []).join(",") || "none"
+          });
+        }
+        const selected = candidateEntries.filter((item) => item.summary.selected);
+        const predictions = await mapLimit(
+          selected,
+          this.config.monitor.concurrency,
+          this.config.monitor.backoffMs,
+          async (candidate) => {
+            try {
+              return await this.predictCandidateNoCache(candidate);
+            } catch (error) {
+              accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${error instanceof Error ? error.message : String(error)}`);
+              return null;
+            }
+          }
+        );
+        accumulator.predictions.push(...predictions.filter(Boolean));
+        let orderCount = 0;
+        let filledUsdThisRun = 0;
+        for (const prediction of predictions.filter(Boolean)) {
+          const result = await this.evaluateAndMaybeSimulatedOrder({
+            prediction,
+            mode,
+            confirmation,
+            maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+            runId,
+            orderCount,
+            filledUsdThisRun
+          });
+          prediction.decision = result.decision;
+          prediction.risk = result.risk;
+          prediction.order = result.order;
+          accumulator.decisions.push({
+            marketId: prediction.market.marketId,
+            marketSlug: prediction.market.marketSlug,
+            question: prediction.market.question,
+            phase: "open-scan",
+            ...result.decision
+          });
+          accumulator.risks.push({
+            marketId: prediction.market.marketId,
+            marketSlug: prediction.market.marketSlug,
+            ...result.risk
+          });
+          accumulator.orders.push({
+            marketId: prediction.market.marketId,
+            marketSlug: prediction.market.marketSlug,
+            ...result.order
+          });
+          if (result.order.status === "filled" && result.order.filledUsd > 0) {
+            orderCount += 1;
+            filledUsdThisRun += result.order.filledUsd;
+          }
+        }
+        await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
+      }, this.config.monitor.runTimeoutMs, "monitor_round");
+      accumulator.completedAt = nowIso();
+      await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
+      return {
+        ok: true,
+        status: "completed",
+        mode,
+        runId,
+        markets: accumulator.scan.markets?.length ?? 0,
+        candidates: accumulator.candidates.filter((item) => item.selected).length,
+        predictions: accumulator.predictions.length,
+        orders: accumulator.orders.filter((order) => order.status === "filled").length,
+        action: accumulator.orders.some((order) => order.status === "filled") ? "simulated-orders" : "no-trade",
+        artifact: ledger.logPath,
+        log: ledger.logPath,
+        performance: ledger.statistics()
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      accumulator.errors.push(message);
+      accumulator.completedAt = nowIso();
+      await ledger.endRound({ runId, status: "failed", errors: accumulator.errors });
+      return {
+        ok: false,
+        status: "failed",
+        mode,
+        runId,
+        error: message,
+        artifact: ledger.logPath,
+        log: ledger.logPath,
+        performance: ledger.statistics()
+      };
+    }
+  }
+
   async runMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     if (mode !== "live") {
       throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
+    if (this.simulatedLedger) {
+      return await this.runSimulatedMonitorRound({ mode, confirmation, limit, maxAmountUsd });
     }
     const runId = monitorRunId();
     const startedAt = nowIso();
@@ -445,8 +741,8 @@ export class Scheduler {
     const results = [];
     let completed = 0;
     while (rounds == null || completed < rounds) {
-      const state = await this.stateStore.getMonitorState();
-      if (state.status === "stopped") {
+      const state = this.simulatedLedger ? { status: "active" } : await this.stateStore.getMonitorState();
+      if (!this.simulatedLedger && state.status === "stopped") {
         const result = { ok: true, status: "stopped", mode, reason: state.stopReason ?? "monitor_stopped", artifact: null };
         results.push(result);
         if (onRound) await onRound(result);

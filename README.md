@@ -2,7 +2,7 @@
 
 PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。当前 README 只保留两条运行路径：
 
-- `live simulated`：读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包、不提交真实订单。
+- `live simulated`：读取当前 Polymarket 真实市场，走 live preflight、AI provider、RiskEngine 和模拟执行；持续 monitor 使用内存 paper-trading 账本，只追加人类可读日志，不连接真实钱包、不提交真实订单。
 - `live real`：读取当前 Polymarket 真实市场，连接真实钱包，并在风控允许后提交真实订单。
 
 所有测试、验收和部署命令都必须使用 `.env`，并读取当前 Polymarket 真实市场。
@@ -13,7 +13,7 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。所有 artifact 写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。`live simulated monitor` 是例外：它的交易账本只存在内存中，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
@@ -33,6 +33,7 @@ Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接
 POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_WALLET_MODE=simulated
 SIMULATED_WALLET_BALANCE_USD=100
+SIMULATED_MONITOR_LOG_PATH=/home/PolyPulse/logs/polypulse-simulated-monitor.log
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 ```
@@ -147,6 +148,72 @@ CLAUDE_CODE_ALLOWED_TOOLS=Read,Glob,Grep
 npm run agent:check -- --env-file .env --expect codex
 ```
 
+#### Codex live runtime 提示词
+
+当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`predict`、`trade once` 和 `monitor run` 会在每个候选市场预测阶段调用真实 Codex CLI。调用入口是 `src/runtime/codex-runtime.js`，实际命令形态是：
+
+```bash
+codex exec \
+  --skip-git-repo-check \
+  -C <repoRoot> \
+  -s read-only \
+  --output-schema <tempDir>/probability-estimate.schema.json \
+  -o <tempDir>/provider-output.json \
+  --color never \
+  [-m <CODEX_MODEL>] \
+  -
+```
+
+最后的 `-` 表示 prompt 通过 stdin 传入。运行时会把当前 market snapshot、evidence list 和 JSON schema 写到临时目录；Codex 的输出必须写成 `ProbabilityEstimate` JSON，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
+
+当前默认 `CODEX_SKILL_LOCALE=zh` 时，传给 Codex 的提示词模板如下；其中 `<...>` 是运行时动态填入的路径或 JSON：
+
+```text
+你是 PolyPulse 的 Polymarket 概率估算运行时。
+当前 provider：codex
+必须先阅读这些 skill 文件，再做概率估算：
+- <skill id>: <skill SKILL.md path>
+
+必须先阅读这份风险控制文档：
+- <repoRoot>/docs/specs/risk-controls.md
+
+只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
+不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单。
+
+输入文件：
+- Market JSON: <tempDir>/market.json
+- Evidence JSON: <tempDir>/evidence.json
+
+市场快照：
+<JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+active, closed, tradable, riskFlags>
+
+证据摘要：
+<JSON array: evidenceId, source, title, sourceUrl, timestamp,
+relevanceScore, credibility, status, summary>
+
+硬规则：
+1. 只能输出合法 JSON，不要输出 markdown 代码块。
+2. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入 Evidence JSON。
+3. 证据不足、来源陈旧、结算规则不清或市场不可交易时，confidence 必须为 low，并把 uncertainty_factors 写清楚。
+4. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
+5. 按 predict-raven pulse-direct 的分工处理：你只给概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
+6. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
+
+输出字段必须匹配 ProbabilityEstimate provider schema：
+- ai_probability
+- confidence: low | medium | high
+- reasoning_summary
+- key_evidence
+- counter_evidence
+- uncertainty_factors
+- freshness_score
+只输出最终 JSON。
+```
+
+如果把 `CODEX_SKILL_LOCALE` 改为 `en`，同一结构会使用英文模板。`CODEX_SKILLS` 决定 prompt 中列出的 skill 文件，默认是 `polypulse-market-agent`；`CODEX_MODEL` 为空时使用 Codex CLI 默认模型；`PROVIDER_TIMEOUT_SECONDS=0` 表示 Codex provider 子进程不设置单独超时，只受外层 monitor run timeout 约束。
+
 Codex 提示词版本：
 
 ```text
@@ -197,13 +264,143 @@ Codex 提示词版本：
 node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
 ```
 
+`live simulated monitor` 的行为：
+
+- 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
+- 对候选市场调用配置的真实 AI provider 预测胜率，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
+- 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
+- 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
+- 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
+- 程序退出后不保留模拟仓位、现金、交易状态或 JSON monitor artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+
+#### Simulated Monitor Log 格式
+
+`SIMULATED_MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 simulated monitor 会先写入 session header：
+
+```text
+================================================================================
+[2026-05-06T15:26:35.807Z] simulated live monitor session started
+initial_cash_usd=100
+wallet_mode=simulated
+market_source=polymarket
+gamma=https://gamma-api.polymarket.com
+================================================================================
+```
+
+header 字段含义：
+
+| 字段 | 含义 |
+| --- | --- |
+| `initial_cash_usd` | 本次进程内模拟账本的初始现金，来自 `SIMULATED_WALLET_BALANCE_USD`。 |
+| `wallet_mode` | 钱包模式；simulated monitor 应始终是 `simulated`。 |
+| `market_source` | 市场源；当前只支持 `polymarket`。 |
+| `gamma` | 当前读取真实 Polymarket market metadata 的 Gamma API host。 |
+
+普通日志行格式：
+
+```text
+[ISO_TIMESTAMP] event.name | key=value key=value ...
+```
+
+通用字段含义：
+
+| 字段 | 含义 |
+| --- | --- |
+| `ISO_TIMESTAMP` | 日志写入时间，UTC ISO 8601。 |
+| `event.name` | 本行事件类型，例如 `round.start`、`prediction`、`risk`、`open.filled`。 |
+| `key=value` | 事件字段。字段之间用空格分隔；`question` 等长文本会用 JSON string 形式写出，日志主要用于人工阅读。 |
+| `none` | 没有对应内容，例如没有风控阻断、没有 warning 或没有错误。 |
+| `n/a` | 该字段当前不适用或没有可用值。 |
+
+事件和字段：
+
+| 事件 | 字段 | 含义 |
+| --- | --- | --- |
+| `round.start` | `run_id` | 本轮 monitor run ID。 |
+| `round.start` | `limit` | 本轮扫描候选数量限制；`default` 表示使用 `.env` 中的 `MARKET_SCAN_LIMIT`。 |
+| `round.start` | `max_amount_usd` | 本轮单次模拟开仓的最大美元金额。 |
+| `round.start` | `cash_usd` | 本轮开始时模拟账本现金。 |
+| `round.start` | `open_positions` | 本轮开始时模拟账本中的未平仓数量。 |
+| `topics.fetched` | `source` | 市场读取来源；实时读取通常是 `polymarket-gamma`。 |
+| `topics.fetched` | `markets` | 本轮返回给 monitor 的候选市场数量。 |
+| `topics.fetched` | `total_fetched` | 从 Gamma API 原始拉取并归一化前后的扫描规模诊断。 |
+| `topics.fetched` | `risk_flags` | 市场扫描风险标记，例如结果不足、部分失败、低流动性过滤；`none` 表示无标记。 |
+| `topics.candidate` | `rank` | 本轮前 5 个候选的展示排序。 |
+| `topics.candidate` | `market` | Polymarket market slug。 |
+| `topics.candidate` | `liq` | 归一化后的市场流动性美元值。 |
+| `topics.candidate` | `vol24h` | 24 小时成交量美元值。 |
+| `topics.candidate` | `question` | 市场问题文本。 |
+| `position.review_skipped` | `market` | 被跳过复核的持仓 market slug 或 market ID。 |
+| `position.review_skipped` | `reason` | 跳过原因，例如 `market_not_found`。 |
+| `mark_to_market` | `open_positions` | mark-to-market 后仍未平仓的数量。 |
+| `mark_to_market` | `unrealized_pnl_usd` | 当前未实现盈亏美元值。 |
+| `mark_to_market` | `total_equity_usd` | 当前模拟总权益，等于现金加未平仓当前价值。 |
+| `positions.reviewed` | `run_id` | 完成持仓复核的 run ID。 |
+| `positions.reviewed` | `open_positions` | 复核后仍未平仓数量。 |
+| `positions.reviewed` | `closed_positions` | 本进程内累计已平仓交易数量。 |
+| `candidate` | `market` | 正在评估的 market slug。 |
+| `candidate` | `selected` | 是否进入预测和风控链路。 |
+| `candidate` | `reasons` | 未选中原因，例如 `watchlist_not_matched`、`blocklisted`、`already_traded_market_or_event`、`existing_position_market_or_event`；`none` 表示进入候选。 |
+| `prediction` | `phase` | 预测阶段；`open-scan` 表示开仓扫描，`position-review` 表示已有持仓复核。 |
+| `prediction` | `market` | market slug。 |
+| `prediction` | `ai_probability` | AI provider 给出的 Yes outcome 概率。 |
+| `prediction` | `confidence` | AI provider 置信度：`low`、`medium` 或 `high`。 |
+| `prediction` | `side` | 代码基于概率和盘口选择的方向；二元市场通常是 `yes` 或 `no`。 |
+| `prediction` | `market_probability` | 当前盘口隐含概率。 |
+| `prediction` | `edge` | AI 概率与盘口隐含概率的原始差值。 |
+| `prediction` | `net_edge` | 扣除 fee/slippage 口径后的净 edge。 |
+| `prediction` | `quarter_kelly_pct` | 1/4 Kelly 建议仓位比例。 |
+| `prediction` | `monthly_return` | 按到期时间折算的月化收益估计。 |
+| `prediction` | `action` | 决策动作；`open` 表示具备开仓候选，其他值表示跳过或不执行。 |
+| `risk` | `market` | market slug。 |
+| `risk` | `allowed` | RiskEngine 是否允许本次模拟执行。 |
+| `risk` | `approved_usd` | 风控批准的美元金额；阻断时为 `0`。 |
+| `risk` | `adjusted_notional` | 应用仓位、流动性、总敞口、事件敞口等限制后的名义金额。 |
+| `risk` | `blocks` | 阻断原因，例如 `live_requires_confirm_live`、`insufficient_live_collateral`、`market_not_tradable`、`adjusted_notional_below_min_trade_usd`；`none` 表示未阻断。 |
+| `risk` | `warnings` | 非阻断风险提示，例如 `ai_confidence_below_minimum`、`insufficient_evidence`、`market_data_stale`。 |
+| `open.filled` | `market` | 模拟开仓 market slug。 |
+| `open.filled` | `outcome` | 开仓 outcome 标签，例如 `Yes` 或 `No`。 |
+| `open.filled` | `price` | 模拟成交价格，来自当前 outcome 的 bid/ask/implied/last price 回退链。 |
+| `open.filled` | `size` | 模拟买入份额，约等于 `cost_usd / price`。 |
+| `open.filled` | `cost_usd` | 本次模拟开仓消耗现金。 |
+| `open.filled` | `cash_usd` | 开仓后的模拟现金余额。 |
+| `open.filled` | `order_id` | 本地模拟订单 ID，以 `sim-log-` 开头；不是 Polymarket 真实订单 ID。 |
+| `order.blocked` | `market` | 被阻断的 market slug。 |
+| `order.blocked` | `status` | 阻断后的订单状态，通常是 `blocked`。 |
+| `order.blocked` | `reason` | 订单未执行原因。 |
+| `hold` | `market` | 持仓复核中的 market slug。 |
+| `hold` | `outcome` | 当前持仓 outcome。 |
+| `hold` | `current_price` | mark-to-market 后的当前价格。 |
+| `hold` | `unrealized_pnl_usd` | 当前持仓未实现盈亏。 |
+| `hold` | `reason` | 继续持有原因；例如 `edge_still_supports_position`。 |
+| `close.filled` | `market` | 模拟平仓 market slug。 |
+| `close.filled` | `outcome` | 平仓 outcome。 |
+| `close.filled` | `reason` | 平仓原因：`market_closed`、`near_full_value`、`near_zero_value`、`stop_loss` 或 `edge_reversal_or_no_trade`。 |
+| `close.filled` | `exit_price` | 模拟退出价格。 |
+| `close.filled` | `proceeds_usd` | 平仓回收现金。 |
+| `close.filled` | `realized_pnl_usd` | 本次平仓实现盈亏。 |
+| `close.filled` | `cash_usd` | 平仓后的模拟现金余额。 |
+| `close.filled` | `win_rate` | 本进程内已平仓交易的胜率；无已分胜负交易时为 `n/a`。 |
+| `round.end` | `run_id` | 本轮 run ID。 |
+| `round.end` | `status` | 本轮状态，通常是 `completed` 或 `failed`。 |
+| `round.end` | `cash_usd` | 本轮结束时模拟现金。 |
+| `round.end` | `equity_usd` | 本轮结束时模拟总权益。 |
+| `round.end` | `open_positions` | 本轮结束时未平仓数量。 |
+| `round.end` | `realized_pnl_usd` | 本进程内累计已实现盈亏。 |
+| `round.end` | `unrealized_pnl_usd` | 本轮结束时未实现盈亏。 |
+| `round.end` | `wins` | 本进程内盈利平仓次数。 |
+| `round.end` | `losses` | 本进程内亏损平仓次数。 |
+| `round.end` | `win_rate` | 本进程内平仓胜率；没有已分胜负平仓时为 `n/a`。 |
+| `round.end` | `max_drawdown_usd` | 本进程内模拟权益相对高水位的最大回撤美元值。 |
+| `round.end` | `errors` | 本轮错误摘要；`none` 表示无错误。 |
+
 Codex 提示词版本：
 
 ```text
 1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
-2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场但不连接真实钱包、不提交真实订单。
+2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存模拟账本自动开仓/平仓，但不连接真实钱包、不提交真实订单；程序退出后只保留人类可读 log。
 3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
-4. 启动后请汇总 monitor 状态、风控状态、artifact 和日志位置。
+4. 启动后请汇总 monitor 状态、风控状态、artifact 或 simulated log 位置。
 ```
 
 ### Monitor 管理

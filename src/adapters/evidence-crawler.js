@@ -165,7 +165,7 @@ export class EvidenceCrawler {
     this.cacheWrite = Promise.resolve();
   }
 
-  async collect({ market }) {
+  async collect({ market, noCache = false }) {
     const collected = [];
     for (const adapter of this.adapters) {
       const refs = await this.callAdapter({
@@ -176,7 +176,7 @@ export class EvidenceCrawler {
       });
       for (const ref of refs) {
         const cacheKey = hash({ marketId: market.marketId, adapterId: adapter.id, ref });
-        const cached = await this.readCache(cacheKey);
+        const cached = noCache ? null : await this.readCache(cacheKey);
         if (cached?.fresh) {
           collected.push(normalizeEvidence(cached.entry.evidence, { market, adapterId: adapter.id, statusOverride: "cached" }));
           continue;
@@ -197,7 +197,7 @@ export class EvidenceCrawler {
         });
         const normalized = normalizeEvidence(evidence, { market, adapterId: adapter.id });
         collected.push(normalized);
-        if (normalized.status !== "failed") {
+        if (!noCache && normalized.status !== "failed") {
           await this.writeCache(cacheKey, normalized);
         }
       }

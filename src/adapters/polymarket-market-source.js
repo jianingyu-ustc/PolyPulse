@@ -62,6 +62,7 @@ export class PolymarketMarketSource {
   }
 
   async scan(request = {}) {
+    const noCache = Boolean(request.noCache);
     const pulseCompatible = request.pulseCompatible ?? isPulseDirectStrategy(this.config);
     const requestedLimit = clampLimit(request.limit, this.config.scan.marketScanLimit);
     const fetchTarget = pulseCompatible
@@ -86,7 +87,7 @@ export class PolymarketMarketSource {
       filters,
       pulseCompatible
     });
-    if (this.config.scan.cacheTtlSeconds > 0) {
+    if (!noCache && this.config.scan.cacheTtlSeconds > 0) {
       const cached = await this.readCache(key);
       if (cached?.fresh) {
         return {
@@ -165,11 +166,14 @@ export class PolymarketMarketSource {
       riskFlags,
       errors
     };
-    await this.writeCache(key, scan);
+    if (!noCache) {
+      await this.writeCache(key, scan);
+    }
     return scan;
   }
 
-  async getMarket(marketIdOrSlug) {
+  async getMarket(marketIdOrSlug, request = {}) {
+    const noCache = Boolean(request.noCache);
     const fetchedAt = new Date().toISOString();
     if (/^\d+$/.test(String(marketIdOrSlug))) {
       try {
@@ -190,7 +194,7 @@ export class PolymarketMarketSource {
         market.marketId === marketIdOrSlug || market.marketSlug === marketIdOrSlug
       ) ?? markets[0] ?? null;
     } catch {
-      const scan = await this.scan({ limit: this.config.scan.marketScanLimit, tradableOnly: null });
+      const scan = await this.scan({ limit: this.config.scan.marketScanLimit, tradableOnly: null, noCache });
       return scan.markets.find((market) =>
         market.marketId === marketIdOrSlug || market.marketSlug === marketIdOrSlug
       ) ?? null;

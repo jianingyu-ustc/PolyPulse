@@ -305,16 +305,18 @@ export class ClaudeProbabilityProvider {
 
       const rawOutput = await readFile(outputPath, "utf8");
       const parsed = extractJsonPayload(rawOutput);
-      const runtimeLog = await archiveRuntimeLog({
-        config: this.config,
-        settings,
-        rawOutput,
-        promptMetrics,
-        schemaMetrics,
-        inputMetrics,
-        tempDir,
-        outputPath
-      });
+      const runtimeLog = this.config.suppressProviderRuntimeArtifacts
+        ? { path: null }
+        : await archiveRuntimeLog({
+          config: this.config,
+          settings,
+          rawOutput,
+          promptMetrics,
+          schemaMetrics,
+          inputMetrics,
+          tempDir,
+          outputPath
+        });
       return {
         ...parsed,
         diagnostics: {
