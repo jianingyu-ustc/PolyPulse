@@ -56,7 +56,16 @@ function extractAllowance(raw) {
     raw?.collateral_allowance
   ];
   const value = candidates.find((item) => item != null);
-  return decimalFromCollateralUnits(value, 0);
+  if (value != null) {
+    return decimalFromCollateralUnits(value, 0);
+  }
+  if (raw?.allowances && typeof raw.allowances === "object") {
+    const allowances = Object.values(raw.allowances)
+      .map((item) => decimalFromCollateralUnits(item, null))
+      .filter((item) => Number.isFinite(item));
+    return allowances.length > 0 ? Math.min(...allowances) : 0;
+  }
+  return 0;
 }
 
 export class LivePolymarketClient {
