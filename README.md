@@ -9,11 +9,11 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 ## 项目概览
 
-核心链路：抓取当前 Polymarket 市场话题，规则预筛后用 AI provider 做候选 triage，收集证据，调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
+核心链路：抓取当前 Polymarket 市场话题，规则预筛后先用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP），再用 AI provider 做候选 triage，收集证据（包括从 Polymarket 页面抓取的结算规则、注释和社区评论，从 CLOB 获取的 order book 深度和价差，以及对 resolution source URL 的实时访问验证），调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界；话题发现和证据抓取仍主要是规则和结构化 API 流程，不是 AI 驱动的全市场研究流水线。已对齐的 AI 使用边界是：provider 对候选池输出语义 triage、可研究性、信息优势和证据缺口判断；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
+PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界；话题发现和证据抓取仍主要是规则和结构化 API 流程，不是 AI 驱动的全市场研究流水线。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段从 Polymarket 页面抓取完整结算规则、注释和社区评论，从 CLOB 获取 order book 深度和价差，并对 resolution source URL 做实时访问验证获取官方数据源当前状态作为硬约束输入；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
 主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；真实 monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
@@ -104,15 +104,53 @@ PULSE_REPORT_CANDIDATES=4
 PULSE_BATCH_CAP_PCT=0.2
 PULSE_AI_CANDIDATE_TRIAGE=true
 PULSE_AI_TRIAGE_CAN_REJECT=true
+PULSE_AI_PRESCREEN=true
+PULSE_PRESCREEN_TIMEOUT_MS=60000
+PULSE_AI_TOPIC_DISCOVERY=true
+PULSE_TOPIC_DISCOVERY_TIMEOUT_MS=60000
+PULSE_CALIBRATION_ENABLED=true
+PULSE_SEMANTIC_DISCOVERY=true
+PULSE_SEMANTIC_DISCOVERY_MAX_MATCHED=10
+PULSE_SEMANTIC_DISCOVERY_SIMILARITY_THRESHOLD=0.3
+PULSE_DYNAMIC_CALIBRATION=true
+PULSE_DOWNSIDE_RISK_RANKING=true
+PULSE_PERFORMANCE_REPORT_INTERVAL=5
 PULSE_FETCH_DIMENSIONS=volume24hr,liquidity,startDate,competitive
 PULSE_REQUIRE_EVIDENCE_GUARD=false
+EVIDENCE_PAGE_SCRAPE=true
+EVIDENCE_PAGE_COMMENT_LIMIT=10
+EVIDENCE_PAGE_TIMEOUT_MS=15000
+EVIDENCE_ORDERBOOK_DEPTH=true
+EVIDENCE_ORDERBOOK_TIMEOUT_MS=10000
+EVIDENCE_ORDERBOOK_DEPTH_LEVELS=5
+EVIDENCE_RESOLUTION_SOURCE_LIVE=true
+EVIDENCE_RESOLUTION_SOURCE_TIMEOUT_MS=15000
+EVIDENCE_RESOLUTION_SOURCE_MAX_CONTENT=8000
+EVIDENCE_DOMAIN_ADAPTERS=true
+EVIDENCE_DOMAIN_ADAPTER_TIMEOUT_MS=10000
+EVIDENCE_GAP_AUTO_FILL=true
+EVIDENCE_GAP_FETCH_TIMEOUT_MS=10000
+EVIDENCE_GAP_TOTAL_BUDGET_MS=30000
+EVIDENCE_GAP_MAX_PER_MARKET=3
 ```
 
 这些配置的含义：
 
 - `market topics` 默认按 Pulse-compatible 候选池筛选：候选数默认取 `PULSE_MAX_CANDIDATES`，显式传 `--limit` 时由 `--limit` 覆盖；最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
 - `market topics --quick` 用于轻量实时可读性检查，会关闭 pulse-compatible 候选筛选；不传 `--limit` 时返回数量默认取 `MARKET_SCAN_LIMIT`。
-- `PULSE_AI_CANDIDATE_TRIAGE=true` 时，`monitor run` 会在规则预筛后先调用 provider 对候选池做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断；`PULSE_AI_TRIAGE_CAN_REJECT=true` 时，provider 标为 `reject` 的候选会被记录为 `ai_triage_reject` 并跳过后续概率估算。
+- `PULSE_AI_PRESCREEN=true` 时，`monitor run` 会在规则预筛和 candidate triage 之前先对候选做轻量 AI 信息优势预筛：用低推理强度快速分类为 TRADE（AI 能通过推理、信息综合或先例匹配产生有意义的 edge）或 SKIP（结果太随机、依赖内幕信息或市场已经高效定价），60 秒超时，失败时全部保留为 TRADE。被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
+- `PULSE_AI_CANDIDATE_TRIAGE=true` 时，`monitor run` 会在预筛后对剩余候选池做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断；`PULSE_AI_TRIAGE_CAN_REJECT=true` 时，provider 标为 `reject` 的候选会被记录为 `ai_triage_reject` 并跳过后续概率估算。
+- `EVIDENCE_PAGE_SCRAPE=true` 时，证据收集阶段会从 Polymarket 事件页面的 `__NEXT_DATA__` SSR 数据中提取完整结算规则、市场注释/公告和社区高赞评论，作为高可信度证据传给 AI 做概率估算。这对齐了 Predict-Raven 的 `scrape-market.ts` 深度研究步骤。
+- `EVIDENCE_ORDERBOOK_DEPTH=true` 时，证据收集阶段会从 Polymarket CLOB 获取每个 outcome token 的 order book，提取 best bid/ask、spread、spread%、2% 深度和 top N 挂单档位，作为高可信度市场微结构证据传给 AI。这对齐了 Predict-Raven 的 `orderbook.ts` 研究步骤，使 AI 能看到真实的流动性分布、价差和执行成本。
+- `EVIDENCE_RESOLUTION_SOURCE_LIVE=true` 时，证据收集阶段会提取 market 的 resolution source URL（从 market data、页面抓取 metadata 或 resolution rules 文本中提取），实时访问该官方数据源获取当前状态，作为概率估算的硬约束输入。这对齐了 Predict-Raven SKILL.md 的 A0 模块（Resolution Source 实时查验），防止 AI 基于过时或错误的事实记忆做出交易决策。如果数据源不可访问，标注"resolution source 当前状态未确认"并在证据中降权。
+- `EVIDENCE_DOMAIN_ADAPTERS=true` 时，证据收集阶段会根据 market category/question 自动激活领域专用研究适配器（体育赛程、宏观日历、天气数据、链上指标、公司财报），从公开搜索引擎获取领域相关证据。
+- `EVIDENCE_GAP_AUTO_FILL=true` 时，AI candidate triage 输出的 `evidence_gaps` 会被 EvidenceGapRuntime 自动处理：按 gap 类别自动搜索外部公开信息填补证据空白。`EVIDENCE_GAP_TOTAL_BUDGET_MS` 控制单市场总时间预算，`EVIDENCE_GAP_MAX_PER_MARKET` 控制最多填补的 gap 数量。
+- `PULSE_AI_TOPIC_DISCOVERY=true` 时，`monitor run` 开始会调用 AI Topic Discovery（60 秒超时），发现可能被规则预筛遗漏的新话题。
+- `PULSE_SEMANTIC_DISCOVERY=true` 时，Topic Discovery 完成后 SemanticDiscoveryRuntime 会将发现的 search_terms 在全市场做 token-based 匹配、语义聚类和重复事件合并，新市场加入候选池。`PULSE_SEMANTIC_DISCOVERY_MAX_MATCHED` 控制最大匹配数，`PULSE_SEMANTIC_DISCOVERY_SIMILARITY_THRESHOLD` 控制聚类阈值。
+- `PULSE_CALIBRATION_ENABLED=true` 时，概率校准层在 AI 概率估算之后运行，对原始概率做 shrinkage 校准（向 0.5 先验收缩），提高概率估计的可靠性。
+- `PULSE_DYNAMIC_CALIBRATION=true` 时，DynamicCalibrationStore 记录每次预测的实际结算结果，按概率桶计算 Brier score 并生成动态校准曲线，在数据充足时替代固定 shrinkage。支持 category、confidence 维度的分维度校准。
+- `PULSE_DOWNSIDE_RISK_RANKING=true` 时，候选排序在原有 monthly return / net edge / Kelly 排序之后增加 risk-adjusted 二次排序：计算每个机会的下行风险（概率加权最大亏损、流动性风险、时间风险、价差风险）和资金分配惩罚（类别集中度、事件重复、可用资本比例），输出 `risk_adjusted_score` 和 `downside_score` 追加到 `candidate.ranked` 日志。
+- `PULSE_PERFORMANCE_REPORT_INTERVAL=5` 设置每隔 N 轮（默认 5）在 simulated log 中输出预测效果评估报表：包括 `performance.report`（总结）、`performance.calibration`（按概率桶的校准偏差）、`performance.by_confidence`（按置信度的胜率和收益）和 `performance.edge_accuracy`（预测 edge vs 实际 return）。
 - `predict`、`trade once` 和 `monitor run` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
 - `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；`live real` 仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
 
@@ -123,22 +161,30 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - AI provider 只输出 `CandidateTriage` 或 `ProbabilityEstimate`：候选语义 triage、概率估计、置信度、证据引用、不确定性因素、可研究性、信息优势和证据缺口。
 - 代码负责 fee、edge、net edge、quarter Kelly、monthly return、候选排序、batch cap、风控和执行。
 - provider 输出不能控制 broker、token 改写、交易金额或真实订单。
-- `monitor run` 在规则预筛后会调用 AI candidate triage，对候选池做语义聚类、主题优先级、可研究性、信息优势和证据缺口判断；`reject` 候选会被记录为 `ai_triage_reject`，不进入后续概率估算。
+- `monitor run` 在规则预筛后会先调用轻量 AI pre-screen 对候选做信息优势预筛（TRADE/SKIP 分类，60 秒超时，失败时全部保留），再调用 AI candidate triage 对剩余候选做语义聚类、主题优先级、可研究性、信息优势和证据缺口判断；`reject` 候选会被记录为 `ai_triage_reject`，不进入后续概率估算。这对齐了 Predict-Raven 的 `pulse-prescreen.ts` 两层 AI 筛选机制。
 - `monitor run` 对规则预筛后的候选先调用 provider 生成概率估计，再由代码按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生收益指标排序后执行。
+- 证据收集阶段会从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据，提取完整结算规则、注释/公告和社区高赞评论，作为高可信度证据传给 AI。这对齐了 Predict-Raven 的 `scrape-market.ts --sections context,rules,comments` 深度研究步骤，使 AI 能看到市场完整的结算条件、官方公告和社区讨论。
+- 证据收集阶段会从 Polymarket CLOB 获取每个 outcome token 的 order book 深度，提取 best bid/ask、spread、spread%、2% 档位深度和 top 5 挂单，作为高可信度市场微结构证据。这对齐了 Predict-Raven 的 `orderbook.ts` 研究步骤（BUY side, medium urgency, 5 levels），使 AI 能看到真实流动性分布和执行成本，避免正 edge 被交易成本吃掉。
+- 证据收集阶段会对 resolution source URL 做实时访问验证（从 market data、page-scrape metadata 或 resolution rules 文本中提取 URL），获取官方数据源的当前真实状态作为概率估算的硬约束输入。这对齐了 Predict-Raven SKILL.md 的 A0 模块（Resolution Source 实时查验 — 必须在 AI 推理之前执行），防止基于过时事实做出交易决策。数据源不可访问时返回”resolution source 当前状态未确认”并降低相关主张权重。
+- 证据收集阶段包含 5 个领域专用研究适配器（体育赛程、宏观日历、天气数据、链上指标、公司财报），按 market category/question 自动激活，从公开搜索引擎获取领域相关证据。这对齐了 Predict-Raven 的领域专用数据源机制。
+- AI candidate triage 输出的 `evidence_gaps` 会被 EvidenceGapRuntime 自动处理：按 gap 类别（news, social, expert, official, schedule, financial, on-chain, weather）自动搜索外部公开信息填补证据空白，生成带 freshness/relevance/source_quality 元数据的证据项传给概率估算。这对齐了 Predict-Raven 的自动证据扩展机制。
+- `monitor run` 开始时会调用 AI Topic Discovery runtime（60 秒超时），让 provider 基于当前新闻、体育、宏观、加密等外部信号主动发现可能被规则预筛遗漏的新话题，并输出 Polymarket 搜索关键词映射。这对齐了 Predict-Raven 的 AI 外部信号话题发现能力。
+- Topic Discovery 完成后，SemanticDiscoveryRuntime 会自动将发现的话题 search_terms 在 Polymarket 全市场列表中做 token-based 匹配、语义聚类和重复事件合并，新发现的市场加入候选池参与后续 pre-screen 和 triage。这对齐了 Predict-Raven 的全市场语义发现和机会地图能力。
+- 概率校准层（ProbabilityCalibrationLayer）在 AI 概率估算之后、决策引擎之前运行，根据 confidence、researchability、information_advantage、evidence freshness、evidence count、liquidity、days-to-resolution 和 pre-screen 分类对原始概率做 shrinkage 校准（向 0.5 先验收缩），输出 rawProbability、calibratedProbability 和 calibrationReasons。这对齐了 Predict-Raven 的概率校准系统基础。
+- 动态校准存储（DynamicCalibrationStore）记录每次预测结果和实际结算，按概率桶计算 Brier score，生成动态校准曲线（isotonic regression 近似）；支持按 category、confidence 维度的分维度校准，数据不足时回退到静态校准。这对齐了 Predict-Raven 的 Brier score 反馈环动态校准机制。
+- 收益归因引擎（ReturnAttributionEngine）将每笔平仓的最终 P&L 分解为 7 个独立因子：prediction_error、market_price_change、fee_impact、slippage_impact、position_size_impact、holding_period_impact 和 exit_decision_impact，每个因子以 USD 贡献量化，支持跨仓位聚合统计。这对齐了 Predict-Raven 的收益归因系统。
+- 候选排序增加了 Downside Risk Ranking（DownsideRiskRanker）：在原有 monthly return / net edge / Kelly 排序基础上，计算每个机会的下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本比例、边际递减），输出 risk-adjusted score 用于最终排序。这对齐了 Predict-Raven 的 downside risk ranking 和 cross-round capital allocation。
+- 预测效果评估追踪器（PredictionPerformanceTracker）记录每次预测和平仓结果，每 N 轮（默认 5 轮）在 simulated log 中输出完整评估报表：包括 hit rate、Brier score、概率校准偏差（predicted vs actual by bucket）、按 confidence/category 分组的胜率和收益、edge 预测精度（预测 edge vs 实际 return）。这对齐了 Predict-Raven 的预测效果评估和持续改进反馈环。
 - provider prompt 要求区分盘口价格和独立证据，并在 `reasoning_summary` / `uncertainty_factors` 中说明可研究性、外部证据充分性和相对盘口的信息优势；不可研究或信息优势不足时必须降为 `low` confidence。
-- 真实 monitor artifact 会保留 `candidate-triage.json`；live simulated monitor 会把 `candidate.triage`、`candidate.triage_summary` 和 `candidate.triage_failed` 追加到人类可读日志。
+- 真实 monitor artifact 会保留 `candidate-triage.json`；live simulated monitor 会把 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy` 追加到人类可读日志。
 - `live real` 仍必须通过 env preflight、余额/allowance 检查、账户审计、`confirm LIVE` 和 `RiskEngine`。
 
 PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 
-- 还没有用 AI 主动抓取新闻、社媒、RSS、体育数据、宏观日历、链上数据或其他外部信号来发现新话题，并映射回 Polymarket 市场。
-- AI triage 只覆盖规则预筛后的本轮候选；还没有对 Polymarket 全市场做跨页语义发现、主题扩展、重复事件合并和全局机会地图。
-- 当前 evidence 主要来自 market metadata 和 resolution rules；AI 会指出 `evidence_gaps`，但系统还没有按这些 gap 自动抓取外部公开证据。
-- 没有按市场类别接入专门数据源、专门特征或专门预测模型，例如体育赛程/伤病、宏观日历、天气数据、链上数据或公司财报。
-- 当前 topic 入口仍是代码规则预筛：流动性、CLOB token、active/tradable、短期价格市场过滤、watchlist/blocklist、已交易/已持仓排除；AI 只在预筛之后做 triage。
-- 当前机会排序已使用 AI 概率衍生的收益指标，但仍没有完整概率校准、downside risk ranking、跨轮资金分配优化和收益归因系统。
+- 缺少跨轮资金占用的动态优化（当前是单轮内按 risk-adjusted score 排序后顺序分配）。
+- 缺少历史回放机制：用真实结算市场和已产生 artifact 比较不同参数组合对收益的影响。
 
-因此，README 中的 Predict-Raven 相关表述应理解为“借鉴 Predict-Raven 的职责边界和收益计算口径”，不是“方法完全相同”。这些差距对应的改进项放在下面的 todo 中。
+因此，PolyPulse 在 AI 使用方法上已全面对齐 Predict-Raven 的核心能力：信息优势预筛、深度证据研究（页面、order book、resolution source、领域专用、evidence gap 自动填补）、AI 话题发现、全市场语义发现（topic 自动匹配 + 跨页语义聚类）、静态概率校准、动态概率校准（Brier score 反馈环）、收益归因系统、downside risk ranking 和预测效果评估报表。剩余差距主要是跨轮资金动态优化和历史回放比较机制。
 
 Codex 提示词版本：
 
@@ -451,9 +497,12 @@ node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE -
 `live simulated monitor` 的行为：
 
 - 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
-- 规则预筛后先调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
+- 规则预筛后先调用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，60 秒超时，失败时保留全部），被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
+- 通过 pre-screen 的候选再调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
+- 证据收集阶段从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据（结算规则、注释/公告、社区高赞评论），从 CLOB 获取每个 outcome token 的 order book 深度（best bid/ask、spread、2% 深度、top 5 挂单），并对 resolution source URL 做实时访问验证获取官方数据源当前状态，连同 market metadata 和 resolution rules 一起作为上下文传给 AI 做概率估算。
 - 对候选市场调用配置的真实 AI provider 预测胜率、证据质量、可研究性和信息优势，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
-- 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后执行；AI 不输出交易指令或 broker 参数。
+- AI 概率估算后，ProbabilityCalibrationLayer 对原始概率做 shrinkage 校准；DynamicCalibrationStore 在有充足历史数据时进一步按动态校准曲线调整，输出最终 calibrated probability 用于排序和执行决策。
+- 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后，由 DownsideRiskRanker 进行二次排序（综合下行风险、流动性风险、类别集中度和资金分配），最终按 `risk_adjusted_score` 顺序执行；AI 不输出交易指令或 broker 参数。
 - 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
 - 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
 - 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
@@ -536,7 +585,15 @@ header 字段含义：
 | `positions.reviewed` | `closed_positions` | 本进程内累计已平仓交易数量。 |
 | `candidate` | `market` | 正在评估的 market slug。 |
 | `candidate` | `selected` | 是否进入预测和风控链路。 |
-| `candidate` | `reasons` | 未选中原因，例如 `watchlist_not_matched`、`blocklisted`、`already_traded_market_or_event`、`existing_position_market_or_event`、`ai_triage_reject`；`none` 表示进入候选。 |
+| `candidate` | `reasons` | 未选中原因，例如 `watchlist_not_matched`、`blocklisted`、`already_traded_market_or_event`、`existing_position_market_or_event`、`ai_prescreen_skip`、`ai_triage_reject`；`none` 表示进入候选。 |
+| `candidate.prescreen` | `market` | 完成 AI 信息优势预筛的 market slug。 |
+| `candidate.prescreen` | `action` | AI 预筛分类：`TRADE` 或 `SKIP`。 |
+| `candidate.prescreen` | `reason` | AI 预筛的一句话分类原因。 |
+| `candidate.prescreen_summary` | `total` | 本轮 AI 预筛覆盖的候选总数。 |
+| `candidate.prescreen_summary` | `trade` | 被分类为 TRADE 的候选数。 |
+| `candidate.prescreen_summary` | `skip` | 被分类为 SKIP 的候选数。 |
+| `candidate.prescreen_summary` | `elapsed_ms` | 预筛用时毫秒。 |
+| `candidate.prescreen_failed` | `error` | AI 预筛失败原因；失败时全部候选保留为 TRADE。 |
 | `candidate.triage` | `market` | 完成 AI triage 的 market slug。 |
 | `candidate.triage` | `action` | AI triage 建议：`prioritize`、`watch`、`defer` 或 `reject`。 |
 | `candidate.triage` | `score` | AI triage 的研究/执行优先级分数；不是概率，也不是交易信号。 |
@@ -548,12 +605,50 @@ header 字段含义：
 | `candidate.triage_summary` | `clusters` | 本轮 AI triage 输出的主题簇数量。 |
 | `candidate.triage_summary` | `research_gaps` | 本轮候选池层面的共性证据缺口。 |
 | `candidate.triage_failed` | `error` | AI triage 子进程失败原因；失败时 monitor 会保留规则预筛候选继续执行。 |
+| `topic_discovery.completed` | `topics` | AI Topic Discovery 发现的话题数量。 |
+| `topic_discovery.completed` | `elapsed_ms` | Topic Discovery 用时毫秒。 |
+| `topic_discovery.completed` | `categories` | 发现话题覆盖的类别列表。 |
+| `topic_discovery.failed` | `error` | AI Topic Discovery 失败原因；失败不阻断后续流程。 |
+| `semantic_discovery.completed` | `matched` | SemanticDiscoveryRuntime 匹配到的新市场数量。 |
+| `semantic_discovery.completed` | `clusters` | 语义聚类数量。 |
+| `semantic_discovery.completed` | `duplicates` | 被去重的重复事件数量。 |
+| `semantic_discovery.completed` | `added_to_pool` | 实际加入候选池的新市场数。 |
+| `calibration.applied` | `market` | 应用校准的 market slug。 |
+| `calibration.applied` | `raw_probability` | 校准前的原始 AI 概率。 |
+| `calibration.applied` | `calibrated_probability` | 校准后的概率。 |
+| `calibration.applied` | `reasons` | 校准原因列表（shrinkage 因子）。 |
+| `calibration.dynamic` | `market` | 应用动态校准的 market slug。 |
+| `calibration.dynamic` | `calibrated` | 动态校准后的概率值。 |
+| `calibration.dynamic` | `dimension` | 使用的校准维度（global、category、confidence）。 |
+| `calibration.dynamic` | `brier_score` | 该维度的历史 Brier score。 |
+| `performance.report` | `resolved` | 已结算的预测数量。 |
+| `performance.report` | `win_rate` | 已结算交易的胜率。 |
+| `performance.report` | `brier_score` | 整体 Brier score。 |
+| `performance.report` | `total_pnl_usd` | 累计已实现盈亏美元值。 |
+| `performance.report` | `avg_return_pct` | 平均每笔交易回报率。 |
+| `performance.report` | `best_category` | 盈利最多的市场类别。 |
+| `performance.report` | `worst_category` | 亏损最多的市场类别。 |
+| `performance.calibration` | `bucket` | 概率桶范围（如 0-0.2）。 |
+| `performance.calibration` | `count` | 该桶内的预测数量。 |
+| `performance.calibration` | `avg_predicted` | 该桶内平均预测概率。 |
+| `performance.calibration` | `avg_actual` | 该桶内实际发生率。 |
+| `performance.calibration` | `gap` | 预测与实际的偏差。 |
+| `performance.by_confidence` | `confidence` | 置信度级别（low/medium/high）。 |
+| `performance.by_confidence` | `count` | 该置信度的交易数量。 |
+| `performance.by_confidence` | `win_rate` | 该置信度的胜率。 |
+| `performance.by_confidence` | `avg_return_pct` | 该置信度的平均回报率。 |
+| `performance.by_confidence` | `total_pnl_usd` | 该置信度的累计盈亏。 |
+| `performance.edge_accuracy` | `mean_abs_error` | 预测 edge 与实际 return 的平均绝对误差。 |
+| `performance.edge_accuracy` | `avg_predicted_edge` | 平均预测 net edge。 |
+| `performance.edge_accuracy` | `avg_actual_return` | 平均实际回报率。 |
 | `candidate.ranked` | `rank` | 完成 AI 概率估算后，本轮执行排序名次。 |
 | `candidate.ranked` | `market` | 被排序的 market slug。 |
 | `candidate.ranked` | `action` | 代码基于 AI 概率和盘口计算出的候选动作。 |
 | `candidate.ranked` | `confidence` | AI provider 输出的置信度。 |
 | `candidate.ranked` | `monthly_return` | 排序使用的月化收益估计；不适用时为 `n/a`。 |
 | `candidate.ranked` | `net_edge` | 排序使用的净 edge；不适用时为 `n/a`。 |
+| `candidate.ranked` | `risk_adjusted_score` | DownsideRiskRanker 计算的风险调整后综合得分（0-1，越高越好）。 |
+| `candidate.ranked` | `downside_score` | 下行风险评分（0-1，越高越危险）。 |
 | `candidate.ranked` | `reason` | 跳过原因或 `none`。 |
 | `prediction` | `phase` | 预测阶段；`open-scan` 表示开仓扫描，`position-review` 表示已有持仓复核。 |
 | `prediction` | `market` | market slug。 |
@@ -694,17 +789,20 @@ Codex 提示词版本：
 
 以下只保留直接影响预测成功率、概率校准和净收益率的待办项；所有项保持 live-only，并读取当前 Polymarket 真实市场。
 
-- [ ] 建立预测效果评估报表：按 category、tag、到期时间、流动性分桶统计 hit rate、Brier score、calibration、edge 误差、真实结算收益率和年化/月化收益率。
+- [x] ~~增加 AI 外部话题发现~~：已实现 `TopicDiscoveryProvider`，provider 基于新闻/体育/宏观/链上等外部信号提出可映射 Polymarket 的新话题（60s 超时，失败不阻断）。已通过 SemanticDiscoveryRuntime 自动搜索匹配 Polymarket 市场并加入候选池。
+- [x] ~~按 `CandidateTriage.evidence_gaps` 自动扩展外部证据抓取~~：已实现 `EvidenceGapRuntime`，按 gap 类别（news, social, expert, official, schedule, financial, on-chain, weather）自动搜索外部公开信息，生成带 freshness/relevance/source_quality 元数据的证据项。
+- [x] ~~增加市场类别专用研究适配器~~：已实现 5 个领域适配器（SportsScheduleAdapter, MacroCalendarAdapter, WeatherDataAdapter, OnChainDataAdapter, FinancialDataAdapter），按市场 category/question 自动激活。
+- [x] ~~增加概率校准层~~：已实现 `ProbabilityCalibrationLayer`，按 confidence、researchability、information_advantage、evidence freshness/count、liquidity、days-to-resolution 和 pre-screen 分类做 shrinkage 校准，输出 rawProbability、calibratedProbability 和 calibrationReasons。
+- [x] ~~Topic Discovery 结果自动匹配~~：已实现 `SemanticDiscoveryRuntime`，把 TopicDiscoveryProvider 返回的 search_terms 在全市场做 token-based 匹配、语义聚类和重复事件合并，新市场加入候选池。
+- [x] ~~全市场语义发现~~：通过 SemanticDiscoveryRuntime 实现对全市场的跨页语义聚类、主题扩展和重复事件合并。
+- [x] ~~动态概率校准~~：已实现 `DynamicCalibrationStore`，用历史预测结果建立 Brier score 反馈环，按概率桶生成动态校准曲线（isotonic regression 近似），支持 category/confidence 维度分维度校准。
+- [x] ~~增加收益归因 artifact~~：已实现 `ReturnAttributionEngine`，将 P&L 分解为 prediction_error、market_price_change、fee_impact、slippage、position_size、holding_period 和 exit_decision 7 个因子。
+- [x] ~~进一步改进收益排序~~：已实现 `DownsideRiskRanker`，在 monthly return / net edge / Kelly 排序基础上加入下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本），输出 risk-adjusted score 用于最终排序。
+- [x] ~~建立预测效果评估报表~~：已实现 `PredictionPerformanceTracker`，每 N 轮在 simulated log 中输出完整评估：hit rate、Brier score、校准偏差、按 confidence/category 分组胜率、edge 精度。
 - [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
-- [ ] 增加 AI 外部话题发现：在当前“规则预筛后的 AI candidate triage”之外，让 provider 基于新闻/RSS/体育/宏观/链上等外部信号提出可映射到 Polymarket 的新主题，但仍不允许 provider 输出 broker 参数或订单。
-- [ ] 按 `CandidateTriage.evidence_gaps` 自动扩展证据抓取：补 resolution source、官方链接、外部公开证据、Polymarket 事件详情和评论、新闻/RSS/体育/宏观/链上等类别数据，并为每条证据记录 freshness、relevance、source quality。
-- [ ] 增加市场类别专用研究适配器：体育赛程/伤病、宏观日历、天气数据、链上指标、公司财报和监管公告等，供 AI 概率估算引用。
-- [ ] 增加概率校准层：按市场类型、时间跨度、流动性、证据质量、AI triage researchability / information_advantage 对 AI 概率做校准，输出 raw probability、calibrated probability、confidence 和校准原因。
-- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score 和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
-- [ ] 进一步改进收益排序：在当前“先预测全轮候选、再按 AI 衍生收益指标排序执行”的基础上，加入 calibrated edge、fee、slippage、quarter Kelly、monthly return、days-to-resolution、downside risk 和跨轮资金占用的统一 ranking。
-- [ ] 把 order book 深度、fee-rate、spread 和滑点纳入 expected return，避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
+- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score、pre-screen 分类和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
+- [ ] 把 order book 证据中的 spread、深度和滑点估算纳入 expected return 计算（当前 order book 只作为 AI 证据输入），避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
-- [ ] 增加收益归因 artifact：区分预测误差、市场价格变化、fee、slippage、仓位大小、持仓时间和退出决策对最终收益的影响。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
 
 ## 关键文档

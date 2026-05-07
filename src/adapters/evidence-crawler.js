@@ -4,6 +4,16 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { assertSchema } from "../domain/schemas.js";
+import { PolymarketPageEvidenceAdapter } from "./polymarket-page-evidence-adapter.js";
+import { OrderBookEvidenceAdapter } from "./orderbook-evidence-adapter.js";
+import { ResolutionSourceLiveAdapter } from "./resolution-source-evidence-adapter.js";
+import {
+  SportsScheduleAdapter,
+  MacroCalendarAdapter,
+  WeatherDataAdapter,
+  OnChainDataAdapter,
+  FinancialDataAdapter
+} from "./domain-research-adapters.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -156,7 +166,15 @@ export class EvidenceCrawler {
     this.config = config;
     this.adapters = [
       new MarketMetadataEvidenceAdapter(),
-      new ResolutionEvidenceAdapter()
+      new ResolutionEvidenceAdapter(),
+      new PolymarketPageEvidenceAdapter(config),
+      new OrderBookEvidenceAdapter(config),
+      new ResolutionSourceLiveAdapter(config),
+      new SportsScheduleAdapter(config),
+      new MacroCalendarAdapter(config),
+      new WeatherDataAdapter(config),
+      new OnChainDataAdapter(config),
+      new FinancialDataAdapter(config)
     ];
     this.cachePath = config.stateDir ? path.join(config.stateDir, "evidence-cache.json") : null;
     this.cacheTtlSeconds = config.evidence?.cacheTtlSeconds ?? 1800;
@@ -172,7 +190,7 @@ export class EvidenceCrawler {
         adapter,
         label: `${adapter.id}.search`,
         fallback: [],
-        fn: (signal) => adapter.search({ market, signal })
+        fn: (signal) => adapter.search({ market, signal, priorEvidence: collected })
       });
       for (const ref of refs) {
         const cacheKey = hash({ marketId: market.marketId, adapterId: adapter.id, ref });
@@ -273,5 +291,13 @@ export class EvidenceCrawler {
 
 export const defaultEvidenceAdapters = {
   MarketMetadataEvidenceAdapter,
-  ResolutionEvidenceAdapter
+  ResolutionEvidenceAdapter,
+  PolymarketPageEvidenceAdapter,
+  OrderBookEvidenceAdapter,
+  ResolutionSourceLiveAdapter,
+  SportsScheduleAdapter,
+  MacroCalendarAdapter,
+  WeatherDataAdapter,
+  OnChainDataAdapter,
+  FinancialDataAdapter
 };

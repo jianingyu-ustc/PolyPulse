@@ -2,9 +2,18 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
+import { ProbabilityCalibrationLayer } from "../core/probability-calibration.js";
+import { DynamicCalibrationStore } from "../core/dynamic-calibration-store.js";
+import { ReturnAttributionEngine } from "../core/return-attribution.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
 import { CandidateTriageProvider } from "../runtime/candidate-triage-runtime.js";
+import { PreScreenProvider } from "../runtime/prescreen-runtime.js";
+import { EvidenceGapRuntime } from "../runtime/evidence-gap-runtime.js";
+import { TopicDiscoveryProvider } from "../runtime/topic-discovery-runtime.js";
+import { SemanticDiscoveryRuntime } from "../runtime/semantic-discovery-runtime.js";
+import { DownsideRiskRanker } from "../core/downside-risk-ranker.js";
+import { PredictionPerformanceTracker } from "../core/prediction-tracker.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
@@ -267,9 +276,22 @@ export class Scheduler {
       ? { ...config, suppressProviderRuntimeArtifacts: true }
       : config;
     this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
+    this.calibrationLayer = new ProbabilityCalibrationLayer(config);
     this.candidateTriageProvider = config.pulse?.aiCandidateTriage
       ? new CandidateTriageProvider(probabilityConfig)
       : null;
+    this.preScreenProvider = config.pulse?.aiPrescreen !== false
+      ? new PreScreenProvider(probabilityConfig)
+      : null;
+    this.evidenceGapRuntime = new EvidenceGapRuntime(config);
+    this.topicDiscoveryProvider = config.pulse?.aiTopicDiscovery !== false
+      ? new TopicDiscoveryProvider(probabilityConfig)
+      : null;
+    this.semanticDiscovery = new SemanticDiscoveryRuntime(config);
+    this.dynamicCalibration = new DynamicCalibrationStore(config);
+    this.returnAttribution = new ReturnAttributionEngine(config);
+    this.downsideRiskRanker = new DownsideRiskRanker(config);
+    this.predictionTracker = new PredictionPerformanceTracker(config);
     this.decisionEngine = new DecisionEngine(config);
     this.riskEngine = new RiskEngine(config, { stateStore });
     this.liveBroker = new LiveBroker(config);
@@ -315,15 +337,45 @@ export class Scheduler {
   async predictCandidate(candidate) {
     const market = candidate.market;
     const evidence = await this.evidenceCrawler.collect({ market });
-    const estimate = await this.probabilityEstimator.estimate({ market, evidence });
-    return { market, evidence, estimate };
+    const gapEvidence = await this.fillEvidenceGaps({ market, evidence, candidate });
+    const allEvidence = [...evidence, ...gapEvidence];
+    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
+    const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
+    return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
   }
 
   async predictCandidateNoCache(candidate) {
     const market = candidate.market;
     const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
-    const estimate = await this.probabilityEstimator.estimate({ market, evidence });
-    return { market, evidence, estimate };
+    const gapEvidence = await this.fillEvidenceGaps({ market, evidence, candidate });
+    const allEvidence = [...evidence, ...gapEvidence];
+    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
+    const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
+    return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
+  }
+
+  async fillEvidenceGaps({ market, evidence, candidate }) {
+    const triage = candidate?.summary?.ai_triage;
+    const evidenceGaps = triage?.evidence_gaps ?? [];
+    if (evidenceGaps.length === 0) return [];
+    try {
+      return await this.evidenceGapRuntime.fillGaps({ market, evidenceGaps, priorEvidence: evidence });
+    } catch {
+      return [];
+    }
+  }
+
+  applyCalibration({ estimate, market, evidence, candidate }) {
+    const triage = candidate?.summary?.ai_triage ?? null;
+    const prescreen = candidate?.summary?.ai_prescreen ?? null;
+    return this.calibrationLayer.calibrate({
+      rawProbability: estimate.ai_probability ?? estimate.aiProbability ?? 0.5,
+      confidence: estimate.confidence,
+      market,
+      evidence,
+      triageAssessment: triage,
+      prescreenResult: prescreen
+    });
   }
 
   async applyCandidateTriage({ candidateEntries, accumulator, ledger = null }) {
@@ -401,6 +453,115 @@ export class Scheduler {
         await ledger.log("candidate.triage_failed", { error: JSON.stringify(message) });
       }
       return candidateEntries;
+    }
+  }
+
+  async applyPreScreen({ candidateEntries, accumulator, ledger = null }) {
+    if (!this.preScreenProvider) {
+      return candidateEntries;
+    }
+    const selected = candidateEntries.filter((item) => item.summary.selected);
+    if (selected.length === 0) {
+      return candidateEntries;
+    }
+
+    const summary = await this.preScreenProvider.preScreen({
+      candidates: selected.map((item) => item.market)
+    });
+    accumulator.preScreen = summary;
+
+    if (summary.failed) {
+      accumulator.errors.push(`prescreen_failed:${summary.failureReason ?? "unknown"}`);
+      if (ledger) {
+        await ledger.log("candidate.prescreen_failed", { error: JSON.stringify(summary.failureReason ?? "unknown") });
+      }
+      return candidateEntries;
+    }
+
+    const resultMap = new Map();
+    for (const result of summary.results) {
+      resultMap.set((result.marketSlug ?? "").toLowerCase(), result);
+    }
+
+    for (const entry of candidateEntries) {
+      if (!entry.summary.selected) continue;
+      const key = (entry.market.marketSlug ?? "").toLowerCase();
+      const result = resultMap.get(key);
+      if (!result) continue;
+      entry.summary.ai_prescreen = { suitable: result.suitable, reason: result.reason };
+      if (!result.suitable) {
+        entry.summary.selected = false;
+        entry.summary.skipped_reasons.push("ai_prescreen_skip");
+      }
+      if (ledger) {
+        await ledger.log("candidate.prescreen", {
+          market: entry.market.marketSlug,
+          action: result.suitable ? "TRADE" : "SKIP",
+          reason: result.reason || "none"
+        });
+      }
+    }
+
+    if (ledger) {
+      await ledger.log("candidate.prescreen_summary", {
+        total: summary.results.length,
+        trade: summary.tradeCount,
+        skip: summary.skipCount,
+        elapsed_ms: summary.elapsedMs
+      });
+    }
+    return candidateEntries;
+  }
+
+  async applyTopicDiscovery({ accumulator, ledger = null }) {
+    if (!this.topicDiscoveryProvider) return;
+    try {
+      const markets = accumulator.scan?.markets ?? [];
+      const categories = [...new Set(markets.map((m) => m.category).filter(Boolean))];
+      const discovery = await this.topicDiscoveryProvider.discover({
+        currentCategories: categories,
+        currentMarketCount: markets.length,
+        recentTopics: []
+      });
+      accumulator.topicDiscovery = discovery;
+      if (discovery.failed) {
+        accumulator.errors.push(`topic_discovery_failed:${discovery.failureReason ?? "unknown"}`);
+        if (ledger) {
+          await ledger.log("topic_discovery.failed", { error: discovery.failureReason ?? "unknown" });
+        }
+        return;
+      }
+      if (discovery.discovered_topics.length > 0) {
+        if (ledger) {
+          await ledger.log("topic_discovery.completed", {
+            topics_found: discovery.discovered_topics.length,
+            categories: [...new Set(discovery.discovered_topics.map((t) => t.category))].join(","),
+            topics: discovery.discovered_topics.map((t) => t.topic).join("; ").slice(0, 500)
+          });
+        }
+        // Semantic discovery: match discovered topics against full market list
+        const existingIds = new Set(markets.map((m) => m.marketId));
+        const semanticResult = this.semanticDiscovery.discover({
+          discoveredTopics: discovery.discovered_topics,
+          allMarkets: markets,
+          existingCandidateIds: existingIds
+        });
+        accumulator.semanticDiscovery = semanticResult;
+        if (semanticResult.matchedMarkets.length > 0 && ledger) {
+          await ledger.log("semantic_discovery.completed", {
+            matched: semanticResult.matchedMarkets.length,
+            clusters: semanticResult.clusters.length,
+            duplicates: semanticResult.duplicates.length,
+            topics: semanticResult.topicMatches.map((t) => `${t.topic}(${t.matchedCount})`).join("; ").slice(0, 500)
+          });
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      accumulator.errors.push(`topic_discovery_error:${message}`);
+      if (ledger) {
+        await ledger.log("topic_discovery.error", { error: message });
+      }
     }
   }
 
@@ -494,6 +655,14 @@ export class Scheduler {
         paper: true,
         type: "close"
       });
+      this.predictionTracker.recordOutcome({
+        marketId: closed.marketId,
+        marketSlug: closed.marketSlug,
+        outcome: closed.realizedPnlUsd > 0,
+        realizedPnlUsd: closed.realizedPnlUsd,
+        returnPct: closed.returnPct ?? 0,
+        closeReason: closed.closeReason
+      });
     }
 
     for (const position of [...ledger.positions]) {
@@ -543,6 +712,14 @@ export class Scheduler {
           reason: closed.closeReason,
           paper: true,
           type: "close"
+        });
+        this.predictionTracker.recordOutcome({
+          marketId: closed.marketId,
+          marketSlug: closed.marketSlug,
+          outcome: closed.realizedPnlUsd > 0,
+          realizedPnlUsd: closed.realizedPnlUsd,
+          returnPct: closed.returnPct ?? 0,
+          closeReason: closed.closeReason
         });
       }
     }
@@ -793,6 +970,7 @@ export class Scheduler {
           noCache: true
         });
         await ledger.logScan(accumulator.scan);
+        await this.applyTopicDiscovery({ accumulator, ledger });
         await this.reviewSimulatedPositions({ runId, accumulator });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
@@ -800,6 +978,7 @@ export class Scheduler {
           portfolio: ledger.portfolio(),
           config: this.config
         });
+        await this.applyPreScreen({ candidateEntries, accumulator, ledger });
         await this.applyCandidateTriage({ candidateEntries, accumulator, ledger });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
         for (const candidate of accumulator.candidates) {
@@ -825,11 +1004,16 @@ export class Scheduler {
         );
         const validPredictions = predictions.filter(Boolean);
         accumulator.predictions.push(...validPredictions);
-        const rankedPredictions = rankPredictionsForExecution({
+        const baseRanked = rankPredictionsForExecution({
           predictions: validPredictions,
           portfolio: ledger.portfolio(),
           amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
           decisionEngine: this.decisionEngine
+        });
+        const rankedPredictions = this.downsideRiskRanker.rankWithDownsideRisk({
+          rankedPredictions: baseRanked,
+          portfolio: ledger.portfolio(),
+          ledgerStatistics: ledger.statistics()
         });
         for (const [index, ranked] of rankedPredictions.entries()) {
           await ledger.log("candidate.ranked", {
@@ -839,7 +1023,23 @@ export class Scheduler {
             confidence: ranked.analysis.confidence,
             monthly_return: ranked.analysis.monthlyReturn ?? "n/a",
             net_edge: ranked.analysis.netEdge ?? "n/a",
+            risk_adjusted_score: ranked.riskAdjusted?.riskAdjustedScore ?? "n/a",
+            downside_score: ranked.downsideRisk?.score ?? "n/a",
             reason: ranked.analysis.noTradeReason ?? "none"
+          });
+          this.predictionTracker.recordPrediction({
+            marketId: ranked.prediction.market.marketId,
+            marketSlug: ranked.prediction.market.marketSlug,
+            category: ranked.prediction.market.category,
+            aiProbability: ranked.analysis.aiProbability,
+            marketProbability: ranked.analysis.marketProbability ?? ranked.analysis.marketImpliedProbability,
+            confidence: ranked.analysis.confidence,
+            netEdge: ranked.analysis.netEdge,
+            monthlyReturn: ranked.analysis.monthlyReturn,
+            quarterKellyPct: ranked.analysis.quarterKellyPct,
+            side: ranked.analysis.suggestedSide,
+            notionalUsd: ranked.analysis.suggestedNotionalUsd,
+            roundId: runId
           });
         }
         let orderCount = 0;
@@ -882,6 +1082,9 @@ export class Scheduler {
         await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
       }, this.config.monitor.runTimeoutMs, "monitor_round");
       accumulator.completedAt = nowIso();
+      if (this.predictionTracker.shouldEmitReport()) {
+        await this.predictionTracker.emitReport(ledger);
+      }
       await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
       return {
         ok: true,
@@ -977,6 +1180,7 @@ export class Scheduler {
           portfolio: await this.stateStore.getPortfolio(),
           config: this.config
         });
+        await this.applyPreScreen({ candidateEntries, accumulator });
         await this.applyCandidateTriage({ candidateEntries, accumulator });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
         const selected = candidateEntries.filter((item) => item.summary.selected);
