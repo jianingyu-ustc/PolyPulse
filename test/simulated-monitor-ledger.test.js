@@ -7,12 +7,12 @@ import { loadEnvConfig } from "../src/config/env.js";
 import { SimulatedMonitorLedger } from "../src/simulated/simulated-monitor-ledger.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 
-function market({ yesPrice = 0.2, slug = "simulated-market" } = {}) {
+function market({ yesPrice = 0.2, slug = "simulated-market", marketId = "sim-1", eventId = "event-1" } = {}) {
   return {
-    marketId: "sim-1",
-    eventId: "event-1",
+    marketId,
+    eventId,
     marketSlug: slug,
-    eventSlug: "event-1",
+    eventSlug: eventId,
     question: "Will the simulated event happen?",
     title: "Will the simulated event happen?",
     marketUrl: "https://polymarket.com/event/simulated-market",
@@ -53,13 +53,14 @@ function market({ yesPrice = 0.2, slug = "simulated-market" } = {}) {
   };
 }
 
-function highYesEstimate(inputMarket) {
+function estimateForMarket(inputMarket, { aiProbability = 0.8, confidence = "high" } = {}) {
+  const noProbability = Number((1 - aiProbability).toFixed(6));
   return {
     marketId: inputMarket.marketId,
     targetOutcome: "yes",
-    ai_probability: 0.8,
-    aiProbability: 0.8,
-    confidence: "high",
+    ai_probability: aiProbability,
+    aiProbability,
+    confidence,
     reasoning_summary: "High simulated yes probability.",
     reasoningSummary: "High simulated yes probability.",
     key_evidence: [],
@@ -71,11 +72,15 @@ function highYesEstimate(inputMarket) {
     freshness_score: 1,
     freshnessScore: 1,
     outcomeEstimates: [
-      { tokenId: "yes-token", label: "Yes", aiProbability: 0.8, marketProbability: inputMarket.outcomes[0].impliedProbability, confidence: "high", reasoning: "test", evidenceIds: [] },
-      { tokenId: "no-token", label: "No", aiProbability: 0.2, marketProbability: inputMarket.outcomes[1].impliedProbability, confidence: "high", reasoning: "test", evidenceIds: [] }
+      { tokenId: "yes-token", label: "Yes", aiProbability, marketProbability: inputMarket.outcomes[0].impliedProbability, confidence, reasoning: "test", evidenceIds: [] },
+      { tokenId: "no-token", label: "No", aiProbability: noProbability, marketProbability: inputMarket.outcomes[1].impliedProbability, confidence, reasoning: "test", evidenceIds: [] }
     ],
     diagnostics: { provider: "test", effectiveProvider: "test" }
   };
+}
+
+function highYesEstimate(inputMarket) {
+  return estimateForMarket(inputMarket);
 }
 
 async function configForTest(dir) {
@@ -90,6 +95,7 @@ async function configForTest(dir) {
     "CHAIN_ID=137",
     "POLYMARKET_HOST=https://clob.polymarket.com",
     "PULSE_MIN_LIQUIDITY_USD=0",
+    "PULSE_AI_CANDIDATE_TRIAGE=false",
     "MIN_AI_CONFIDENCE=high",
     "MIN_TRADE_USD=1",
     "MAX_TRADE_PCT=1",
@@ -212,6 +218,176 @@ test("simulated monitor run uses log-only in-memory state instead of persistent 
   assert.match(log, /risk/);
   assert.match(log, /open\.filled/);
   assert.match(log, /round\.end/);
+});
+
+test("simulated monitor ranks candidates by AI-derived opportunity before execution", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-rank-"));
+  const config = await configForTest(dir);
+  config.monitor.maxTradesPerRound = 1;
+  const lowerOpportunity = market({
+    marketId: "sim-low",
+    eventId: "event-low",
+    slug: "lower-opportunity",
+    yesPrice: 0.3
+  });
+  const higherOpportunity = market({
+    marketId: "sim-high",
+    eventId: "event-high",
+    slug: "higher-opportunity",
+    yesPrice: 0.2
+  });
+  const scheduler = new Scheduler({
+    config,
+    stateStore: {},
+    artifactWriter: {},
+    marketSource: {
+      async scan(request) {
+        assert.equal(request.noCache, true);
+        return {
+          source: "test",
+          fetchedAt: new Date().toISOString(),
+          totalFetched: 2,
+          totalReturned: 2,
+          riskFlags: [],
+          markets: [lowerOpportunity, higherOpportunity]
+        };
+      },
+      async getMarket(id) {
+        return [lowerOpportunity, higherOpportunity].find((item) => item.marketId === id || item.marketSlug === id) ?? null;
+      }
+    }
+  });
+  scheduler.evidenceCrawler = {
+    async collect({ noCache }) {
+      assert.equal(noCache, true);
+      return [
+        { status: "fetched", relevanceScore: 1 },
+        { status: "fetched", relevanceScore: 1 }
+      ];
+    }
+  };
+  scheduler.probabilityEstimator = {
+    async estimate({ market: estimateMarket }) {
+      return estimateForMarket(estimateMarket, {
+        aiProbability: estimateMarket.marketSlug === "higher-opportunity" ? 0.85 : 0.35,
+        confidence: "high"
+      });
+    }
+  };
+
+  const result = await scheduler.runMonitorRound({
+    mode: "live",
+    confirmation: "LIVE",
+    limit: 2,
+    maxAmountUsd: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.performance.openPositions, 1);
+  assert.equal(scheduler.simulatedLedger.positions[0].marketSlug, "higher-opportunity");
+  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  assert.match(log, /candidate\.ranked \| rank=1 market=higher-opportunity/);
+  assert.match(log, /open\.filled \| market=higher-opportunity/);
+});
+
+test("simulated monitor applies AI candidate triage before probability estimation", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-triage-"));
+  const config = await configForTest(dir);
+  const rejectedMarket = market({
+    marketId: "sim-reject",
+    eventId: "event-reject",
+    slug: "unresearchable-candidate",
+    yesPrice: 0.2
+  });
+  const keptMarket = market({
+    marketId: "sim-keep",
+    eventId: "event-keep",
+    slug: "researchable-candidate",
+    yesPrice: 0.2
+  });
+  const scheduler = new Scheduler({
+    config,
+    stateStore: {},
+    artifactWriter: {},
+    marketSource: {
+      async scan(request) {
+        assert.equal(request.noCache, true);
+        return {
+          source: "test",
+          fetchedAt: new Date().toISOString(),
+          totalFetched: 2,
+          totalReturned: 2,
+          riskFlags: [],
+          markets: [rejectedMarket, keptMarket]
+        };
+      },
+      async getMarket(id) {
+        return [rejectedMarket, keptMarket].find((item) => item.marketId === id || item.marketSlug === id) ?? null;
+      }
+    }
+  });
+  scheduler.candidateTriageProvider = {
+    async triage({ candidates }) {
+      assert.equal(candidates.length, 2);
+      return {
+        candidate_assessments: [
+          {
+            marketId: rejectedMarket.marketId,
+            marketSlug: rejectedMarket.marketSlug,
+            recommended_action: "reject",
+            priority_score: 0.05,
+            researchability: "low",
+            information_advantage: "low",
+            cluster: "unclear-resolution",
+            rationale: "Resolution is too hard to research independently.",
+            evidence_gaps: ["official_resolution_source"]
+          },
+          {
+            marketId: keptMarket.marketId,
+            marketSlug: keptMarket.marketSlug,
+            recommended_action: "prioritize",
+            priority_score: 0.95,
+            researchability: "high",
+            information_advantage: "high",
+            cluster: "researchable-events",
+            rationale: "Independent public sources should exist.",
+            evidence_gaps: ["official_schedule", "recent_news"]
+          }
+        ],
+        clusters: [{ name: "researchable-events", marketIds: [keptMarket.marketId], rationale: "test" }],
+        research_gaps: ["official_schedule", "recent_news"],
+        diagnostics: { provider: "test" }
+      };
+    }
+  };
+  scheduler.evidenceCrawler = {
+    async collect({ market: evidenceMarket, noCache }) {
+      assert.equal(noCache, true);
+      assert.equal(evidenceMarket.marketSlug, keptMarket.marketSlug);
+      return [{ status: "fetched", relevanceScore: 1 }];
+    }
+  };
+  scheduler.probabilityEstimator = {
+    async estimate({ market: estimateMarket }) {
+      assert.equal(estimateMarket.marketSlug, keptMarket.marketSlug);
+      return highYesEstimate(estimateMarket);
+    }
+  };
+
+  const result = await scheduler.runMonitorRound({
+    mode: "live",
+    confirmation: "LIVE",
+    limit: 2,
+    maxAmountUsd: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.performance.openPositions, 1);
+  assert.equal(scheduler.simulatedLedger.positions[0].marketSlug, keptMarket.marketSlug);
+  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  assert.match(log, /candidate\.triage \| market=unresearchable-candidate action=reject/);
+  assert.match(log, /candidate \| market=unresearchable-candidate selected=false reasons=ai_triage_reject/);
+  assert.match(log, /candidate\.triage_summary/);
 });
 
 test("simulated trade once uses the same in-memory ledger and human log format as monitor", async () => {

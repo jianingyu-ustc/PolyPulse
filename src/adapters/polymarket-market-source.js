@@ -64,7 +64,11 @@ export class PolymarketMarketSource {
   async scan(request = {}) {
     const noCache = Boolean(request.noCache);
     const pulseCompatible = request.pulseCompatible ?? isPulseDirectStrategy(this.config);
-    const requestedLimit = clampLimit(request.limit, this.config.scan.marketScanLimit);
+    const hasExplicitLimit = request.limit !== undefined && request.limit !== null && request.limit !== "";
+    const defaultLimit = pulseCompatible
+      ? this.config.pulse?.maxCandidates ?? this.config.scan.marketScanLimit
+      : this.config.scan.marketScanLimit;
+    const requestedLimit = clampLimit(hasExplicitLimit ? request.limit : defaultLimit, defaultLimit);
     const fetchTarget = pulseCompatible
       ? Math.max(requestedLimit, this.config.scan.minFetchedMarkets ?? requestedLimit)
       : requestedLimit;

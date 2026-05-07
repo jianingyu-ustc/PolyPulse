@@ -150,10 +150,11 @@ async function commandAccountApprove(args) {
 
 async function commandTopics(args) {
   const context = await createContext(args);
-  const limit = Number(option(args, "--limit", String(context.config.scan.marketScanLimit)));
+  const rawLimit = option(args, "--limit");
+  const limit = rawLimit == null ? null : Number(rawLimit);
   const quick = flag(args, "--quick") || flag(args, "--preflight");
   const scan = await context.marketSource.scan({
-    limit,
+    ...(limit == null ? {} : { limit }),
     minLiquidityUsd: option(args, "--min-liquidity"),
     minVolumeUsd: option(args, "--min-volume"),
     categoryKeyword: option(args, "--category"),

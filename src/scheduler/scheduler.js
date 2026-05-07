@@ -4,6 +4,7 @@ import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
+import { CandidateTriageProvider } from "../runtime/candidate-triage-runtime.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
@@ -19,6 +20,64 @@ function monitorRunId() {
 function asNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function finiteOr(value, fallback = -Infinity) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function confidenceRank(value) {
+  switch (String(value ?? "").toLowerCase()) {
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function compareOpportunityAnalysis(left, right) {
+  const leftOpen = left?.action === "open" ? 1 : 0;
+  const rightOpen = right?.action === "open" ? 1 : 0;
+  if (leftOpen !== rightOpen) return rightOpen - leftOpen;
+
+  const leftConfidence = confidenceRank(left?.confidence);
+  const rightConfidence = confidenceRank(right?.confidence);
+  if (leftConfidence !== rightConfidence) return rightConfidence - leftConfidence;
+
+  const metrics = [
+    ["monthlyReturn"],
+    ["netEdge"],
+    ["quarterKellyPct"],
+    ["expectedValue", "expected_value"],
+    ["aiProbability", "ai_probability"],
+    ["marketProbability", "market_implied_probability"]
+  ];
+  for (const keys of metrics) {
+    const leftValue = keys.map((key) => finiteOr(left?.[key], null)).find((value) => value != null) ?? -Infinity;
+    const rightValue = keys.map((key) => finiteOr(right?.[key], null)).find((value) => value != null) ?? -Infinity;
+    if (leftValue !== rightValue) return rightValue - leftValue;
+  }
+  return 0;
+}
+
+export function rankPredictionsForExecution({ predictions, portfolio, amountUsd, decisionEngine }) {
+  return predictions
+    .map((prediction, index) => ({
+      prediction,
+      index,
+      analysis: decisionEngine.analyze({
+        market: prediction.market,
+        estimate: prediction.estimate,
+        portfolio,
+        amountUsd
+      })
+    }))
+    .sort((left, right) => compareOpportunityAnalysis(left.analysis, right.analysis) || left.index - right.index);
 }
 
 function blockedRisk(reason) {
@@ -112,6 +171,36 @@ function candidateSummary(market, selected, reasons = []) {
   };
 }
 
+function triageKeyValues(market) {
+  return [
+    market.marketId,
+    market.marketSlug
+  ].filter(Boolean).map((value) => String(value).trim().toLowerCase());
+}
+
+function triageMap(triage) {
+  const lookup = new Map();
+  for (const assessment of triage?.candidate_assessments ?? []) {
+    for (const key of [assessment.marketId, assessment.marketSlug].filter(Boolean)) {
+      lookup.set(String(key).trim().toLowerCase(), assessment);
+    }
+  }
+  return lookup;
+}
+
+function findTriageAssessment(lookup, market) {
+  for (const key of triageKeyValues(market)) {
+    if (lookup.has(key)) {
+      return lookup.get(key);
+    }
+  }
+  return null;
+}
+
+function triageShouldReject(assessment, config) {
+  return Boolean(config.pulse?.aiTriageCanReject) && assessment?.recommended_action === "reject";
+}
+
 function buildCandidates({ markets, monitorState, portfolio, config }) {
   const watchlist = [...new Set([...(config.monitor.watchlist ?? []), ...(monitorState.watchlist ?? [])])];
   const blocklist = [...new Set([...(config.monitor.blocklist ?? []), ...(monitorState.blocklist ?? [])])];
@@ -178,6 +267,9 @@ export class Scheduler {
       ? { ...config, suppressProviderRuntimeArtifacts: true }
       : config;
     this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
+    this.candidateTriageProvider = config.pulse?.aiCandidateTriage
+      ? new CandidateTriageProvider(probabilityConfig)
+      : null;
     this.decisionEngine = new DecisionEngine(config);
     this.riskEngine = new RiskEngine(config, { stateStore });
     this.liveBroker = new LiveBroker(config);
@@ -232,6 +324,84 @@ export class Scheduler {
     const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
     const estimate = await this.probabilityEstimator.estimate({ market, evidence });
     return { market, evidence, estimate };
+  }
+
+  async applyCandidateTriage({ candidateEntries, accumulator, ledger = null }) {
+    if (!this.candidateTriageProvider) {
+      return candidateEntries;
+    }
+    const selected = candidateEntries.filter((item) => item.summary.selected);
+    if (selected.length === 0) {
+      return candidateEntries;
+    }
+
+    try {
+      const triage = await this.candidateTriageProvider.triage({
+        candidates: selected.map((item) => item.market),
+        context: {
+          strategy: this.config.pulse?.strategy,
+          maxCandidates: this.config.pulse?.maxCandidates,
+          maxTradesPerRound: this.config.monitor?.maxTradesPerRound,
+          minLiquidityUsd: this.config.pulse?.minLiquidityUsd,
+          source: accumulator.scan?.source
+        }
+      });
+      accumulator.candidateTriage = triage;
+      const lookup = triageMap(triage);
+
+      for (const entry of candidateEntries) {
+        if (!entry.summary.selected) {
+          continue;
+        }
+        const assessment = findTriageAssessment(lookup, entry.market);
+        if (!assessment) {
+          entry.summary.ai_triage = {
+            status: "missing_assessment"
+          };
+          continue;
+        }
+        entry.summary.ai_triage = {
+          recommended_action: assessment.recommended_action,
+          priority_score: assessment.priority_score,
+          researchability: assessment.researchability,
+          information_advantage: assessment.information_advantage,
+          cluster: assessment.cluster,
+          rationale: assessment.rationale,
+          evidence_gaps: assessment.evidence_gaps
+        };
+        if (triageShouldReject(assessment, this.config)) {
+          entry.summary.selected = false;
+          entry.summary.skipped_reasons.push("ai_triage_reject");
+        }
+        if (ledger) {
+          await ledger.log("candidate.triage", {
+            market: entry.market.marketSlug,
+            action: assessment.recommended_action,
+            score: assessment.priority_score,
+            researchability: assessment.researchability,
+            information_advantage: assessment.information_advantage,
+            cluster: JSON.stringify(assessment.cluster),
+            gaps: assessment.evidence_gaps.join(",") || "none"
+          });
+        }
+      }
+
+      if (ledger) {
+        await ledger.log("candidate.triage_summary", {
+          assessments: triage.candidate_assessments.length,
+          clusters: (triage.clusters ?? []).length,
+          research_gaps: (triage.research_gaps ?? []).join(",") || "none"
+        });
+      }
+      return candidateEntries;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      accumulator.errors.push(`candidate_triage_failed:${message}`);
+      if (ledger) {
+        await ledger.log("candidate.triage_failed", { error: JSON.stringify(message) });
+      }
+      return candidateEntries;
+    }
   }
 
   async getLiveBalanceContext({ mode, confirmation }) {
@@ -473,6 +643,7 @@ export class Scheduler {
       risks: [],
       orders: [],
       errors: [],
+      candidateTriage: null,
       recoveredRun: null
     };
 
@@ -609,6 +780,7 @@ export class Scheduler {
       risks: [],
       orders: [],
       errors: [],
+      candidateTriage: null,
       recoveredRun: null
     };
 
@@ -617,7 +789,7 @@ export class Scheduler {
     try {
       await withTimeout(async () => {
         accumulator.scan = await this.marketSource.scan({
-          limit: limit ?? this.config.scan.marketScanLimit,
+          ...(limit == null ? {} : { limit }),
           noCache: true
         });
         await ledger.logScan(accumulator.scan);
@@ -628,6 +800,7 @@ export class Scheduler {
           portfolio: ledger.portfolio(),
           config: this.config
         });
+        await this.applyCandidateTriage({ candidateEntries, accumulator, ledger });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
         for (const candidate of accumulator.candidates) {
           await ledger.log("candidate", {
@@ -650,10 +823,28 @@ export class Scheduler {
             }
           }
         );
-        accumulator.predictions.push(...predictions.filter(Boolean));
+        const validPredictions = predictions.filter(Boolean);
+        accumulator.predictions.push(...validPredictions);
+        const rankedPredictions = rankPredictionsForExecution({
+          predictions: validPredictions,
+          portfolio: ledger.portfolio(),
+          amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+          decisionEngine: this.decisionEngine
+        });
+        for (const [index, ranked] of rankedPredictions.entries()) {
+          await ledger.log("candidate.ranked", {
+            rank: index + 1,
+            market: ranked.prediction.market.marketSlug,
+            action: ranked.analysis.action,
+            confidence: ranked.analysis.confidence,
+            monthly_return: ranked.analysis.monthlyReturn ?? "n/a",
+            net_edge: ranked.analysis.netEdge ?? "n/a",
+            reason: ranked.analysis.noTradeReason ?? "none"
+          });
+        }
         let orderCount = 0;
         let filledUsdThisRun = 0;
-        for (const prediction of predictions.filter(Boolean)) {
+        for (const { prediction } of rankedPredictions) {
           const result = await this.evaluateAndMaybeSimulatedOrder({
             prediction,
             mode,
@@ -758,6 +949,7 @@ export class Scheduler {
       risks: [],
       orders: [],
       errors: [],
+      candidateTriage: null,
       recoveredRun
     };
 
@@ -778,13 +970,14 @@ export class Scheduler {
 
     try {
       await withTimeout(async () => {
-        accumulator.scan = await this.marketSource.scan({ limit: limit ?? this.config.scan.marketScanLimit });
+        accumulator.scan = await this.marketSource.scan(limit == null ? {} : { limit });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
           monitorState: await this.stateStore.getMonitorState(),
           portfolio: await this.stateStore.getPortfolio(),
           config: this.config
         });
+        await this.applyCandidateTriage({ candidateEntries, accumulator });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
         const selected = candidateEntries.filter((item) => item.summary.selected);
         const predictions = await mapLimit(
@@ -801,10 +994,16 @@ export class Scheduler {
           }
         );
         accumulator.predictions = predictions.filter(Boolean);
+        const rankedPredictions = rankPredictionsForExecution({
+          predictions: accumulator.predictions,
+          portfolio: await this.stateStore.getPortfolio(),
+          amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+          decisionEngine: this.decisionEngine
+        });
         const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ mode, confirmation });
         let orderCount = 0;
         let filledUsdThisRun = 0;
-        for (const prediction of accumulator.predictions) {
+        for (const { prediction } of rankedPredictions) {
           const result = await this.evaluateAndMaybeOrder({
             prediction,
             mode,

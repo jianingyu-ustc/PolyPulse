@@ -141,11 +141,13 @@ function onceRunSummary({ input, market, estimate, decision, risk, order, action
   ].join("\n");
 }
 
-function monitorRunSummary({ runId, mode, scan, candidates, predictions, decisions, risks, orders, errors, recoveredRun, startedAt, completedAt }) {
+function monitorRunSummary({ runId, mode, scan, candidates, predictions, decisions, risks, orders, errors, recoveredRun, startedAt, completedAt, candidateTriage }) {
   const filled = orders.filter((order) => order.status === "filled");
   const blocked = orders.filter((order) => order.status === "blocked" || order.status === "rejected");
   const riskBlocks = risks.flatMap((item) => item.blocked_reasons ?? item.reasons ?? []);
   const uniqueRiskBlocks = [...new Set(riskBlocks)];
+  const triageAssessments = candidateTriage?.candidate_assessments?.length ?? 0;
+  const triageGaps = candidateTriage?.research_gaps?.length ? candidateTriage.research_gaps.join(", ") : "none";
   return [
     "# PolyPulse Monitor Run",
     "",
@@ -159,9 +161,11 @@ function monitorRunSummary({ runId, mode, scan, candidates, predictions, decisio
     `- decisions: ${decisions.length}`,
     `- filled_orders: ${filled.length}`,
     `- blocked_or_rejected_orders: ${blocked.length}`,
+    `- ai_candidate_triage_assessments: ${triageAssessments}`,
     `- recovered_previous_run: ${recoveredRun ? recoveredRun.runId : "none"}`,
     `- errors: ${errors.length ? errors.join("; ") : "none"}`,
     `- risk_blocks: ${uniqueRiskBlocks.length ? uniqueRiskBlocks.join(", ") : "none"}`,
+    `- ai_research_gaps: ${triageGaps}`,
     "",
     "## Orders",
     "",
@@ -394,7 +398,8 @@ export class ArtifactWriter {
     risks,
     orders,
     errors = [],
-    recoveredRun = null
+    recoveredRun = null,
+    candidateTriage = null
   }) {
     const now = new Date();
     const day = (startedAt ?? now.toISOString()).slice(0, 10);
@@ -404,6 +409,7 @@ export class ArtifactWriter {
     const files = {
       markets: path.join(dir, "markets.json"),
       candidates: path.join(dir, "candidates.json"),
+      candidateTriage: path.join(dir, "candidate-triage.json"),
       decisions: path.join(dir, "decisions.json"),
       risk: path.join(dir, "risk.json"),
       orders: path.join(dir, "orders.json"),
@@ -411,6 +417,7 @@ export class ArtifactWriter {
     };
     await writeFile(files.markets, JSON.stringify(redactSecrets(scan), null, 2), "utf8");
     await writeFile(files.candidates, JSON.stringify(redactSecrets(candidates), null, 2), "utf8");
+    await writeFile(files.candidateTriage, JSON.stringify(redactSecrets(candidateTriage), null, 2), "utf8");
     await writeFile(files.decisions, JSON.stringify(redactSecrets(decisions), null, 2), "utf8");
     await writeFile(files.risk, JSON.stringify(redactSecrets(risks), null, 2), "utf8");
     await writeFile(files.orders, JSON.stringify(redactSecrets(orders), null, 2), "utf8");
@@ -436,7 +443,8 @@ export class ArtifactWriter {
       errors,
       recoveredRun,
       startedAt,
-      completedAt
+      completedAt,
+      candidateTriage: redactSecrets(candidateTriage)
     }), "utf8");
 
     await this.cleanupArtifacts();
@@ -452,6 +460,7 @@ export class ArtifactWriter {
       dir: path.relative(process.cwd(), dir),
       markets: artifact("monitor-markets", files.markets),
       candidates: artifact("monitor-candidates", files.candidates),
+      candidateTriage: artifact("monitor-candidate-triage", files.candidateTriage),
       decisions: artifact("monitor-decisions", files.decisions),
       risk: artifact("monitor-risk", files.risk),
       orders: artifact("monitor-orders", files.orders),

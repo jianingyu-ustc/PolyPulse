@@ -9,11 +9,13 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 ## 项目概览
 
-核心链路：抓取当前 Polymarket 市场话题，收集证据，调用配置的 AI provider 估算事件真实发生概率，按 Predict-Raven `pulse-direct` 口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
+核心链路：抓取当前 Polymarket 市场话题，规则预筛后用 AI provider 做候选 triage，收集证据，调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
 
-Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
+Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界；话题发现和证据抓取仍主要是规则和结构化 API 流程，不是 AI 驱动的全市场研究流水线。已对齐的 AI 使用边界是：provider 对候选池输出语义 triage、可研究性、信息优势和证据缺口判断；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
+
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；真实 monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
@@ -92,7 +94,7 @@ Codex 提示词版本：
 
 ### Predict-Raven Pulse 策略配置
 
-默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径：
+默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径。这里的“兼容”只表示职责分离和收益计算口径相近，不表示 PolyPulse 已实现完整 Predict-Raven 方法：
 
 ```bash
 PULSE_STRATEGY=pulse-direct
@@ -100,15 +102,43 @@ PULSE_MIN_LIQUIDITY_USD=5000
 PULSE_MAX_CANDIDATES=20
 PULSE_REPORT_CANDIDATES=4
 PULSE_BATCH_CAP_PCT=0.2
+PULSE_AI_CANDIDATE_TRIAGE=true
+PULSE_AI_TRIAGE_CAN_REJECT=true
 PULSE_FETCH_DIMENSIONS=volume24hr,liquidity,startDate,competitive
 PULSE_REQUIRE_EVIDENCE_GUARD=false
 ```
 
 这些配置的含义：
 
-- `market topics` 默认按 Pulse-compatible 候选池筛选：最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
+- `market topics` 默认按 Pulse-compatible 候选池筛选：候选数默认取 `PULSE_MAX_CANDIDATES`，显式传 `--limit` 时由 `--limit` 覆盖；最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
+- `market topics --quick` 用于轻量实时可读性检查，会关闭 pulse-compatible 候选筛选；不传 `--limit` 时返回数量默认取 `MARKET_SCAN_LIMIT`。
+- `PULSE_AI_CANDIDATE_TRIAGE=true` 时，`monitor run` 会在规则预筛后先调用 provider 对候选池做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断；`PULSE_AI_TRIAGE_CAN_REJECT=true` 时，provider 标为 `reject` 的候选会被记录为 `ai_triage_reject` 并跳过后续概率估算。
 - `predict`、`trade once` 和 `monitor run` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
 - `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；`live real` 仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
+
+#### 与 Predict-Raven 的关系和当前差距
+
+PolyPulse 当前和 Predict-Raven 相同或接近的部分：
+
+- AI provider 只输出 `CandidateTriage` 或 `ProbabilityEstimate`：候选语义 triage、概率估计、置信度、证据引用、不确定性因素、可研究性、信息优势和证据缺口。
+- 代码负责 fee、edge、net edge、quarter Kelly、monthly return、候选排序、batch cap、风控和执行。
+- provider 输出不能控制 broker、token 改写、交易金额或真实订单。
+- `monitor run` 在规则预筛后会调用 AI candidate triage，对候选池做语义聚类、主题优先级、可研究性、信息优势和证据缺口判断；`reject` 候选会被记录为 `ai_triage_reject`，不进入后续概率估算。
+- `monitor run` 对规则预筛后的候选先调用 provider 生成概率估计，再由代码按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生收益指标排序后执行。
+- provider prompt 要求区分盘口价格和独立证据，并在 `reasoning_summary` / `uncertainty_factors` 中说明可研究性、外部证据充分性和相对盘口的信息优势；不可研究或信息优势不足时必须降为 `low` confidence。
+- 真实 monitor artifact 会保留 `candidate-triage.json`；live simulated monitor 会把 `candidate.triage`、`candidate.triage_summary` 和 `candidate.triage_failed` 追加到人类可读日志。
+- `live real` 仍必须通过 env preflight、余额/allowance 检查、账户审计、`confirm LIVE` 和 `RiskEngine`。
+
+PolyPulse 当前没有实现的完整 Predict-Raven 能力：
+
+- 还没有用 AI 主动抓取新闻、社媒、RSS、体育数据、宏观日历、链上数据或其他外部信号来发现新话题，并映射回 Polymarket 市场。
+- AI triage 只覆盖规则预筛后的本轮候选；还没有对 Polymarket 全市场做跨页语义发现、主题扩展、重复事件合并和全局机会地图。
+- 当前 evidence 主要来自 market metadata 和 resolution rules；AI 会指出 `evidence_gaps`，但系统还没有按这些 gap 自动抓取外部公开证据。
+- 没有按市场类别接入专门数据源、专门特征或专门预测模型，例如体育赛程/伤病、宏观日历、天气数据、链上数据或公司财报。
+- 当前 topic 入口仍是代码规则预筛：流动性、CLOB token、active/tradable、短期价格市场过滤、watchlist/blocklist、已交易/已持仓排除；AI 只在预筛之后做 triage。
+- 当前机会排序已使用 AI 概率衍生的收益指标，但仍没有完整概率校准、downside risk ranking、跨轮资金分配优化和收益归因系统。
+
+因此，README 中的 Predict-Raven 相关表述应理解为“借鉴 Predict-Raven 的职责边界和收益计算口径”，不是“方法完全相同”。这些差距对应的改进项放在下面的 todo 中。
 
 Codex 提示词版本：
 
@@ -150,32 +180,79 @@ npm run agent:check -- --env-file .env --expect codex
 
 #### Codex live runtime 提示词
 
-当前代码中真正启动 `codex` 进程的地方只有两类：
+当前代码中真正启动 `codex` 进程的地方只有三类：
 
 | 调用点 | 命令 | 是否有 prompt | 用途 |
 | --- | --- | --- | --- |
 | `scripts/check-agent-config.js` | `codex --version` | 否 | 只检查 Codex CLI 是否可用，不传入 prompt。 |
+| `src/runtime/candidate-triage-runtime.js` | `codex exec ... -` | 是 | 在 `monitor run` 的候选池阶段做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断。 |
 | `src/runtime/codex-runtime.js` | `codex exec ... -` | 是 | 在 `predict`、`trade once`、`monitor run` 的预测阶段估算概率。 |
 
-除 skill 文件本身外，所有传给 Codex 的 runtime prompt 都由 `src/runtime/codex-runtime.js#buildPrompt` 动态生成。`prompts/probability-estimation.md` 是概率估算口径参考，不是当前 `codex exec` 直接读取的 stdin prompt。
+除 skill 文件本身外，所有传给 Codex 的 runtime prompt 都由两处动态生成：`src/runtime/candidate-triage-runtime.js#buildPrompt` 生成候选 triage prompt，`src/runtime/codex-runtime.js#buildPrompt` 生成单市场概率估算 prompt。`prompts/probability-estimation.md` 是概率估算口径参考，不是当前 `codex exec` 直接读取的 stdin prompt。
 
-当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`predict`、`trade once` 和 `monitor run` 会在每个候选市场预测阶段调用真实 Codex CLI。实际命令形态是：
+当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`monitor run` 会先在候选池阶段调用一次真实 Codex CLI 做 candidate triage，然后在每个保留候选的预测阶段再次调用真实 Codex CLI 估算概率；`predict` 和 `trade once` 只调用单市场概率估算 prompt。实际命令形态是：
 
 ```bash
 codex exec \
   --skip-git-repo-check \
   -C <repoRoot> \
   -s read-only \
-  --output-schema <tempDir>/probability-estimate.schema.json \
+  --output-schema <tempDir>/<candidate-triage-or-probability-estimate>.schema.json \
   -o <tempDir>/provider-output.json \
   --color never \
   [-m <CODEX_MODEL>] \
   -
 ```
 
-最后的 `-` 表示 prompt 通过 stdin 传入。运行时会把当前 market snapshot、evidence list 和 JSON schema 写到临时目录；Codex 的输出必须写成 `ProbabilityEstimate` JSON，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
+最后的 `-` 表示 prompt 通过 stdin 传入。candidate triage 运行时会把候选市场快照和 `CandidateTriage` schema 写到临时目录；概率估算运行时会把当前 market snapshot、evidence list 和 `ProbabilityEstimate` schema 写到临时目录。Codex 的输出必须写成对应 JSON，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
 
-当前默认 `CODEX_SKILL_LOCALE=zh` 时，传给 Codex 的提示词模板如下；其中 `<...>` 是运行时动态填入的路径或 JSON：
+当前默认 `CODEX_SKILL_LOCALE=zh` 时，candidate triage 阶段传给 Codex 的提示词模板如下；其中 `<...>` 是运行时动态填入的路径或 JSON：
+
+```text
+你是 PolyPulse 的 Polymarket 候选市场 triage 运行时。
+当前 provider：codex
+必须先阅读这些 skill 文件，再做候选 triage：
+- <skill id>: <skill SKILL.md path>
+
+必须先阅读这份风险控制文档：
+- <repoRoot>/docs/specs/risk-controls.md
+
+只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
+不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单，不要抓取外部网页。
+
+输入文件：
+- Candidates JSON: <tempDir>/candidates.json
+
+运行上下文：
+<JSON: strategy, maxCandidates, maxTradesPerRound, minLiquidityUsd, source>
+
+候选市场快照：
+<JSON array: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+active, closed, tradable, riskFlags>
+
+任务：
+1. 对规则预筛后的候选做语义聚类、主题优先级和候选解释。
+2. 判断每个候选是否可研究、是否可能有独立外部证据、相对盘口是否可能存在信息优势。
+3. 输出每个候选的 recommended_action：prioritize、watch、defer 或 reject。
+4. reject 只能用于结算问题模糊、不可研究、明显缺少独立外部证据或信息优势很低的候选。
+5. 为每个候选列出 evidence_gaps；这些是后续应该补充的外部信号类别，不是你编造出来的证据。
+
+硬规则：
+1. 只能输出合法 JSON，不要输出 markdown 代码块。
+2. 不允许编造事实、概率或证据。
+3. 不允许输出交易方向、token、仓位金额、broker 参数或订单。
+4. 不要直接估算 ai_probability；单市场概率估算由后续 ProbabilityEstimate runtime 完成。
+5. priority_score 只表示研究/执行优先级，不是交易信号。
+
+输出字段必须匹配 CandidateTriage provider schema：
+- candidate_assessments
+- clusters
+- research_gaps
+只输出最终 JSON。
+```
+
+单市场概率估算阶段传给 Codex 的提示词模板如下：
 
 ```text
 你是 PolyPulse 的 Polymarket 概率估算运行时。
@@ -205,10 +282,12 @@ relevanceScore, credibility, status, summary>
 硬规则：
 1. 只能输出合法 JSON，不要输出 markdown 代码块。
 2. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入 Evidence JSON。
-3. 证据不足、来源陈旧、结算规则不清或市场不可交易时，confidence 必须为 low，并把 uncertainty_factors 写清楚。
-4. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
-5. 按 predict-raven pulse-direct 的分工处理：你只给概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
-6. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
+3. 必须区分盘口价格和独立证据；盘口价格只能作为对照基准，不能当作支持事件发生的证据。
+4. 必须判断该市场是否可研究、证据是否足够独立新鲜、是否存在相对盘口的信息优势；把判断写进 reasoning_summary。
+5. 证据不足、来源陈旧、结算规则不清、不可研究、信息优势不足或市场不可交易时，confidence 必须为 low，并在 uncertainty_factors 中写出 insufficient_external_evidence、low_information_advantage 或 unresearchable_market 等原因。
+6. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
+7. 按 predict-raven pulse-direct 的分工处理：你只给概率、证据质量和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
+8. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
 
 输出字段必须匹配 ProbabilityEstimate provider schema：
 - ai_probability
@@ -223,7 +302,53 @@ relevanceScore, credibility, status, summary>
 
 如果把 `CODEX_SKILL_LOCALE` 改为 `en`，同一结构会使用英文模板。`CODEX_SKILLS` 决定 prompt 中列出的 skill 文件，默认是 `polypulse-market-agent`；`CODEX_MODEL` 为空时使用 Codex CLI 默认模型；`PROVIDER_TIMEOUT_SECONDS=0` 表示 Codex provider 子进程不设置单独超时，只受外层 monitor run timeout 约束。
 
-英文 locale 的完整 runtime prompt 模板如下：
+英文 locale 的 candidate triage prompt 模板如下：
+
+```text
+You are the candidate-market triage runtime for PolyPulse, a Polymarket analysis system.
+Active provider: codex
+Read these selected skill files before triaging candidates:
+- <skill id>: <skill SKILL.md path>
+
+Read this risk control document before triaging:
+- <repoRoot>/docs/specs/risk-controls.md
+
+Only inspect the listed skill files, this risk document, the input JSON file, and the structured context below.
+Do not scan unrelated repository files, do not run tests, do not modify code, do not place orders, and do not fetch external webpages.
+
+Input files:
+- Candidates JSON: <tempDir>/candidates.json
+
+Runtime context:
+<JSON: strategy, maxCandidates, maxTradesPerRound, minLiquidityUsd, source>
+
+Candidate market snapshots:
+<JSON array: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+active, closed, tradable, riskFlags>
+
+Task:
+1. Perform semantic clustering, theme priority, and candidate explanation over the rule-prefiltered candidates.
+2. Judge whether each candidate is researchable, whether independent external evidence is likely available, and whether there may be information advantage versus the market price.
+3. Output each candidate's recommended_action: prioritize, watch, defer, or reject.
+4. Use reject only when resolution is vague, the market is unresearchable, independent external evidence is clearly lacking, or information advantage is very low.
+5. List evidence_gaps for each candidate; these are external signal categories to collect later, not fabricated evidence.
+
+Hard rules:
+1. Output valid JSON only. Do not wrap it in markdown fences.
+2. Do not fabricate facts, probabilities, or evidence.
+3. Do not output trade side, token, sizing, broker parameters, or orders.
+4. Do not estimate ai_probability directly; the per-market ProbabilityEstimate runtime handles probabilities later.
+5. priority_score is research/execution priority only, not a trading signal.
+
+The output must match the CandidateTriage provider schema:
+- candidate_assessments
+- clusters
+- research_gaps
+Output final JSON only.
+```
+
+英文 locale 的单市场概率估算 prompt 模板如下：
 
 ```text
 You are the probability estimation runtime for PolyPulse, a Polymarket analysis system.
@@ -253,10 +378,12 @@ relevanceScore, credibility, status, summary>
 Hard rules:
 1. Output valid JSON only. Do not wrap it in markdown fences.
 2. Do not fabricate evidence; key_evidence and counter_evidence must come from the input Evidence JSON.
-3. If evidence is insufficient, stale, ambiguous, or the market is not tradable, confidence must be low and uncertainty_factors must explain why.
-4. ai_probability is the probability that the Yes outcome resolves true, from 0 to 1.
-5. Follow the predict-raven pulse-direct separation of duties: provide probability and evidence judgment only; code computes fees, net edge, quarter Kelly, monthly return, ranking, and risk controls.
-6. Do not output trade instructions, token rewrites, sizing, or broker parameters.
+3. Separate market prices from independent evidence; market prices are a comparison baseline, not supporting evidence that the event will resolve true.
+4. Assess whether the market is researchable, whether the evidence is independent and fresh enough, and whether there is an information advantage versus the market price; include that assessment in reasoning_summary.
+5. If evidence is insufficient, stale, ambiguous, unresearchable, low-information-advantage, or the market is not tradable, confidence must be low and uncertainty_factors must name reasons such as insufficient_external_evidence, low_information_advantage, or unresearchable_market.
+6. ai_probability is the probability that the Yes outcome resolves true, from 0 to 1.
+7. Follow the predict-raven pulse-direct separation of duties: provide probability, evidence-quality, and information-advantage judgment only; code computes fees, net edge, quarter Kelly, monthly return, ranking, and risk controls.
+8. Do not output trade instructions, token rewrites, sizing, or broker parameters.
 
 The output must match the ProbabilityEstimate provider schema:
 - ai_probability
@@ -293,7 +420,7 @@ node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-
 tail -n 80 /home/PolyPulse/logs/polypulse-simulated-monitor.log
 ```
 
-`live simulated trade once` 和 `live simulated monitor` 使用同一套进程内模拟账本逻辑：初始资金都来自 `SIMULATED_WALLET_BALANCE_USD`，每次进程启动都会写同样的 session header，执行过程都追加到 `SIMULATED_MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，进程结束后模拟仓位丢失；`monitor run --loop` 在同一进程内跨轮保留模拟仓位，并按间隔继续 mark-to-market、复核和平仓。
+`live simulated trade once` 和 `live simulated monitor` 使用同一套进程内模拟账本逻辑：初始资金都来自 `SIMULATED_WALLET_BALANCE_USD`，每次进程启动都会写同样的 session header，执行过程都追加到 `SIMULATED_MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，不做候选池 AI triage，进程结束后模拟仓位丢失；`monitor run --loop` 在同一进程内跨轮保留模拟仓位，并按间隔继续 mark-to-market、复核和平仓。
 
 `live real` 会连接真实钱包，并可能在风控允许后提交真实订单：
 
@@ -324,7 +451,9 @@ node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE -
 `live simulated monitor` 的行为：
 
 - 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
-- 对候选市场调用配置的真实 AI provider 预测胜率，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
+- 规则预筛后先调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
+- 对候选市场调用配置的真实 AI provider 预测胜率、证据质量、可研究性和信息优势，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
+- 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后执行；AI 不输出交易指令或 broker 参数。
 - 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
 - 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
 - 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
@@ -407,7 +536,25 @@ header 字段含义：
 | `positions.reviewed` | `closed_positions` | 本进程内累计已平仓交易数量。 |
 | `candidate` | `market` | 正在评估的 market slug。 |
 | `candidate` | `selected` | 是否进入预测和风控链路。 |
-| `candidate` | `reasons` | 未选中原因，例如 `watchlist_not_matched`、`blocklisted`、`already_traded_market_or_event`、`existing_position_market_or_event`；`none` 表示进入候选。 |
+| `candidate` | `reasons` | 未选中原因，例如 `watchlist_not_matched`、`blocklisted`、`already_traded_market_or_event`、`existing_position_market_or_event`、`ai_triage_reject`；`none` 表示进入候选。 |
+| `candidate.triage` | `market` | 完成 AI triage 的 market slug。 |
+| `candidate.triage` | `action` | AI triage 建议：`prioritize`、`watch`、`defer` 或 `reject`。 |
+| `candidate.triage` | `score` | AI triage 的研究/执行优先级分数；不是概率，也不是交易信号。 |
+| `candidate.triage` | `researchability` | AI 对候选可研究性的判断：`low`、`medium` 或 `high`。 |
+| `candidate.triage` | `information_advantage` | AI 对相对盘口潜在信息优势的判断：`low`、`medium` 或 `high`。 |
+| `candidate.triage` | `cluster` | AI 给候选分配的语义主题。 |
+| `candidate.triage` | `gaps` | 后续应补充的外部证据类别；`none` 表示未列出。 |
+| `candidate.triage_summary` | `assessments` | 本轮 AI triage 覆盖的候选数。 |
+| `candidate.triage_summary` | `clusters` | 本轮 AI triage 输出的主题簇数量。 |
+| `candidate.triage_summary` | `research_gaps` | 本轮候选池层面的共性证据缺口。 |
+| `candidate.triage_failed` | `error` | AI triage 子进程失败原因；失败时 monitor 会保留规则预筛候选继续执行。 |
+| `candidate.ranked` | `rank` | 完成 AI 概率估算后，本轮执行排序名次。 |
+| `candidate.ranked` | `market` | 被排序的 market slug。 |
+| `candidate.ranked` | `action` | 代码基于 AI 概率和盘口计算出的候选动作。 |
+| `candidate.ranked` | `confidence` | AI provider 输出的置信度。 |
+| `candidate.ranked` | `monthly_return` | 排序使用的月化收益估计；不适用时为 `n/a`。 |
+| `candidate.ranked` | `net_edge` | 排序使用的净 edge；不适用时为 `n/a`。 |
+| `candidate.ranked` | `reason` | 跳过原因或 `none`。 |
 | `prediction` | `phase` | 预测阶段；`open-scan` 表示开仓扫描，`position-review` 表示已有持仓复核。 |
 | `prediction` | `market` | market slug。 |
 | `prediction` | `ai_probability` | AI provider 给出的 Yes outcome 概率。 |
@@ -549,10 +696,12 @@ Codex 提示词版本：
 
 - [ ] 建立预测效果评估报表：按 category、tag、到期时间、流动性分桶统计 hit rate、Brier score、calibration、edge 误差、真实结算收益率和年化/月化收益率。
 - [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
-- [ ] 扩展证据抓取以提高概率质量：补 resolution source、官方链接、外部公开证据、Polymarket 事件详情和评论，并为每条证据记录 freshness、relevance、source quality。
-- [ ] 增加概率校准层：按市场类型、时间跨度、流动性和证据质量对 AI 概率做校准，输出 raw probability、calibrated probability、confidence 和校准原因。
-- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
-- [ ] 改进收益排序：先生成全轮推荐，再按 calibrated edge、fee、slippage、quarter Kelly、monthly return、days-to-resolution 和 downside risk 排序，而不是逐候选即时执行。
+- [ ] 增加 AI 外部话题发现：在当前“规则预筛后的 AI candidate triage”之外，让 provider 基于新闻/RSS/体育/宏观/链上等外部信号提出可映射到 Polymarket 的新主题，但仍不允许 provider 输出 broker 参数或订单。
+- [ ] 按 `CandidateTriage.evidence_gaps` 自动扩展证据抓取：补 resolution source、官方链接、外部公开证据、Polymarket 事件详情和评论、新闻/RSS/体育/宏观/链上等类别数据，并为每条证据记录 freshness、relevance、source quality。
+- [ ] 增加市场类别专用研究适配器：体育赛程/伤病、宏观日历、天气数据、链上指标、公司财报和监管公告等，供 AI 概率估算引用。
+- [ ] 增加概率校准层：按市场类型、时间跨度、流动性、证据质量、AI triage researchability / information_advantage 对 AI 概率做校准，输出 raw probability、calibrated probability、confidence 和校准原因。
+- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score 和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
+- [ ] 进一步改进收益排序：在当前“先预测全轮候选、再按 AI 衍生收益指标排序执行”的基础上，加入 calibrated edge、fee、slippage、quarter Kelly、monthly return、days-to-resolution、downside risk 和跨轮资金占用的统一 ranking。
 - [ ] 把 order book 深度、fee-rate、spread 和滑点纳入 expected return，避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 增加收益归因 artifact：区分预测误差、市场价格变化、fee、slippage、仓位大小、持仓时间和退出决策对最终收益的影响。

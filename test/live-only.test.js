@@ -77,6 +77,24 @@ async function requireGamma(t, config) {
   }
 }
 
+function gammaMarketRow(index) {
+  return {
+    id: String(10_000 + index),
+    slug: `pulse-candidate-${index}`,
+    question: `Will pulse candidate ${index} resolve yes?`,
+    outcomes: JSON.stringify(["Yes", "No"]),
+    clobTokenIds: JSON.stringify([`yes-token-${index}`, `no-token-${index}`]),
+    outcomePrices: JSON.stringify([0.4, 0.6]),
+    liquidity: 10000 + index,
+    volume24hr: 100 + index,
+    endDate: "2026-12-31T00:00:00.000Z",
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    resolutionRules: "Resolves according to test rules."
+  };
+}
+
 test("live env accepts only Polymarket as the market source", async () => {
   const { config } = await createConfig();
   const report = validateEnvConfig(config, { mode: "live" });
@@ -100,6 +118,27 @@ test("CLI rejects removed source override", async () => {
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr || result.stdout, /unsupported_option/);
+});
+
+test("pulse scan defaults to PULSE_MAX_CANDIDATES unless --limit overrides it", async () => {
+  const { config } = await createConfig({
+    PULSE_MAX_CANDIDATES: "3",
+    MARKET_SCAN_LIMIT: "10",
+    MARKET_PAGE_SIZE: "10",
+    MARKET_MIN_FETCHED: "10",
+    MARKET_CACHE_TTL_SECONDS: "0"
+  });
+  const source = new PolymarketMarketSource(config, new FileStateStore(config));
+  const rows = Array.from({ length: 10 }, (_, index) => gammaMarketRow(index + 1));
+  source.fetchMarketPage = async ({ limit }) => rows.slice(0, limit);
+
+  const defaultScan = await source.scan({ noCache: true });
+  assert.equal(defaultScan.totalReturned, 3);
+  assert.equal(defaultScan.pulse.strategy, "pulse-direct");
+  assert.equal(defaultScan.pulse.postFilterCount, 10);
+
+  const explicitScan = await source.scan({ noCache: true, limit: 5 });
+  assert.equal(explicitScan.totalReturned, 5);
 });
 
 test("market source reads current Polymarket markets from Gamma", async (t) => {
