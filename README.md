@@ -440,7 +440,25 @@ Codex 提示词版本：
 
 ### 一次性验收
 
-将完整 pipeline 拆分为独立步骤，每步可单独执行验证：
+#### 一键执行全部 7 步
+
+```bash
+# 自动选取市场，顺序执行 Step 1-7
+node scripts/acceptance.js --env-file .env
+
+# 手动指定市场
+node scripts/acceptance.js --env-file .env --market <market-slug>
+
+# 跳过 AI 话题发现（节省时间）
+node scripts/acceptance.js --env-file .env --skip-discovery
+
+# 指定交易金额上限
+node scripts/acceptance.js --env-file .env --max-amount 2
+```
+
+脚本会依次执行：环境检查 → 规则扫描 → AI 话题发现 → 证据收集 → AI 预测 → 风控 → 交易。
+每步日志保存到 `runtime-artifacts/acceptance-runs/<timestamp>/`，失败时中断并输出原因。
+`live real` 模式下 Step 7 交易不会自动执行，需手动操作。
 
 #### Step 1: 环境检查
 
