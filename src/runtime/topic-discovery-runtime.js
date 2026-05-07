@@ -81,7 +81,7 @@ function buildTopicDiscoverySchema() {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["topic", "category", "signal_source", "rationale", "search_terms"],
+          required: ["topic", "category", "signal_source", "rationale", "search_terms", "urgency", "confidence"],
           properties: {
             topic: { type: "string", minLength: 1 },
             category: { type: "string", enum: ["politics", "sports", "crypto", "tech", "finance", "economics", "weather", "culture", "geopolitics", "other"] },
