@@ -214,6 +214,70 @@ test("simulated monitor run uses log-only in-memory state instead of persistent 
   assert.match(log, /round\.end/);
 });
 
+test("simulated trade once uses the same in-memory ledger and human log format as monitor", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-once-"));
+  const config = await configForTest(dir);
+  const inputMarket = market({ yesPrice: 0.2 });
+  const forbiddenStateStore = new Proxy({}, {
+    get(_target, key) {
+      throw new Error(`stateStore should not be used by simulated trade once: ${String(key)}`);
+    }
+  });
+  const forbiddenArtifactWriter = new Proxy({}, {
+    get(_target, key) {
+      throw new Error(`artifactWriter should not be used by simulated trade once: ${String(key)}`);
+    }
+  });
+  const scheduler = new Scheduler({
+    config,
+    stateStore: forbiddenStateStore,
+    artifactWriter: forbiddenArtifactWriter,
+    marketSource: {
+      async getMarket(id, request = {}) {
+        assert.equal(id, inputMarket.marketId);
+        assert.equal(request.noCache, true);
+        return inputMarket;
+      }
+    }
+  });
+  scheduler.evidenceCrawler = {
+    async collect({ noCache }) {
+      assert.equal(noCache, true);
+      return [
+        { status: "fetched", relevanceScore: 1 },
+        { status: "fetched", relevanceScore: 1 }
+      ];
+    }
+  };
+  scheduler.probabilityEstimator = {
+    async estimate({ market: estimateMarket }) {
+      return highYesEstimate(estimateMarket);
+    }
+  };
+
+  const result = await scheduler.runSimulatedTradeOnce({
+    mode: "live",
+    confirmation: "LIVE",
+    marketId: inputMarket.marketId,
+    maxAmountUsd: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "simulated-orders");
+  assert.equal(result.artifact, config.simulatedMonitorLogPath);
+  assert.equal(result.performance.cashUsd, 99);
+  assert.equal(result.performance.openPositions, 1);
+  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  assert.match(log, /simulated live monitor session started/);
+  assert.match(log, /round\.start/);
+  assert.match(log, /topics\.fetched/);
+  assert.match(log, /candidate/);
+  assert.match(log, /prediction/);
+  assert.match(log, /risk/);
+  assert.match(log, /open\.filled/);
+  assert.match(log, /round\.end/);
+});
+
 test("simulated monitor closes positions by signal and records performance", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-close-"));
   const config = await configForTest(dir);

@@ -237,7 +237,8 @@ async function commandTradeOnce(args) {
     confirmation
   });
   print({
-    ok: true,
+    ok: result.ok ?? true,
+    status: result.status,
     mode: result.mode,
     provider: result.provider,
     effectiveProvider: result.effectiveProvider,
@@ -250,7 +251,8 @@ async function commandTradeOnce(args) {
     quarter_kelly_pct: result.decision?.quarterKellyPct,
     monthly_return: result.decision?.monthlyReturn,
     action: result.action,
-    artifact: result.artifact
+    artifact: result.artifact,
+    log: result.log
   });
 }
 

@@ -133,7 +133,7 @@ export class ProbabilityEstimator {
         generatedAt,
         missingEvidence: [...new Set(uncertainty)].filter((item) => item.includes("evidence")),
         evidenceCount: evidenceItems.length,
-        promptTemplate: "prompts/probability-estimation.md"
+        promptTemplate: "src/runtime/codex-runtime.js#buildPrompt"
       }
     });
   }

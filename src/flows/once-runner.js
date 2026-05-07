@@ -5,6 +5,7 @@ import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
+import { Scheduler } from "../scheduler/scheduler.js";
 
 function oneShotAction({ mode, risk, orderResult }) {
   if (!risk.allowed || !risk.order || orderResult?.status === "blocked") {
@@ -45,6 +46,15 @@ export async function runTradeOnce({
     confirm_live: confirmation === "LIVE",
     env: summarizeEnvConfig(context.config, { mode })
   };
+  if (context.config.liveWalletMode === "simulated") {
+    return await new Scheduler(context).runSimulatedTradeOnce({
+      mode,
+      confirmation,
+      marketId,
+      side,
+      maxAmountUsd: Number(maxAmountUsd)
+    });
+  }
   const { market, evidence, estimate } = await buildPrediction(context, marketId);
   const portfolio = await context.stateStore.getPortfolio();
   const decisionEngine = new DecisionEngine(context.config);

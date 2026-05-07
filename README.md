@@ -13,7 +13,7 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex / Claude Code runtime 只允许输出 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责概率和证据判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。`live simulated monitor` 是例外：它的交易账本只存在内存中，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
@@ -150,7 +150,16 @@ npm run agent:check -- --env-file .env --expect codex
 
 #### Codex live runtime 提示词
 
-当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`predict`、`trade once` 和 `monitor run` 会在每个候选市场预测阶段调用真实 Codex CLI。调用入口是 `src/runtime/codex-runtime.js`，实际命令形态是：
+当前代码中真正启动 `codex` 进程的地方只有两类：
+
+| 调用点 | 命令 | 是否有 prompt | 用途 |
+| --- | --- | --- | --- |
+| `scripts/check-agent-config.js` | `codex --version` | 否 | 只检查 Codex CLI 是否可用，不传入 prompt。 |
+| `src/runtime/codex-runtime.js` | `codex exec ... -` | 是 | 在 `predict`、`trade once`、`monitor run` 的预测阶段估算概率。 |
+
+除 skill 文件本身外，所有传给 Codex 的 runtime prompt 都由 `src/runtime/codex-runtime.js#buildPrompt` 动态生成。`prompts/probability-estimation.md` 是概率估算口径参考，不是当前 `codex exec` 直接读取的 stdin prompt。
+
+当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`predict`、`trade once` 和 `monitor run` 会在每个候选市场预测阶段调用真实 Codex CLI。实际命令形态是：
 
 ```bash
 codex exec \
@@ -214,6 +223,52 @@ relevanceScore, credibility, status, summary>
 
 如果把 `CODEX_SKILL_LOCALE` 改为 `en`，同一结构会使用英文模板。`CODEX_SKILLS` 决定 prompt 中列出的 skill 文件，默认是 `polypulse-market-agent`；`CODEX_MODEL` 为空时使用 Codex CLI 默认模型；`PROVIDER_TIMEOUT_SECONDS=0` 表示 Codex provider 子进程不设置单独超时，只受外层 monitor run timeout 约束。
 
+英文 locale 的完整 runtime prompt 模板如下：
+
+```text
+You are the probability estimation runtime for PolyPulse, a Polymarket analysis system.
+Active provider: codex
+Read these selected skill files before estimating:
+- <skill id>: <skill SKILL.md path>
+
+Read this risk control document before estimating:
+- <repoRoot>/docs/specs/risk-controls.md
+
+Only inspect the listed skill files, this risk document, the input JSON files, and the structured context below.
+Do not scan unrelated repository files, do not run tests, do not modify code, and do not place orders.
+
+Input files:
+- Market JSON: <tempDir>/market.json
+- Evidence JSON: <tempDir>/evidence.json
+
+Market snapshot:
+<JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+active, closed, tradable, riskFlags>
+
+Evidence summary:
+<JSON array: evidenceId, source, title, sourceUrl, timestamp,
+relevanceScore, credibility, status, summary>
+
+Hard rules:
+1. Output valid JSON only. Do not wrap it in markdown fences.
+2. Do not fabricate evidence; key_evidence and counter_evidence must come from the input Evidence JSON.
+3. If evidence is insufficient, stale, ambiguous, or the market is not tradable, confidence must be low and uncertainty_factors must explain why.
+4. ai_probability is the probability that the Yes outcome resolves true, from 0 to 1.
+5. Follow the predict-raven pulse-direct separation of duties: provide probability and evidence judgment only; code computes fees, net edge, quarter Kelly, monthly return, ranking, and risk controls.
+6. Do not output trade instructions, token rewrites, sizing, or broker parameters.
+
+The output must match the ProbabilityEstimate provider schema:
+- ai_probability
+- confidence: low | medium | high
+- reasoning_summary
+- key_evidence
+- counter_evidence
+- uncertainty_factors
+- freshness_score
+Output final JSON only.
+```
+
 Codex 提示词版本：
 
 ```text
@@ -235,8 +290,10 @@ node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 
 ```bash
 node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-find runtime-artifacts -type f | sort | tail -n 30
+tail -n 80 /home/PolyPulse/logs/polypulse-simulated-monitor.log
 ```
+
+`live simulated trade once` 和 `live simulated monitor` 使用同一套进程内模拟账本逻辑：初始资金都来自 `SIMULATED_WALLET_BALANCE_USD`，每次进程启动都会写同样的 session header，执行过程都追加到 `SIMULATED_MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，进程结束后模拟仓位丢失；`monitor run --loop` 在同一进程内跨轮保留模拟仓位，并按间隔继续 mark-to-market、复核和平仓。
 
 `live real` 会连接真实钱包，并可能在风控允许后提交真实订单：
 
@@ -271,11 +328,21 @@ node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE -
 - 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
 - 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
 - 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
-- 程序退出后不保留模拟仓位、现金、交易状态或 JSON monitor artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+- `trade once` 和 `monitor run` 在 live simulated 下共用同一套初始资金、日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留模拟仓位。
+- 程序退出后不保留模拟仓位、现金、交易状态或 JSON execution artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
+2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存模拟账本自动开仓/平仓，但不连接真实钱包、不提交真实订单；程序退出后只保留人类可读 log。
+3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
+4. 启动后请汇总 monitor 状态、风控状态、artifact 或 simulated log 位置。
+```
 
 #### Simulated Monitor Log 格式
 
-`SIMULATED_MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 simulated monitor 会先写入 session header：
+`SIMULATED_MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 live simulated `trade once` 或 `monitor run` 都会先写入 session header：
 
 ```text
 ================================================================================
@@ -393,15 +460,6 @@ header 字段含义：
 | `round.end` | `win_rate` | 本进程内平仓胜率；没有已分胜负平仓时为 `n/a`。 |
 | `round.end` | `max_drawdown_usd` | 本进程内模拟权益相对高水位的最大回撤美元值。 |
 | `round.end` | `errors` | 本轮错误摘要；`none` 表示无错误。 |
-
-Codex 提示词版本：
-
-```text
-1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
-2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存模拟账本自动开仓/平仓，但不连接真实钱包、不提交真实订单；程序退出后只保留人类可读 log。
-3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
-4. 启动后请汇总 monitor 状态、风控状态、artifact 或 simulated log 位置。
-```
 
 ### Monitor 管理
 
