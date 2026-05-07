@@ -1,3 +1,66 @@
+/**
+ * CodexRuntime (概率估算)
+ *
+ * AI 概率估算运行时：综合市场信息和全部证据，估算事件在结算日发生的概率。
+ * 对齐 Predict-Raven pulse-direct 的概率估算分工。
+ *
+ * 提示词模板（zh locale 示例，由 buildPrompt() 动态生成）：
+ * ─────────────────────────────────────────────────────────────────
+ * 你是 PolyPulse 的 Polymarket 概率估算运行时。
+ * 当前 provider：codex
+ * 必须先阅读这些 skill 文件，再做概率估算：
+ * - <skill id>: <skill SKILL.md path>
+ *
+ * 必须先阅读这份风险控制文档：
+ * - <repoRoot>/docs/specs/risk-controls.md
+ *
+ * 只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
+ * 不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单。
+ *
+ * 输入文件：
+ * - Market JSON: <tempDir>/market.json
+ * - Evidence JSON: <tempDir>/evidence.json
+ *
+ * 市场快照：
+ * <JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+ * endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+ * active, closed, tradable, riskFlags>
+ *
+ * 证据摘要：
+ * <JSON array: evidenceId, source, title, sourceUrl, timestamp,
+ * relevanceScore, credibility, status, summary>
+ *
+ * 硬规则：
+ * 1. 只能输出合法 JSON，不要输出 markdown 代码块。
+ * 2. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入 Evidence JSON。
+ * 3. 必须区分盘口价格和独立证据；盘口价格只能作为对照基准，不能当作支持事件发生的证据。
+ * 4. 必须判断该市场是否可研究、证据是否足够独立新鲜、是否存在相对盘口的信息优势；
+ *    把判断写进 reasoning_summary。
+ * 5. 证据不足、来源陈旧、结算规则不清、不可研究、信息优势不足或市场不可交易时，
+ *    confidence 必须为 low，并在 uncertainty_factors 中写出原因。
+ * 6. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
+ * 7. 按 predict-raven pulse-direct 的分工处理：你只给概率、证据质量和信息优势判断；
+ *    fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
+ * 8. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
+ *
+ * 输出字段必须匹配 ProbabilityEstimate provider schema：
+ * - ai_probability
+ * - confidence: low | medium | high
+ * - reasoning_summary
+ * - key_evidence
+ * - counter_evidence
+ * - uncertainty_factors
+ * - freshness_score
+ * 只输出最终 JSON。
+ * ─────────────────────────────────────────────────────────────────
+ *
+ * Key properties:
+ * - Provider outputs ProbabilityEstimate JSON (probability, confidence, reasoning)
+ * - Provider CANNOT output trade instructions, sizing, or broker parameters
+ * - Timeout-protected; on failure, market is skipped
+ * - Works with both codex and claude-code providers
+ */
+
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";

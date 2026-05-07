@@ -5,6 +5,41 @@
  * Uses the configured AI provider to propose new topics from external signals
  * (news, RSS, sports, macro, on-chain) that can be mapped to Polymarket markets.
  *
+ * 提示词模板（zh locale 示例，由 buildPrompt() 动态生成）：
+ * ─────────────────────────────────────────────────────────────────
+ * 你是 PolyPulse 的外部话题发现运行时。
+ * 当前 provider：codex
+ * 必须先阅读这些 skill 文件：
+ * - <skill id>: <skill SKILL.md path>
+ *
+ * 当前 Polymarket 市场状态摘要：
+ * - 活跃市场数量：<N>
+ * - 已覆盖类别：<categories>
+ * - 最近已发现话题（避免重复）：<topics>
+ *
+ * 任务：
+ * 基于你对当前新闻、体育赛事、宏观经济日历、加密市场动态、政治事件和科技发展的知识，
+ * 提出 5-10 个可能在 Polymarket 有对应市场但可能被规则预筛遗漏的话题。
+ *
+ * 每个话题需要包含：
+ * 1. topic: 话题简要描述
+ * 2. category: 分类（politics, sports, crypto, tech, finance, economics, weather, culture, geopolitics, other）
+ * 3. signal_source: 信号来源类型（news, social_media, sports_data, macro_calendar, on_chain, regulatory, other）
+ * 4. rationale: 为什么这个话题可能有交易价值（市场可能低估/高估的原因）
+ * 5. search_terms: 用于在 Polymarket 搜索对应市场的关键词列表
+ * 6. urgency: 紧迫性（high=即将结算, medium=近期相关, low=长期趋势）
+ * 7. confidence: 你对这个话题有交易价值的信心（low/medium/high）
+ *
+ * 硬规则：
+ * 1. 只能输出合法 JSON。
+ * 2. 不允许输出交易指令、token、仓位金额或 broker 参数。
+ * 3. 不允许编造事实；只推荐你有合理理由相信存在 edge 的话题。
+ * 4. 优先推荐有明确、可验证外部信号的话题（如赛程、日历事件、已公布数据）。
+ * 5. 避免推荐太随机或纯粹依赖内幕信息的话题。
+ *
+ * 只输出最终 JSON。
+ * ─────────────────────────────────────────────────────────────────
+ *
  * Key properties:
  * - Provider may ONLY output topic suggestions with categories and rationale
  * - Provider CANNOT output broker parameters, trade instructions, or orders

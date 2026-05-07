@@ -20,7 +20,7 @@ fi
 
 [ -d "$POLYPULSE_HOME" ] || fail "$POLYPULSE_HOME does not exist; copy the repository there first"
 [ -f "$POLYPULSE_HOME/package.json" ] || fail "$POLYPULSE_HOME/package.json not found"
-[ -f "$POLYPULSE_HOME/deploy/env.example" ] || fail "deploy/env.example not found"
+[ -f "$POLYPULSE_HOME/.env.example" ] || fail ".env.example not found"
 [ -f "$POLYPULSE_HOME/deploy/systemd/$SERVICE_NAME" ] || fail "systemd service file not found"
 
 command -v node >/dev/null 2>&1 || fail "node is required"
@@ -31,9 +31,9 @@ mkdir -p "$POLYPULSE_HOME/runtime-artifacts/state" "$POLYPULSE_HOME/logs"
 chmod 700 "$POLYPULSE_HOME/runtime-artifacts" "$POLYPULSE_HOME/runtime-artifacts/state" "$POLYPULSE_HOME/logs"
 
 if [ ! -f "$ENV_FILE" ]; then
-  cp "$POLYPULSE_HOME/deploy/env.example" "$ENV_FILE"
+  cp "$POLYPULSE_HOME/.env.example" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  info "created $ENV_FILE from deploy/env.example; edit it before starting live mode"
+  info "created $ENV_FILE from .env.example; edit it before starting live mode"
 else
   chmod 600 "$ENV_FILE"
   info "kept existing $ENV_FILE and enforced chmod 600"

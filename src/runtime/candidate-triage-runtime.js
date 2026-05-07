@@ -1,3 +1,61 @@
+/**
+ * CandidateTriageRuntime
+ *
+ * AI-driven candidate triage: 对规则预筛后的候选市场做语义聚类、可研究性判断、
+ * 信息优势评估和证据缺口标注。对齐 Predict-Raven pulse-triage.ts。
+ *
+ * 提示词模板（zh locale 示例，由 buildPrompt() 动态生成）：
+ * ─────────────────────────────────────────────────────────────────
+ * 你是 PolyPulse 的 Polymarket 候选市场 triage 运行时。
+ * 当前 provider：codex
+ * 必须先阅读这些 skill 文件，再做候选 triage：
+ * - <skill id>: <skill SKILL.md path>
+ *
+ * 必须先阅读这份风险控制文档：
+ * - <repoRoot>/docs/specs/risk-controls.md
+ *
+ * 只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
+ * 不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单，不要抓取外部网页。
+ *
+ * 输入文件：
+ * - Candidates JSON: <tempDir>/candidates.json
+ *
+ * 运行上下文：
+ * <JSON: strategy, maxCandidates, maxTradesPerRound, minLiquidityUsd, source>
+ *
+ * 候选市场快照：
+ * <JSON array: marketId, marketSlug, eventId, eventSlug, question, outcomes,
+ * endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
+ * active, closed, tradable, riskFlags>
+ *
+ * 任务：
+ * 1. 对规则预筛后的候选做语义聚类、主题优先级和候选解释。
+ * 2. 判断每个候选是否可研究、是否可能有独立外部证据、相对盘口是否可能存在信息优势。
+ * 3. 输出每个候选的 recommended_action：prioritize、watch、defer 或 reject。
+ * 4. reject 只能用于结算问题模糊、不可研究、明显缺少独立外部证据或信息优势很低的候选。
+ * 5. 为每个候选列出 evidence_gaps；这些是后续应该补充的外部信号类别，不是你编造出来的证据。
+ *
+ * 硬规则：
+ * 1. 只能输出合法 JSON，不要输出 markdown 代码块。
+ * 2. 不允许编造事实、概率或证据。
+ * 3. 不允许输出交易方向、token、仓位金额、broker 参数或订单。
+ * 4. 不要直接估算 ai_probability；单市场概率估算由后续 ProbabilityEstimate runtime 完成。
+ * 5. priority_score 只表示研究/执行优先级，不是交易信号。
+ *
+ * 输出字段必须匹配 CandidateTriage provider schema：
+ * - candidate_assessments
+ * - clusters
+ * - research_gaps
+ * 只输出最终 JSON。
+ * ─────────────────────────────────────────────────────────────────
+ *
+ * Key properties:
+ * - Provider outputs candidate_assessments, clusters, research_gaps
+ * - Provider CANNOT output probabilities, trade instructions, or orders
+ * - Timeout-protected (default 60s); on failure, all candidates pass through
+ * - Works with both codex and claude-code providers
+ */
+
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

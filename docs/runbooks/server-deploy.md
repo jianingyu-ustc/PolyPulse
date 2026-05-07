@@ -11,7 +11,7 @@ chmod +x deploy/scripts/*.sh
 sudo ./deploy/scripts/install.sh
 ```
 
-`install.sh` creates `/home/PolyPulse/.env` from `deploy/env.example`, enforces
+`install.sh` creates `/home/PolyPulse/.env` from `.env.example`, enforces
 `chmod 600`, installs the systemd unit, installs log rotation, and runs a live
 market and account-audit smoke check.
 

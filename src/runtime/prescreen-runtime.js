@@ -7,6 +7,22 @@
  *   or precedent matching.
  * - SKIP: outcome is too random, depends on insider info, or is already efficiently priced.
  *
+ * 提示词模板（zh locale 示例，由 buildPreScreenPrompt() 动态生成）：
+ * ─────────────────────────────────────────────────────────────────
+ * 给定以下候选市场，快速分类每个市场为 TRADE 或 SKIP：
+ * - TRADE：AI 能通过推理、信息综合或先例匹配产生有意义的 edge
+ * - SKIP：结果太随机、依赖内幕信息或市场已经高效定价
+ *
+ * 对于每个候选，严格输出一行，格式为：
+ * TRADE|market_slug|一句话原因
+ * 或
+ * SKIP|market_slug|一句话原因
+ *
+ * 候选市场：
+ * 1. <question> | slug: <slug> | category: <cat> | price: <price> | ends: <date> | liquidity: <liq>
+ * 2. ...
+ * ─────────────────────────────────────────────────────────────────
+ *
  * Key properties:
  * - Runs BEFORE the heavier candidate triage step
  * - Short timeout (60s default), low reasoning effort

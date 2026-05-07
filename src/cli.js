@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import { loadEnvConfig, summarizeEnvConfig, validateEnvConfig } from "./config/env.js";
 import { PolymarketMarketSource } from "./adapters/polymarket-market-source.js";
 import { DecisionEngine } from "./core/decision-engine.js";
+import { RiskEngine } from "./core/risk-engine.js";
 import { FileStateStore } from "./state/file-state-store.js";
 import { ArtifactWriter } from "./artifacts/artifact-writer.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { AccountService } from "./account/account-service.js";
+import { EvidenceCrawler } from "./adapters/evidence-crawler.js";
+import { TopicDiscoveryProvider } from "./runtime/topic-discovery-runtime.js";
 import { buildPrediction, runTradeOnce } from "./flows/once-runner.js";
 
 function option(args, name, fallback = null) {
@@ -218,6 +221,109 @@ async function commandPredict(args) {
   });
 }
 
+async function commandDiscoverTopics(args) {
+  const context = await createContext(args);
+  const scan = await context.marketSource.scan({ limit: 100, pulseCompatible: false });
+  const categories = [...new Set(scan.markets.map((m) => m.category).filter(Boolean))];
+  const provider = new TopicDiscoveryProvider(context.config);
+  const discovery = await provider.discover({
+    currentCategories: categories,
+    currentMarketCount: scan.totalFetched,
+    recentTopics: []
+  });
+  const artifact = await context.artifactWriter.writeJson("topic-discovery", randomUUID(), discovery);
+  print({
+    ok: !discovery.failed,
+    skipped: discovery.skipped ?? false,
+    provider: discovery.provider ?? null,
+    topics: discovery.discovered_topics,
+    topicCount: discovery.discovered_topics.length,
+    failureReason: discovery.failureReason ?? null,
+    artifact
+  });
+}
+
+async function commandEvidenceCollect(args) {
+  const context = await createContext(args);
+  const marketId = option(args, "--market");
+  if (!marketId) {
+    throw new Error("evidence collect requires --market <market-id-or-slug>");
+  }
+  const market = await context.marketSource.getMarket(marketId);
+  if (!market) {
+    throw new Error(`Market not found: ${marketId}`);
+  }
+  const crawler = new EvidenceCrawler(context.config);
+  const evidence = await crawler.collect({ market });
+  const artifact = await context.artifactWriter.writeJson("evidence-collect", randomUUID(), {
+    marketId: market.marketId,
+    question: market.question,
+    evidence
+  });
+  print({
+    ok: true,
+    market_question: market.question,
+    marketId: market.marketId,
+    evidenceCount: evidence.items?.length ?? evidence.length ?? 0,
+    sources: [...new Set((evidence.items ?? evidence).map((e) => e.source))],
+    artifact
+  });
+}
+
+async function commandRiskEvaluate(args) {
+  const mode = liveModeFromArgs(args);
+  const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
+  const marketId = option(args, "--market");
+  if (!marketId) {
+    throw new Error("risk evaluate requires --market <market-id-or-slug>");
+  }
+  const maxAmountUsd = parseAmount(args);
+  const side = option(args, "--side");
+  const confirmation = option(args, "--confirm");
+
+  const { market, evidence, estimate } = await buildPrediction(context, marketId);
+  const portfolio = await context.stateStore.getPortfolio();
+  const decisionEngine = new DecisionEngine(context.config);
+  const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd });
+  const chosenSide = side ?? analysis.suggested_side ?? "yes";
+  const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
+
+  const risk = await new RiskEngine(context.config, { stateStore: context.stateStore }).evaluate({
+    decision,
+    market,
+    portfolio,
+    mode,
+    confirmation,
+    evidence,
+    estimate
+  });
+
+  const artifact = await context.artifactWriter.writeJson("risk-evaluate", randomUUID(), {
+    market: { marketId: market.marketId, question: market.question },
+    estimate: { ai_probability: estimate.ai_probability, confidence: estimate.confidence },
+    decision: { side: decision.side, edge: decision.edge, netEdge: decision.netEdge, quarterKellyPct: decision.quarterKellyPct },
+    risk
+  });
+  print({
+    ok: true,
+    mode,
+    market_question: market.question,
+    ai_probability: estimate.ai_probability,
+    confidence: estimate.confidence,
+    side: decision.side,
+    edge: decision.edge,
+    net_edge: decision.netEdge,
+    entry_fee_pct: decision.entryFeePct,
+    quarter_kelly_pct: decision.quarterKellyPct,
+    monthly_return: decision.monthlyReturn,
+    risk_allowed: risk.allowed,
+    blocked_reasons: risk.blockedReasons ?? [],
+    warnings: risk.warnings ?? [],
+    approved_usd: risk.approvedUsd ?? null,
+    artifact
+  });
+}
+
 async function commandTradeOnce(args) {
   const mode = liveModeFromArgs(args);
   const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
@@ -365,7 +471,10 @@ function help() {
       "polypulse market topics --quick --limit 20",
       "polypulse market topics --limit 20 --min-liquidity 1000 --min-volume 500 --category politics --tradable true",
       "Use topics[].marketId or topics[].marketSlug as --market.",
+      "polypulse discover topics --env-file <path>",
+      "polypulse evidence collect --market <market-id-or-slug> --env-file <path>",
       "polypulse predict --market <market-id-or-slug>",
+      "polypulse risk evaluate --market <market-id-or-slug> --max-amount 1 --env-file <path>",
       "polypulse trade once --mode live --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
       "polypulse risk status|pause|halt|resume",
       "polypulse monitor run --mode live --env-file <path> --confirm LIVE --rounds 1",
@@ -385,7 +494,10 @@ export async function main(args = []) {
   if (group === "account" && command === "audit") return await commandAccountAudit(args);
   if (group === "account" && command === "approve") return await commandAccountApprove(args);
   if (group === "market" && command === "topics") return await commandTopics(args);
+  if (group === "discover" && command === "topics") return await commandDiscoverTopics(args);
+  if (group === "evidence" && command === "collect") return await commandEvidenceCollect(args);
   if (group === "predict") return await commandPredict(args);
+  if (group === "risk" && command === "evaluate") return await commandRiskEvaluate(args);
   if (group === "trade" && command === "once") return await commandTradeOnce(args);
   if (group === "risk") return await commandRisk(args);
   if (group === "monitor") return await commandMonitor(args);

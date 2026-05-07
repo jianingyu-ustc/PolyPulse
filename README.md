@@ -1,5 +1,7 @@
 # PolyPulse
 
+## 项目概览
+
 PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。当前 README 只保留两条运行路径：
 
 - `live simulated`：读取当前 Polymarket 真实市场，走 live preflight、AI provider、RiskEngine 和模拟执行；持续 monitor 使用内存 paper-trading 账本，只追加人类可读日志，不连接真实钱包、不提交真实订单。
@@ -7,154 +9,19 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 所有测试、验收和部署命令都必须使用 `.env`，并读取当前 Polymarket 真实市场。
 
-## 项目概览
-
 核心链路：抓取当前 Polymarket 市场话题，规则预筛后先用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP），再用 AI provider 做候选 triage，收集证据（包括从 Polymarket 页面抓取的结算规则、注释和社区评论，从 CLOB 获取的 order book 深度和价差，以及对 resolution source URL 的实时访问验证），调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界；话题发现和证据抓取仍主要是规则和结构化 API 流程，不是 AI 驱动的全市场研究流水线。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段从 Polymarket 页面抓取完整结算规则、注释和社区评论，从 CLOB 获取 order book 深度和价差，并对 resolution source URL 做实时访问验证获取官方数据源当前状态作为硬约束输入；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
+PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
 主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；真实 monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
-部署相关文件：`deploy/env.example` 是服务器 `.env` 模板，`deploy/systemd/polypulse-monitor.service` 是 systemd 常驻 monitor 服务，`deploy/scripts/*.sh` 覆盖安装、启动、停止、状态和健康检查。
+部署相关文件：`.env.example` 是服务器 `.env` 模板，`deploy/systemd/polypulse-monitor.service` 是 systemd 常驻 monitor 服务，`deploy/scripts/*.sh` 覆盖安装、启动、停止、状态和健康检查。
 
-## 使用方法
-
-只保留必要配置和命令；所有命令都使用 `.env`，并读取当前 Polymarket 真实市场。每个关键流程保留 `Codex 提示词版本`，可直接交给 Codex 代跑；`live real` 必须先确认真实资金风险。
-
-### 必需运行模式
-
-`.env` 必须明确选择以下两种模式之一。
-
-`live simulated` 用于真实市场演练：
-
-```bash
-POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_WALLET_MODE=simulated
-SIMULATED_WALLET_BALANCE_USD=100
-SIMULATED_MONITOR_LOG_PATH=/home/PolyPulse/logs/polypulse-simulated-monitor.log
-POLYPULSE_MARKET_SOURCE=polymarket
-POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
-```
-
-`live real` 用于真实钱包交易：
-
-```bash
-POLYPULSE_EXECUTION_MODE=live
-POLYPULSE_LIVE_WALLET_MODE=real
-PRIVATE_KEY=<server-local-secret>
-FUNDER_ADDRESS=<0x...>
-SIGNATURE_TYPE=<signature-type>
-CHAIN_ID=137
-POLYMARKET_HOST=https://clob.polymarket.com
-POLYPULSE_MARKET_SOURCE=polymarket
-POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
-```
-
-`live real` 下单前还必须完成真实钱包检查：
-
-```bash
-# 1. 检查 live real env、secret 必填项和 Polymarket CLOB client。
-node ./bin/polypulse.js env check --mode live --env-file .env
-
-# 2. 查询真实 Polymarket CLOB collateral balance 和 allowance。
-node ./bin/polypulse.js account balance --mode live --env-file .env
-
-# 3. 一次性审计真实账户仓位、历史成交、撤单/拒单、本地记录、胜率和收益质量。
-node ./bin/polypulse.js account audit --mode live --env-file .env
-
-# 4. 确认仍在读取当前 Polymarket 真实市场；quick 只做轻量实时可读性检查。
-node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
-
-# 5. 如果 allowance 不足，只能在明确接受真实授权风险后执行。
-node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
-```
-
-真实钱包交易必须确认：
-
-- `POLYPULSE_LIVE_WALLET_MODE=real`。
-- `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`CHAIN_ID=137`、`POLYMARKET_HOST=https://clob.polymarket.com` 已配置。
-- `FUNDER_ADDRESS` 是预期真实资金地址；不要在日志、README、issue 或提示词中输出 secret。
-- `account balance` 返回的 CLOB collateral balance 足以覆盖计划下单金额，allowance 不为 0 且满足下单需要；allowance 不足时先停止下单，再决定是否手动运行 `account approve --confirm APPROVE`。
-- `account audit` 必须返回 `ok=true`，并能核对已有仓位：market、outcome、token、size、avg cost、current value、unrealized PnL、到期/结算状态；如有未知仓位或风险暴露超限，停止真实下单。
-- `account audit` 必须核对历史交易记录：最近成交、撤单/拒单、买入/卖出方向、成交均价、费用估算、realized PnL，并与 `runtime-artifacts` 中的 runs、monitor、account artifact 交叉检查。
-- `account audit` 必须统计真实账户胜率和收益质量：已结算/已平仓交易的 wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤；胜率或净收益异常时暂停真实下单并复盘预测和风控。
-- `market topics --quick` 能读取当前 Polymarket 真实市场；如果市场源、余额、allowance、真实账户审计或 env preflight 任一失败，停止真实下单。
-
-Codex 提示词版本：
-
-```text
-1. 请检查 .env 是否是 live simulated 或 live real，并确认 POLYPULSE_MARKET_SOURCE=polymarket、POLYMARKET_GAMMA_HOST 指向真实 Gamma API。
-2. 如果是 live simulated，请确认它会读取真实 Polymarket 市场，但不会连接真实钱包或提交真实订单。
-3. 如果是 live real，请一次性完成真实账户检查：确认 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST；运行 env check、account balance、account audit 和 market topics --quick；不要输出真实 secret；汇总 funder 地址、collateral balance、allowance、真实市场读取结果、已有仓位（market、outcome、size、avg cost、current value、unrealized PnL、到期/结算状态）、历史交易（最近成交、撤单/拒单、费用、realized PnL）和胜率收益质量（wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤）；如果真实余额不足、allowance 不足、已有仓位风险暴露超限、历史交易/胜率无法核对、CLOB client/preflight 失败或无法读取当前 Polymarket 真实市场，请停止真实下单。只有我明确要求授权时，才可以运行 account approve --confirm APPROVE。
-```
-
-### Predict-Raven Pulse 策略配置
-
-默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径。这里的“兼容”只表示职责分离和收益计算口径相近，不表示 PolyPulse 已实现完整 Predict-Raven 方法：
-
-```bash
-PULSE_STRATEGY=pulse-direct
-PULSE_MIN_LIQUIDITY_USD=5000
-PULSE_MAX_CANDIDATES=20
-PULSE_REPORT_CANDIDATES=4
-PULSE_BATCH_CAP_PCT=0.2
-PULSE_AI_CANDIDATE_TRIAGE=true
-PULSE_AI_TRIAGE_CAN_REJECT=true
-PULSE_AI_PRESCREEN=true
-PULSE_PRESCREEN_TIMEOUT_MS=60000
-PULSE_AI_TOPIC_DISCOVERY=true
-PULSE_TOPIC_DISCOVERY_TIMEOUT_MS=60000
-PULSE_CALIBRATION_ENABLED=true
-PULSE_SEMANTIC_DISCOVERY=true
-PULSE_SEMANTIC_DISCOVERY_MAX_MATCHED=10
-PULSE_SEMANTIC_DISCOVERY_SIMILARITY_THRESHOLD=0.3
-PULSE_DYNAMIC_CALIBRATION=true
-PULSE_DOWNSIDE_RISK_RANKING=true
-PULSE_PERFORMANCE_REPORT_INTERVAL=5
-PULSE_FETCH_DIMENSIONS=volume24hr,liquidity,startDate,competitive
-PULSE_REQUIRE_EVIDENCE_GUARD=false
-EVIDENCE_PAGE_SCRAPE=true
-EVIDENCE_PAGE_COMMENT_LIMIT=10
-EVIDENCE_PAGE_TIMEOUT_MS=15000
-EVIDENCE_ORDERBOOK_DEPTH=true
-EVIDENCE_ORDERBOOK_TIMEOUT_MS=10000
-EVIDENCE_ORDERBOOK_DEPTH_LEVELS=5
-EVIDENCE_RESOLUTION_SOURCE_LIVE=true
-EVIDENCE_RESOLUTION_SOURCE_TIMEOUT_MS=15000
-EVIDENCE_RESOLUTION_SOURCE_MAX_CONTENT=8000
-EVIDENCE_DOMAIN_ADAPTERS=true
-EVIDENCE_DOMAIN_ADAPTER_TIMEOUT_MS=10000
-EVIDENCE_GAP_AUTO_FILL=true
-EVIDENCE_GAP_FETCH_TIMEOUT_MS=10000
-EVIDENCE_GAP_TOTAL_BUDGET_MS=30000
-EVIDENCE_GAP_MAX_PER_MARKET=3
-```
-
-这些配置的含义：
-
-- `market topics` 默认按 Pulse-compatible 候选池筛选：候选数默认取 `PULSE_MAX_CANDIDATES`，显式传 `--limit` 时由 `--limit` 覆盖；最小流动性 5000、必须有 CLOB token、过滤 7 天内短期价格预测市场，并在输出里返回 `pulse.strategy`、`pulse.dimensions`、`pulse.removed` 等诊断信息。
-- `market topics --quick` 用于轻量实时可读性检查，会关闭 pulse-compatible 候选筛选；不传 `--limit` 时返回数量默认取 `MARKET_SCAN_LIMIT`。
-- `PULSE_AI_PRESCREEN=true` 时，`monitor run` 会在规则预筛和 candidate triage 之前先对候选做轻量 AI 信息优势预筛：用低推理强度快速分类为 TRADE（AI 能通过推理、信息综合或先例匹配产生有意义的 edge）或 SKIP（结果太随机、依赖内幕信息或市场已经高效定价），60 秒超时，失败时全部保留为 TRADE。被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
-- `PULSE_AI_CANDIDATE_TRIAGE=true` 时，`monitor run` 会在预筛后对剩余候选池做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断；`PULSE_AI_TRIAGE_CAN_REJECT=true` 时，provider 标为 `reject` 的候选会被记录为 `ai_triage_reject` 并跳过后续概率估算。
-- `EVIDENCE_PAGE_SCRAPE=true` 时，证据收集阶段会从 Polymarket 事件页面的 `__NEXT_DATA__` SSR 数据中提取完整结算规则、市场注释/公告和社区高赞评论，作为高可信度证据传给 AI 做概率估算。这对齐了 Predict-Raven 的 `scrape-market.ts` 深度研究步骤。
-- `EVIDENCE_ORDERBOOK_DEPTH=true` 时，证据收集阶段会从 Polymarket CLOB 获取每个 outcome token 的 order book，提取 best bid/ask、spread、spread%、2% 深度和 top N 挂单档位，作为高可信度市场微结构证据传给 AI。这对齐了 Predict-Raven 的 `orderbook.ts` 研究步骤，使 AI 能看到真实的流动性分布、价差和执行成本。
-- `EVIDENCE_RESOLUTION_SOURCE_LIVE=true` 时，证据收集阶段会提取 market 的 resolution source URL（从 market data、页面抓取 metadata 或 resolution rules 文本中提取），实时访问该官方数据源获取当前状态，作为概率估算的硬约束输入。这对齐了 Predict-Raven SKILL.md 的 A0 模块（Resolution Source 实时查验），防止 AI 基于过时或错误的事实记忆做出交易决策。如果数据源不可访问，标注"resolution source 当前状态未确认"并在证据中降权。
-- `EVIDENCE_DOMAIN_ADAPTERS=true` 时，证据收集阶段会根据 market category/question 自动激活领域专用研究适配器（体育赛程、宏观日历、天气数据、链上指标、公司财报），从公开搜索引擎获取领域相关证据。
-- `EVIDENCE_GAP_AUTO_FILL=true` 时，AI candidate triage 输出的 `evidence_gaps` 会被 EvidenceGapRuntime 自动处理：按 gap 类别自动搜索外部公开信息填补证据空白。`EVIDENCE_GAP_TOTAL_BUDGET_MS` 控制单市场总时间预算，`EVIDENCE_GAP_MAX_PER_MARKET` 控制最多填补的 gap 数量。
-- `PULSE_AI_TOPIC_DISCOVERY=true` 时，`monitor run` 开始会调用 AI Topic Discovery（60 秒超时），发现可能被规则预筛遗漏的新话题。
-- `PULSE_SEMANTIC_DISCOVERY=true` 时，Topic Discovery 完成后 SemanticDiscoveryRuntime 会将发现的 search_terms 在全市场做 token-based 匹配、语义聚类和重复事件合并，新市场加入候选池。`PULSE_SEMANTIC_DISCOVERY_MAX_MATCHED` 控制最大匹配数，`PULSE_SEMANTIC_DISCOVERY_SIMILARITY_THRESHOLD` 控制聚类阈值。
-- `PULSE_CALIBRATION_ENABLED=true` 时，概率校准层在 AI 概率估算之后运行，对原始概率做 shrinkage 校准（向 0.5 先验收缩），提高概率估计的可靠性。
-- `PULSE_DYNAMIC_CALIBRATION=true` 时，DynamicCalibrationStore 记录每次预测的实际结算结果，按概率桶计算 Brier score 并生成动态校准曲线，在数据充足时替代固定 shrinkage。支持 category、confidence 维度的分维度校准。
-- `PULSE_DOWNSIDE_RISK_RANKING=true` 时，候选排序在原有 monthly return / net edge / Kelly 排序之后增加 risk-adjusted 二次排序：计算每个机会的下行风险（概率加权最大亏损、流动性风险、时间风险、价差风险）和资金分配惩罚（类别集中度、事件重复、可用资本比例），输出 `risk_adjusted_score` 和 `downside_score` 追加到 `candidate.ranked` 日志。
-- `PULSE_PERFORMANCE_REPORT_INTERVAL=5` 设置每隔 N 轮（默认 5）在 simulated log 中输出预测效果评估报表：包括 `performance.report`（总结）、`performance.calibration`（按概率桶的校准偏差）、`performance.by_confidence`（按置信度的胜率和收益）和 `performance.edge_accuracy`（预测 edge vs 实际 return）。
-- `predict`、`trade once` 和 `monitor run` 输出会包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return` 和 `suggested_notional_before_risk`，用于检查是否走 Predict-Raven fee / Kelly / monthly return 口径。
-- `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 的服务层分工一致：证据不足或低置信度会进入 warning，不默认硬阻断；`live real` 仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
-
-#### 与 Predict-Raven 的关系和当前差距
+### 与 Predict-Raven 的关系和当前差距
 
 PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 
@@ -165,9 +32,10 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - `monitor run` 对规则预筛后的候选先调用 provider 生成概率估计，再由代码按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生收益指标排序后执行。
 - 证据收集阶段会从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据，提取完整结算规则、注释/公告和社区高赞评论，作为高可信度证据传给 AI。这对齐了 Predict-Raven 的 `scrape-market.ts --sections context,rules,comments` 深度研究步骤，使 AI 能看到市场完整的结算条件、官方公告和社区讨论。
 - 证据收集阶段会从 Polymarket CLOB 获取每个 outcome token 的 order book 深度，提取 best bid/ask、spread、spread%、2% 档位深度和 top 5 挂单，作为高可信度市场微结构证据。这对齐了 Predict-Raven 的 `orderbook.ts` 研究步骤（BUY side, medium urgency, 5 levels），使 AI 能看到真实流动性分布和执行成本，避免正 edge 被交易成本吃掉。
-- 证据收集阶段会对 resolution source URL 做实时访问验证（从 market data、page-scrape metadata 或 resolution rules 文本中提取 URL），获取官方数据源的当前真实状态作为概率估算的硬约束输入。这对齐了 Predict-Raven SKILL.md 的 A0 模块（Resolution Source 实时查验 — 必须在 AI 推理之前执行），防止基于过时事实做出交易决策。数据源不可访问时返回”resolution source 当前状态未确认”并降低相关主张权重。
+- 证据收集阶段会对 resolution source URL 做实时访问验证（从 market data、page-scrape metadata 或 resolution rules 文本中提取 URL），获取官方数据源的当前真实状态作为概率估算的硬约束输入。这对齐了 Predict-Raven SKILL.md 的 A0 模块（Resolution Source 实时查验 — 必须在 AI 推理之前执行），防止基于过时事实做出交易决策。数据源不可访问时返回"resolution source 当前状态未确认"并降低相关主张权重。
 - 证据收集阶段包含 5 个领域专用研究适配器（体育赛程、宏观日历、天气数据、链上指标、公司财报），按 market category/question 自动激活，从公开搜索引擎获取领域相关证据。这对齐了 Predict-Raven 的领域专用数据源机制。
 - AI candidate triage 输出的 `evidence_gaps` 会被 EvidenceGapRuntime 自动处理：按 gap 类别（news, social, expert, official, schedule, financial, on-chain, weather）自动搜索外部公开信息填补证据空白，生成带 freshness/relevance/source_quality 元数据的证据项传给概率估算。这对齐了 Predict-Raven 的自动证据扩展机制。
+- 证据收集阶段在规则适配器完成后，调用 AI Evidence Research runtime（EvidenceResearchProvider，60 秒超时）：AI 接收已收集的全部证据和市场上下文，评估证据充分性（sufficient/needs_more/critical_gap），识别具体信息缺口，输出最多 5 个定向搜索查询（含 category、rationale、priority），由代码执行搜索后将结果合并到证据池传给概率估算。失败时回退到 legacy gap-fill。这对齐了 Predict-Raven 的 AI-in-the-loop 证据研究流水线，AI 主动指导研究方向而非被动接收适配器输出。
 - `monitor run` 开始时会调用 AI Topic Discovery runtime（60 秒超时），让 provider 基于当前新闻、体育、宏观、加密等外部信号主动发现可能被规则预筛遗漏的新话题，并输出 Polymarket 搜索关键词映射。这对齐了 Predict-Raven 的 AI 外部信号话题发现能力。
 - Topic Discovery 完成后，SemanticDiscoveryRuntime 会自动将发现的话题 search_terms 在 Polymarket 全市场列表中做 token-based 匹配、语义聚类和重复事件合并，新发现的市场加入候选池参与后续 pre-screen 和 triage。这对齐了 Predict-Raven 的全市场语义发现和机会地图能力。
 - 概率校准层（ProbabilityCalibrationLayer）在 AI 概率估算之后、决策引擎之前运行，根据 confidence、researchability、information_advantage、evidence freshness、evidence count、liquidity、days-to-resolution 和 pre-screen 分类对原始概率做 shrinkage 校准（向 0.5 先验收缩），输出 rawProbability、calibratedProbability 和 calibrationReasons。这对齐了 Predict-Raven 的概率校准系统基础。
@@ -184,341 +52,25 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - 缺少跨轮资金占用的动态优化（当前是单轮内按 risk-adjusted score 排序后顺序分配）。
 - 缺少历史回放机制：用真实结算市场和已产生 artifact 比较不同参数组合对收益的影响。
 
-因此，PolyPulse 在 AI 使用方法上已全面对齐 Predict-Raven 的核心能力：信息优势预筛、深度证据研究（页面、order book、resolution source、领域专用、evidence gap 自动填补）、AI 话题发现、全市场语义发现（topic 自动匹配 + 跨页语义聚类）、静态概率校准、动态概率校准（Brier score 反馈环）、收益归因系统、downside risk ranking 和预测效果评估报表。剩余差距主要是跨轮资金动态优化和历史回放比较机制。
-
-Codex 提示词版本：
-
-```text
-1. 请检查 .env 的 PULSE_* 配置是否与 Predict-Raven pulse-direct 兼容口径一致。
-2. 请说明 market topics、predict、trade once 和 monitor run 会如何使用这些 PULSE_* 配置。
-```
-
-### 切换概率估算 Provider
-
-只保留真实 AI provider 路径。启用 Codex：
-
-```bash
-AI_PROVIDER=codex
-AGENT_RUNTIME_PROVIDER=codex
-CODEX_SKILL_ROOT_DIR=skills
-CODEX_SKILL_LOCALE=zh
-CODEX_SKILLS=polypulse-market-agent
-```
-
-启用 Claude Code：
-
-```bash
-AI_PROVIDER=claude-code
-AGENT_RUNTIME_PROVIDER=claude-code
-CLAUDE_CODE_SKILL_ROOT_DIR=skills
-CLAUDE_CODE_SKILL_LOCALE=zh
-CLAUDE_CODE_SKILLS=polypulse-market-agent
-CLAUDE_CODE_PERMISSION_MODE=bypassPermissions
-CLAUDE_CODE_ALLOWED_TOOLS=Read,Glob,Grep
-```
-
-验证当前 provider：
-
-```bash
-# 如果使用 Claude Code，把 expect 改成 claude-code。
-npm run agent:check -- --env-file .env --expect codex
-```
-
-#### Codex live runtime 提示词
-
-当前代码中真正启动 `codex` 进程的地方只有三类：
-
-| 调用点 | 命令 | 是否有 prompt | 用途 |
-| --- | --- | --- | --- |
-| `scripts/check-agent-config.js` | `codex --version` | 否 | 只检查 Codex CLI 是否可用，不传入 prompt。 |
-| `src/runtime/candidate-triage-runtime.js` | `codex exec ... -` | 是 | 在 `monitor run` 的候选池阶段做语义聚类、研究优先级、可研究性、信息优势和证据缺口判断。 |
-| `src/runtime/codex-runtime.js` | `codex exec ... -` | 是 | 在 `predict`、`trade once`、`monitor run` 的预测阶段估算概率。 |
-
-除 skill 文件本身外，所有传给 Codex 的 runtime prompt 都由两处动态生成：`src/runtime/candidate-triage-runtime.js#buildPrompt` 生成候选 triage prompt，`src/runtime/codex-runtime.js#buildPrompt` 生成单市场概率估算 prompt。`prompts/probability-estimation.md` 是概率估算口径参考，不是当前 `codex exec` 直接读取的 stdin prompt。
-
-当 `AI_PROVIDER=codex` 且 `AGENT_RUNTIME_PROVIDER=codex` 时，`monitor run` 会先在候选池阶段调用一次真实 Codex CLI 做 candidate triage，然后在每个保留候选的预测阶段再次调用真实 Codex CLI 估算概率；`predict` 和 `trade once` 只调用单市场概率估算 prompt。实际命令形态是：
-
-```bash
-codex exec \
-  --skip-git-repo-check \
-  -C <repoRoot> \
-  -s read-only \
-  --output-schema <tempDir>/<candidate-triage-or-probability-estimate>.schema.json \
-  -o <tempDir>/provider-output.json \
-  --color never \
-  [-m <CODEX_MODEL>] \
-  -
-```
-
-最后的 `-` 表示 prompt 通过 stdin 传入。candidate triage 运行时会把候选市场快照和 `CandidateTriage` schema 写到临时目录；概率估算运行时会把当前 market snapshot、evidence list 和 `ProbabilityEstimate` schema 写到临时目录。Codex 的输出必须写成对应 JSON，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
-
-当前默认 `CODEX_SKILL_LOCALE=zh` 时，candidate triage 阶段传给 Codex 的提示词模板如下；其中 `<...>` 是运行时动态填入的路径或 JSON：
-
-```text
-你是 PolyPulse 的 Polymarket 候选市场 triage 运行时。
-当前 provider：codex
-必须先阅读这些 skill 文件，再做候选 triage：
-- <skill id>: <skill SKILL.md path>
-
-必须先阅读这份风险控制文档：
-- <repoRoot>/docs/specs/risk-controls.md
-
-只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
-不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单，不要抓取外部网页。
-
-输入文件：
-- Candidates JSON: <tempDir>/candidates.json
-
-运行上下文：
-<JSON: strategy, maxCandidates, maxTradesPerRound, minLiquidityUsd, source>
-
-候选市场快照：
-<JSON array: marketId, marketSlug, eventId, eventSlug, question, outcomes,
-endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
-active, closed, tradable, riskFlags>
-
-任务：
-1. 对规则预筛后的候选做语义聚类、主题优先级和候选解释。
-2. 判断每个候选是否可研究、是否可能有独立外部证据、相对盘口是否可能存在信息优势。
-3. 输出每个候选的 recommended_action：prioritize、watch、defer 或 reject。
-4. reject 只能用于结算问题模糊、不可研究、明显缺少独立外部证据或信息优势很低的候选。
-5. 为每个候选列出 evidence_gaps；这些是后续应该补充的外部信号类别，不是你编造出来的证据。
-
-硬规则：
-1. 只能输出合法 JSON，不要输出 markdown 代码块。
-2. 不允许编造事实、概率或证据。
-3. 不允许输出交易方向、token、仓位金额、broker 参数或订单。
-4. 不要直接估算 ai_probability；单市场概率估算由后续 ProbabilityEstimate runtime 完成。
-5. priority_score 只表示研究/执行优先级，不是交易信号。
-
-输出字段必须匹配 CandidateTriage provider schema：
-- candidate_assessments
-- clusters
-- research_gaps
-只输出最终 JSON。
-```
-
-单市场概率估算阶段传给 Codex 的提示词模板如下：
-
-```text
-你是 PolyPulse 的 Polymarket 概率估算运行时。
-当前 provider：codex
-必须先阅读这些 skill 文件，再做概率估算：
-- <skill id>: <skill SKILL.md path>
-
-必须先阅读这份风险控制文档：
-- <repoRoot>/docs/specs/risk-controls.md
-
-只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
-不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单。
-
-输入文件：
-- Market JSON: <tempDir>/market.json
-- Evidence JSON: <tempDir>/evidence.json
-
-市场快照：
-<JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
-endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
-active, closed, tradable, riskFlags>
-
-证据摘要：
-<JSON array: evidenceId, source, title, sourceUrl, timestamp,
-relevanceScore, credibility, status, summary>
-
-硬规则：
-1. 只能输出合法 JSON，不要输出 markdown 代码块。
-2. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入 Evidence JSON。
-3. 必须区分盘口价格和独立证据；盘口价格只能作为对照基准，不能当作支持事件发生的证据。
-4. 必须判断该市场是否可研究、证据是否足够独立新鲜、是否存在相对盘口的信息优势；把判断写进 reasoning_summary。
-5. 证据不足、来源陈旧、结算规则不清、不可研究、信息优势不足或市场不可交易时，confidence 必须为 low，并在 uncertainty_factors 中写出 insufficient_external_evidence、low_information_advantage 或 unresearchable_market 等原因。
-6. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
-7. 按 predict-raven pulse-direct 的分工处理：你只给概率、证据质量和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
-8. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
-
-输出字段必须匹配 ProbabilityEstimate provider schema：
-- ai_probability
-- confidence: low | medium | high
-- reasoning_summary
-- key_evidence
-- counter_evidence
-- uncertainty_factors
-- freshness_score
-只输出最终 JSON。
-```
-
-如果把 `CODEX_SKILL_LOCALE` 改为 `en`，同一结构会使用英文模板。`CODEX_SKILLS` 决定 prompt 中列出的 skill 文件，默认是 `polypulse-market-agent`；`CODEX_MODEL` 为空时使用 Codex CLI 默认模型；`PROVIDER_TIMEOUT_SECONDS=0` 表示 Codex provider 子进程不设置单独超时，只受外层 monitor run timeout 约束。
-
-英文 locale 的 candidate triage prompt 模板如下：
-
-```text
-You are the candidate-market triage runtime for PolyPulse, a Polymarket analysis system.
-Active provider: codex
-Read these selected skill files before triaging candidates:
-- <skill id>: <skill SKILL.md path>
-
-Read this risk control document before triaging:
-- <repoRoot>/docs/specs/risk-controls.md
-
-Only inspect the listed skill files, this risk document, the input JSON file, and the structured context below.
-Do not scan unrelated repository files, do not run tests, do not modify code, do not place orders, and do not fetch external webpages.
-
-Input files:
-- Candidates JSON: <tempDir>/candidates.json
-
-Runtime context:
-<JSON: strategy, maxCandidates, maxTradesPerRound, minLiquidityUsd, source>
-
-Candidate market snapshots:
-<JSON array: marketId, marketSlug, eventId, eventSlug, question, outcomes,
-endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
-active, closed, tradable, riskFlags>
-
-Task:
-1. Perform semantic clustering, theme priority, and candidate explanation over the rule-prefiltered candidates.
-2. Judge whether each candidate is researchable, whether independent external evidence is likely available, and whether there may be information advantage versus the market price.
-3. Output each candidate's recommended_action: prioritize, watch, defer, or reject.
-4. Use reject only when resolution is vague, the market is unresearchable, independent external evidence is clearly lacking, or information advantage is very low.
-5. List evidence_gaps for each candidate; these are external signal categories to collect later, not fabricated evidence.
-
-Hard rules:
-1. Output valid JSON only. Do not wrap it in markdown fences.
-2. Do not fabricate facts, probabilities, or evidence.
-3. Do not output trade side, token, sizing, broker parameters, or orders.
-4. Do not estimate ai_probability directly; the per-market ProbabilityEstimate runtime handles probabilities later.
-5. priority_score is research/execution priority only, not a trading signal.
-
-The output must match the CandidateTriage provider schema:
-- candidate_assessments
-- clusters
-- research_gaps
-Output final JSON only.
-```
-
-英文 locale 的单市场概率估算 prompt 模板如下：
-
-```text
-You are the probability estimation runtime for PolyPulse, a Polymarket analysis system.
-Active provider: codex
-Read these selected skill files before estimating:
-- <skill id>: <skill SKILL.md path>
-
-Read this risk control document before estimating:
-- <repoRoot>/docs/specs/risk-controls.md
-
-Only inspect the listed skill files, this risk document, the input JSON files, and the structured context below.
-Do not scan unrelated repository files, do not run tests, do not modify code, and do not place orders.
-
-Input files:
-- Market JSON: <tempDir>/market.json
-- Evidence JSON: <tempDir>/evidence.json
-
-Market snapshot:
-<JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
-endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
-active, closed, tradable, riskFlags>
-
-Evidence summary:
-<JSON array: evidenceId, source, title, sourceUrl, timestamp,
-relevanceScore, credibility, status, summary>
-
-Hard rules:
-1. Output valid JSON only. Do not wrap it in markdown fences.
-2. Do not fabricate evidence; key_evidence and counter_evidence must come from the input Evidence JSON.
-3. Separate market prices from independent evidence; market prices are a comparison baseline, not supporting evidence that the event will resolve true.
-4. Assess whether the market is researchable, whether the evidence is independent and fresh enough, and whether there is an information advantage versus the market price; include that assessment in reasoning_summary.
-5. If evidence is insufficient, stale, ambiguous, unresearchable, low-information-advantage, or the market is not tradable, confidence must be low and uncertainty_factors must name reasons such as insufficient_external_evidence, low_information_advantage, or unresearchable_market.
-6. ai_probability is the probability that the Yes outcome resolves true, from 0 to 1.
-7. Follow the predict-raven pulse-direct separation of duties: provide probability, evidence-quality, and information-advantage judgment only; code computes fees, net edge, quarter Kelly, monthly return, ranking, and risk controls.
-8. Do not output trade instructions, token rewrites, sizing, or broker parameters.
-
-The output must match the ProbabilityEstimate provider schema:
-- ai_probability
-- confidence: low | medium | high
-- reasoning_summary
-- key_evidence
-- counter_evidence
-- uncertainty_factors
-- freshness_score
-Output final JSON only.
-```
-
-Codex 提示词版本：
-
-```text
-1. 请检查 .env 是否启用了 Codex 或 Claude Code provider，并确认会调用配置的真实 AI provider。
-2. 请运行 agent:check 验证当前 provider、runtime provider 和 skill 配置。
-```
-
-### 一次性验收
-
-先检查 `.env`、抓取当前 Polymarket 真实市场，并对选定市场做预测：
-
-```bash
-node ./bin/polypulse.js env check --mode live --env-file .env
-node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
-node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-```
-
-`live simulated` 不连接真实钱包、不提交真实订单：
-
-```bash
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-tail -n 80 /home/PolyPulse/logs/polypulse-simulated-monitor.log
-```
-
-`live simulated trade once` 和 `live simulated monitor` 使用同一套进程内模拟账本逻辑：初始资金都来自 `SIMULATED_WALLET_BALANCE_USD`，每次进程启动都会写同样的 session header，执行过程都追加到 `SIMULATED_MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，不做候选池 AI triage，进程结束后模拟仓位丢失；`monitor run --loop` 在同一进程内跨轮保留模拟仓位，并按间隔继续 mark-to-market、复核和平仓。
-
-`live real` 会连接真实钱包，并可能在风控允许后提交真实订单：
-
-```bash
-node ./bin/polypulse.js account balance --mode live --env-file .env
-node ./bin/polypulse.js account audit --mode live --env-file .env
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-```
-
-Codex 提示词版本：
-
-```text
-1. 请检查 live env，并确认当前 .env 是 live simulated 或 live real，且读取当前 Polymarket 真实市场。
-2. 请用 market topics --quick 抓取 20 个当前 Polymarket 真实市场 topic，并挑选可用于验收的 marketId 或 marketSlug。
-3. 请对选出的真实市场运行 predict，汇总 provider、概率、隐含概率、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
-4. 如果是 live simulated，请运行 trade once 验收，并确认不连接真实钱包、不提交真实订单。
-5. 如果是 live real，请先运行 account balance 和 account audit；只在我明确确认接受真实资金风险且 audit 无阻断后运行 trade once。
-```
-
-### 持续 Monitor
-
-同一个命令用于 `live simulated` 和 `live real`；区别由 `.env` 的 `POLYPULSE_LIVE_WALLET_MODE` 决定。`live real` 会连接真实钱包，并可能提交真实订单。
-
-```bash
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
-```
-
-`live simulated monitor` 的行为：
-
-- 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
-- 规则预筛后先调用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，60 秒超时，失败时保留全部），被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
-- 通过 pre-screen 的候选再调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
-- 证据收集阶段从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据（结算规则、注释/公告、社区高赞评论），从 CLOB 获取每个 outcome token 的 order book 深度（best bid/ask、spread、2% 深度、top 5 挂单），并对 resolution source URL 做实时访问验证获取官方数据源当前状态，连同 market metadata 和 resolution rules 一起作为上下文传给 AI 做概率估算。
-- 对候选市场调用配置的真实 AI provider 预测胜率、证据质量、可研究性和信息优势，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
-- AI 概率估算后，ProbabilityCalibrationLayer 对原始概率做 shrinkage 校准；DynamicCalibrationStore 在有充足历史数据时进一步按动态校准曲线调整，输出最终 calibrated probability 用于排序和执行决策。
-- 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后，由 DownsideRiskRanker 进行二次排序（综合下行风险、流动性风险、类别集中度和资金分配），最终按 `risk_adjusted_score` 顺序执行；AI 不输出交易指令或 broker 参数。
-- 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
-- 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
-- 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
-- `trade once` 和 `monitor run` 在 live simulated 下共用同一套初始资金、日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留模拟仓位。
-- 程序退出后不保留模拟仓位、现金、交易状态或 JSON execution artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
-
-Codex 提示词版本：
-
-```text
-1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
-2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存模拟账本自动开仓/平仓，但不连接真实钱包、不提交真实订单；程序退出后只保留人类可读 log。
-3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
-4. 启动后请汇总 monitor 状态、风控状态、artifact 或 simulated log 位置。
-```
-
-#### Simulated Monitor Log 格式
+**待办项**（直接影响预测成功率、概率校准和净收益率；所有项保持 live-only，读取当前 Polymarket 真实市场）：
+
+- [x] ~~增加 AI 外部话题发现~~：已实现 `TopicDiscoveryProvider`，provider 基于新闻/体育/宏观/链上等外部信号提出可映射 Polymarket 的新话题（60s 超时，失败不阻断）。已通过 SemanticDiscoveryRuntime 自动搜索匹配 Polymarket 市场并加入候选池。
+- [x] ~~按 `CandidateTriage.evidence_gaps` 自动扩展外部证据抓取~~：已实现 `EvidenceGapRuntime`，按 gap 类别（news, social, expert, official, schedule, financial, on-chain, weather）自动搜索外部公开信息，生成带 freshness/relevance/source_quality 元数据的证据项。
+- [x] ~~增加市场类别专用研究适配器~~：已实现 5 个领域适配器（SportsScheduleAdapter, MacroCalendarAdapter, WeatherDataAdapter, OnChainDataAdapter, FinancialDataAdapter），按市场 category/question 自动激活。
+- [x] ~~增加概率校准层~~：已实现 `ProbabilityCalibrationLayer`，按 confidence、researchability、information_advantage、evidence freshness/count、liquidity、days-to-resolution 和 pre-screen 分类做 shrinkage 校准，输出 rawProbability、calibratedProbability 和 calibrationReasons。
+- [x] ~~Topic Discovery 结果自动匹配~~：已实现 `SemanticDiscoveryRuntime`，把 TopicDiscoveryProvider 返回的 search_terms 在全市场做 token-based 匹配、语义聚类和重复事件合并，新市场加入候选池。
+- [x] ~~全市场语义发现~~：通过 SemanticDiscoveryRuntime 实现对全市场的跨页语义聚类、主题扩展和重复事件合并。
+- [x] ~~动态概率校准~~：已实现 `DynamicCalibrationStore`，用历史预测结果建立 Brier score 反馈环，按概率桶生成动态校准曲线（isotonic regression 近似），支持 category/confidence 维度分维度校准。
+- [x] ~~增加收益归因 artifact~~：已实现 `ReturnAttributionEngine`，将 P&L 分解为 prediction_error、market_price_change、fee_impact、slippage、position_size、holding_period 和 exit_decision 7 个因子。
+- [x] ~~进一步改进收益排序~~：已实现 `DownsideRiskRanker`，在 monthly return / net edge / Kelly 排序基础上加入下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本），输出 risk-adjusted score 用于最终排序。
+- [x] ~~建立预测效果评估报表~~：已实现 `PredictionPerformanceTracker`，每 N 轮在 simulated log 中输出完整评估：hit rate、Brier score、校准偏差、按 confidence/category 分组胜率、edge 精度。
+- [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
+- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score、pre-screen 分类和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
+- [ ] 把 order book 证据中的 spread、深度和滑点估算纳入 expected return 计算（当前 order book 只作为 AI 证据输入），避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
+- [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
+- [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
+
+### Simulated Monitor Log 格式
 
 `SIMULATED_MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 live simulated `trade once` 或 `monitor run` 都会先写入 session header：
 
@@ -703,6 +255,337 @@ header 字段含义：
 | `round.end` | `max_drawdown_usd` | 本进程内模拟权益相对高水位的最大回撤美元值。 |
 | `round.end` | `errors` | 本轮错误摘要；`none` 表示无错误。 |
 
+### 关键文档
+
+- `docs/specs/product-requirements.md`
+- `docs/specs/architecture.md`
+- `docs/specs/risk-controls.md`
+- `docs/specs/testing-plan.md`
+- `docs/runbooks/server-deploy.md`
+- `docs/runbooks/live-trading-checklist.md`
+- `docs/testing.md`
+- `docs/FINAL_ACCEPTANCE.md`
+- `docs/KNOWN_LIMITATIONS.md`
+- `docs/ROADMAP.md`
+- `docs/memory/POLYPULSE_MEMORY.md`
+
+### Codex live runtime 提示词
+
+执行一次完整 `monitor run` pipeline，AI provider 会被调用 **5 类提示词**（每类对应一个 runtime）：
+
+| 序号 | Runtime | 提示词用途 | 调用次数/轮 |
+| --- | --- | --- | --- |
+| 1 | `topic-discovery-runtime.js` | AI 话题发现：从外部信号发现被规则遗漏的话题 | 1 次 |
+| 2 | `prescreen-runtime.js` | AI pre-screen：对候选池做 TRADE/SKIP 信息优势预判 | 1 次（批量） |
+| 3 | `candidate-triage-runtime.js` | AI candidate triage：语义聚类、可研究性、证据缺口 | 1 次（批量） |
+| 4 | `evidence-research-runtime.js` | AI 证据研究：评估证据充分性、指导定向搜索 | N 次（每个选中候选 1 次） |
+| 5 | `codex-runtime.js` | AI 概率估算：估算事件发生概率 | N 次（每个选中候选 1 次） |
+
+`predict` 和 `trade once` 只调用第 4、5 步（单市场：证据研究 + 概率估算 = 2 次 AI 调用）。
+
+每个 runtime 文件顶部的 JSDoc 注释包含完整的中文提示词模板示例。具体参见：
+
+| Runtime | 提示词模板位置 |
+| --- | --- |
+| `src/runtime/topic-discovery-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
+| `src/runtime/prescreen-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
+| `src/runtime/candidate-triage-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
+| `src/runtime/evidence-research-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
+| `src/runtime/codex-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
+
+所有 prompt 由各 runtime 的 `buildPrompt()` 函数动态生成，支持 `CODEX_SKILL_LOCALE=zh|en` 双语切换。实际命令形态：
+
+```bash
+codex exec \
+  --skip-git-repo-check \
+  -C <repoRoot> \
+  -s read-only \
+  --output-schema <tempDir>/<schema>.json \
+  -o <tempDir>/provider-output.json \
+  --color never \
+  [-m <CODEX_MODEL>] \
+  -
+```
+
+最后的 `-` 表示 prompt 通过 stdin 传入。Codex 的输出必须写成对应 JSON schema，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
+
+## 使用方法
+
+只保留必要配置和命令；所有命令都使用 `.env`，并读取当前 Polymarket 真实市场。每个关键流程保留 `Codex 提示词版本`，可直接交给 Codex 代跑；`live real` 必须先确认真实资金风险。
+
+### 必需运行模式
+
+`.env` 必须明确选择以下两种模式之一。
+
+`live simulated` 用于真实市场演练：
+
+```bash
+POLYPULSE_EXECUTION_MODE=live
+POLYPULSE_LIVE_WALLET_MODE=simulated
+SIMULATED_WALLET_BALANCE_USD=100
+SIMULATED_MONITOR_LOG_PATH=/home/PolyPulse/logs/polypulse-simulated-monitor.log
+POLYPULSE_MARKET_SOURCE=polymarket
+POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+```
+
+`live real` 用于真实钱包交易：
+
+```bash
+POLYPULSE_EXECUTION_MODE=live
+POLYPULSE_LIVE_WALLET_MODE=real
+PRIVATE_KEY=<server-local-secret>
+FUNDER_ADDRESS=<0x...>
+SIGNATURE_TYPE=<signature-type>
+CHAIN_ID=137
+POLYMARKET_HOST=https://clob.polymarket.com
+POLYPULSE_MARKET_SOURCE=polymarket
+POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+```
+
+`live real` 下单前还必须完成真实钱包检查：
+
+```bash
+# 1. 检查 live real env、secret 必填项和 Polymarket CLOB client。
+node ./bin/polypulse.js env check --mode live --env-file .env
+
+# 2. 查询真实 Polymarket CLOB collateral balance 和 allowance。
+node ./bin/polypulse.js account balance --mode live --env-file .env
+
+# 3. 一次性审计真实账户仓位、历史成交、撤单/拒单、本地记录、胜率和收益质量。
+node ./bin/polypulse.js account audit --mode live --env-file .env
+
+# 4. 确认仍在读取当前 Polymarket 真实市场；quick 只做轻量实时可读性检查。
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
+
+# 5. 如果 allowance 不足，只能在明确接受真实授权风险后执行。
+node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
+```
+
+真实钱包交易必须确认：
+
+- `POLYPULSE_LIVE_WALLET_MODE=real`。
+- `PRIVATE_KEY`、`FUNDER_ADDRESS`、`SIGNATURE_TYPE`、`CHAIN_ID=137`、`POLYMARKET_HOST=https://clob.polymarket.com` 已配置。
+- `FUNDER_ADDRESS` 是预期真实资金地址；不要在日志、README、issue 或提示词中输出 secret。
+- `account balance` 返回的 CLOB collateral balance 足以覆盖计划下单金额，allowance 不为 0 且满足下单需要；allowance 不足时先停止下单，再决定是否手动运行 `account approve --confirm APPROVE`。
+- `account audit` 必须返回 `ok=true`，并能核对已有仓位：market、outcome、token、size、avg cost、current value、unrealized PnL、到期/结算状态；如有未知仓位或风险暴露超限，停止真实下单。
+- `account audit` 必须核对历史交易记录：最近成交、撤单/拒单、买入/卖出方向、成交均价、费用估算、realized PnL，并与 `runtime-artifacts` 中的 runs、monitor、account artifact 交叉检查。
+- `account audit` 必须统计真实账户胜率和收益质量：已结算/已平仓交易的 wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤；胜率或净收益异常时暂停真实下单并复盘预测和风控。
+- `market topics --quick` 能读取当前 Polymarket 真实市场；如果市场源、余额、allowance、真实账户审计或 env preflight 任一失败，停止真实下单。
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env 是否是 live simulated 或 live real，并确认 POLYPULSE_MARKET_SOURCE=polymarket、POLYMARKET_GAMMA_HOST 指向真实 Gamma API。
+2. 如果是 live simulated，请确认它会读取真实 Polymarket 市场，但不会连接真实钱包或提交真实订单。
+3. 如果是 live real，请一次性完成真实账户检查：确认 PRIVATE_KEY、FUNDER_ADDRESS、SIGNATURE_TYPE、CHAIN_ID 和 POLYMARKET_HOST；运行 env check、account balance、account audit 和 market topics --quick；不要输出真实 secret；汇总 funder 地址、collateral balance、allowance、真实市场读取结果、已有仓位（market、outcome、size、avg cost、current value、unrealized PnL、到期/结算状态）、历史交易（最近成交、撤单/拒单、费用、realized PnL）和胜率收益质量（wins、losses、win rate、平均盈利、平均亏损、净收益率、最大回撤）；如果真实余额不足、allowance 不足、已有仓位风险暴露超限、历史交易/胜率无法核对、CLOB client/preflight 失败或无法读取当前 Polymarket 真实市场，请停止真实下单。只有我明确要求授权时，才可以运行 account approve --confirm APPROVE。
+```
+
+### Predict-Raven Pulse 策略配置
+
+默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径。这里的”兼容”只表示职责分离和收益计算口径相近，不表示 PolyPulse 已实现完整 Predict-Raven 方法。
+
+所有 `PULSE_*` 和 `EVIDENCE_*` 环境变量的完整枚举和逐项说明见 `.env.example`。
+
+行为概要：
+
+- `market topics` 默认按 Pulse-compatible 候选池筛选；`market topics --quick` 关闭候选筛选做轻量可读性检查。
+- `monitor run` 链路：规则预筛 → AI pre-screen（TRADE/SKIP）→ AI candidate triage（语义聚类、可研究性、信息优势、证据缺口）→ 证据收集（page scrape、order book、resolution source、领域适配器、gap auto-fill）→ AI 概率估算 → 概率校准（静态 shrinkage + 动态 Brier score 反馈）→ downside risk ranking → 代码计算 fee/edge/Kelly/monthly return → RiskEngine → 执行。
+- `predict`、`trade once` 和 `monitor run` 输出包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return`，用于验证 Predict-Raven fee / Kelly / monthly return 口径。
+- `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 服务层分工一致：证据不足时 warning，不硬阻断；`live real` 仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env 的 PULSE_* 配置是否与 Predict-Raven pulse-direct 兼容口径一致。
+2. 请说明 market topics、predict、trade once 和 monitor run 会如何使用这些 PULSE_* 配置。
+```
+
+### 切换概率估算 Provider
+
+只保留真实 AI provider 路径。启用 Codex：
+
+```bash
+AI_PROVIDER=codex
+AGENT_RUNTIME_PROVIDER=codex
+CODEX_SKILL_ROOT_DIR=skills
+CODEX_SKILL_LOCALE=zh
+CODEX_SKILLS=polypulse-market-agent
+```
+
+启用 Claude Code：
+
+```bash
+AI_PROVIDER=claude-code
+AGENT_RUNTIME_PROVIDER=claude-code
+CLAUDE_CODE_SKILL_ROOT_DIR=skills
+CLAUDE_CODE_SKILL_LOCALE=zh
+CLAUDE_CODE_SKILLS=polypulse-market-agent
+CLAUDE_CODE_PERMISSION_MODE=bypassPermissions
+CLAUDE_CODE_ALLOWED_TOOLS=Read,Glob,Grep
+```
+
+验证当前 provider：
+
+```bash
+# 如果使用 Claude Code，把 expect 改成 claude-code。
+npm run agent:check -- --env-file .env --expect codex
+```
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env 是否启用了 Codex 或 Claude Code provider，并确认会调用配置的真实 AI provider。
+2. 请运行 agent:check 验证当前 provider、runtime provider 和 skill 配置。
+```
+
+### 一次性验收
+
+将完整 pipeline 拆分为独立步骤，每步可单独执行验证：
+
+#### Step 1: 环境检查
+
+确认 `.env` 配置、provider、执行模式正确。
+
+```bash
+node ./bin/polypulse.js env check --mode live --env-file .env
+```
+
+Codex 提示词：
+
+```text
+请检查 live env，确认当前 .env 是 live simulated 或 live real，确认 provider 配置正确，输出 env 摘要。
+```
+
+#### Step 2: 规则扫描市场候选池
+
+从 Polymarket Gamma API 拉取活跃市场，按 liquidity、volume、category 等规则过滤，获取可用 marketId / marketSlug。不涉及 AI。
+
+```bash
+node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
+```
+
+Codex 提示词：
+
+```text
+请用 market topics --quick 抓取 20 个当前 Polymarket 真实市场 topic，并挑选 1-2 个可用于后续验收步骤的 marketId 或 marketSlug。
+```
+
+#### Step 3: AI Agent 话题发现（可选）
+
+调用 AI agent 从新闻/赛事/宏观/加密信号中发现可能被 Step 2 规则扫描遗漏的话题，补充候选池。
+
+```bash
+node ./bin/polypulse.js discover topics --env-file .env
+```
+
+Codex 提示词：
+
+```text
+请运行 discover topics，确认 AI 话题发现正常返回话题列表（topic、category、search_terms），汇总发现的话题数量和类别分布。
+```
+
+#### Step 4: 证据收集 + AI 研究指导
+
+先由规则适配器抓取基础证据（page scrape、order book、resolution source、领域适配器），再由 AI Evidence Research runtime 评估证据充分性并指导定向搜索。
+
+```bash
+node ./bin/polypulse.js evidence collect --env-file .env --market <market-id-or-slug>
+```
+
+Codex 提示词：
+
+```text
+请对选出的市场运行 evidence collect，确认证据收集正常，汇总 evidenceCount、sources 列表和各 adapter 状态。
+```
+
+#### Step 5: AI Agent 预测
+
+调用 AI provider 做概率估算，输出 ai_probability、confidence、edge、Kelly。
+
+```bash
+node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
+```
+
+Codex 提示词：
+
+```text
+请对选出的市场运行 predict，汇总 provider、ai_probability、market_implied_probability、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
+```
+
+#### Step 6: 风控评估
+
+在预测基础上运行完整风控检查（不执行交易），确认 RiskEngine 决策正确。
+
+```bash
+node ./bin/polypulse.js risk evaluate --env-file .env --market <market-id-or-slug> --max-amount 1
+```
+
+Codex 提示词：
+
+```text
+请对选出的市场运行 risk evaluate，确认 risk_allowed 状态、blocked_reasons、warnings、approved_usd，不提交任何订单。
+```
+
+#### Step 7: 交易执行
+
+风控通过后，提交真实或模拟交易。`live simulated` 不连接真实钱包、不提交真实订单。
+
+```bash
+# live simulated
+node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+tail -n 80 /home/PolyPulse/logs/polypulse-simulated-monitor.log
+```
+
+```bash
+# live real（先检查余额和审计）
+node ./bin/polypulse.js account balance --mode live --env-file .env
+node ./bin/polypulse.js account audit --mode live --env-file .env
+node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+```
+
+Codex 提示词：
+
+```text
+如果是 live simulated，请运行 trade once 验收，并确认不连接真实钱包、不提交真实订单，检查 simulated log 输出。
+如果是 live real，请先运行 account balance 和 account audit；只在我明确确认接受真实资金风险且 audit 无阻断后运行 trade once。
+```
+
+#### 流水线说明
+
+`live simulated trade once` 和 `live simulated monitor` 使用同一套进程内模拟账本逻辑：初始资金都来自 `SIMULATED_WALLET_BALANCE_USD`，每次进程启动都会写同样的 session header，执行过程都追加到 `SIMULATED_MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，不做候选池 AI triage，进程结束后模拟仓位丢失；`monitor run --loop` 在同一进程内跨轮保留模拟仓位，并按间隔继续 mark-to-market、复核和平仓。
+
+### 持续 Monitor
+
+同一个命令用于 `live simulated` 和 `live real`；区别由 `.env` 的 `POLYPULSE_LIVE_WALLET_MODE` 决定。`live real` 会连接真实钱包，并可能提交真实订单。
+
+```bash
+node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
+```
+
+`live simulated monitor` 的行为：
+
+- 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
+- 规则预筛后先调用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，60 秒超时，失败时保留全部），被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
+- 通过 pre-screen 的候选再调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
+- 证据收集阶段从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据（结算规则、注释/公告、社区高赞评论），从 CLOB 获取每个 outcome token 的 order book 深度（best bid/ask、spread、2% 深度、top 5 挂单），并对 resolution source URL 做实时访问验证获取官方数据源当前状态，连同 market metadata 和 resolution rules 一起作为上下文传给 AI 做概率估算。
+- 对候选市场调用配置的真实 AI provider 预测胜率、证据质量、可研究性和信息优势，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。
+- AI 概率估算后，ProbabilityCalibrationLayer 对原始概率做 shrinkage 校准；DynamicCalibrationStore 在有充足历史数据时进一步按动态校准曲线调整，输出最终 calibrated probability 用于排序和执行决策。
+- 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后，由 DownsideRiskRanker 进行二次排序（综合下行风险、流动性风险、类别集中度和资金分配），最终按 `risk_adjusted_score` 顺序执行；AI 不输出交易指令或 broker 参数。
+- 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
+- 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
+- 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
+- `trade once` 和 `monitor run` 在 live simulated 下共用同一套初始资金、日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留模拟仓位。
+- 程序退出后不保留模拟仓位、现金、交易状态或 JSON execution artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+
+Codex 提示词版本：
+
+```text
+1. 请检查 .env、provider、真实市场读取和 confirm LIVE。
+2. 如果是 live simulated，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存模拟账本自动开仓/平仓，但不连接真实钱包、不提交真实订单；程序退出后只保留人类可读 log。
+3. 如果是 live real，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
+4. 启动后请汇总 monitor 状态、风控状态、artifact 或 simulated log 位置。
+```
+
 ### Monitor 管理
 
 ```bash
@@ -785,36 +668,3 @@ Codex 提示词版本：
 5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log、account audit 和 market topics --quick 输出，确认部署后仍读取当前 Polymarket 真实市场且真实账户检查通过。
 ```
 
-## todo
-
-以下只保留直接影响预测成功率、概率校准和净收益率的待办项；所有项保持 live-only，并读取当前 Polymarket 真实市场。
-
-- [x] ~~增加 AI 外部话题发现~~：已实现 `TopicDiscoveryProvider`，provider 基于新闻/体育/宏观/链上等外部信号提出可映射 Polymarket 的新话题（60s 超时，失败不阻断）。已通过 SemanticDiscoveryRuntime 自动搜索匹配 Polymarket 市场并加入候选池。
-- [x] ~~按 `CandidateTriage.evidence_gaps` 自动扩展外部证据抓取~~：已实现 `EvidenceGapRuntime`，按 gap 类别（news, social, expert, official, schedule, financial, on-chain, weather）自动搜索外部公开信息，生成带 freshness/relevance/source_quality 元数据的证据项。
-- [x] ~~增加市场类别专用研究适配器~~：已实现 5 个领域适配器（SportsScheduleAdapter, MacroCalendarAdapter, WeatherDataAdapter, OnChainDataAdapter, FinancialDataAdapter），按市场 category/question 自动激活。
-- [x] ~~增加概率校准层~~：已实现 `ProbabilityCalibrationLayer`，按 confidence、researchability、information_advantage、evidence freshness/count、liquidity、days-to-resolution 和 pre-screen 分类做 shrinkage 校准，输出 rawProbability、calibratedProbability 和 calibrationReasons。
-- [x] ~~Topic Discovery 结果自动匹配~~：已实现 `SemanticDiscoveryRuntime`，把 TopicDiscoveryProvider 返回的 search_terms 在全市场做 token-based 匹配、语义聚类和重复事件合并，新市场加入候选池。
-- [x] ~~全市场语义发现~~：通过 SemanticDiscoveryRuntime 实现对全市场的跨页语义聚类、主题扩展和重复事件合并。
-- [x] ~~动态概率校准~~：已实现 `DynamicCalibrationStore`，用历史预测结果建立 Brier score 反馈环，按概率桶生成动态校准曲线（isotonic regression 近似），支持 category/confidence 维度分维度校准。
-- [x] ~~增加收益归因 artifact~~：已实现 `ReturnAttributionEngine`，将 P&L 分解为 prediction_error、market_price_change、fee_impact、slippage、position_size、holding_period 和 exit_decision 7 个因子。
-- [x] ~~进一步改进收益排序~~：已实现 `DownsideRiskRanker`，在 monthly return / net edge / Kelly 排序基础上加入下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本），输出 risk-adjusted score 用于最终排序。
-- [x] ~~建立预测效果评估报表~~：已实现 `PredictionPerformanceTracker`，每 N 轮在 simulated log 中输出完整评估：hit rate、Brier score、校准偏差、按 confidence/category 分组胜率、edge 精度。
-- [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
-- [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score、pre-screen 分类和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
-- [ ] 把 order book 证据中的 spread、深度和滑点估算纳入 expected return 计算（当前 order book 只作为 AI 证据输入），避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
-- [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
-- [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
-
-## 关键文档
-
-- `docs/specs/product-requirements.md`
-- `docs/specs/architecture.md`
-- `docs/specs/risk-controls.md`
-- `docs/specs/testing-plan.md`
-- `docs/runbooks/server-deploy.md`
-- `docs/runbooks/live-trading-checklist.md`
-- `docs/testing.md`
-- `docs/FINAL_ACCEPTANCE.md`
-- `docs/KNOWN_LIMITATIONS.md`
-- `docs/ROADMAP.md`
-- `docs/memory/POLYPULSE_MEMORY.md`

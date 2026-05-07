@@ -10,6 +10,7 @@ import { RiskEngine } from "../core/risk-engine.js";
 import { CandidateTriageProvider } from "../runtime/candidate-triage-runtime.js";
 import { PreScreenProvider } from "../runtime/prescreen-runtime.js";
 import { EvidenceGapRuntime } from "../runtime/evidence-gap-runtime.js";
+import { EvidenceResearchProvider } from "../runtime/evidence-research-runtime.js";
 import { TopicDiscoveryProvider } from "../runtime/topic-discovery-runtime.js";
 import { SemanticDiscoveryRuntime } from "../runtime/semantic-discovery-runtime.js";
 import { DownsideRiskRanker } from "../core/downside-risk-ranker.js";
@@ -284,6 +285,9 @@ export class Scheduler {
       ? new PreScreenProvider(probabilityConfig)
       : null;
     this.evidenceGapRuntime = new EvidenceGapRuntime(config);
+    this.evidenceResearchProvider = config.pulse?.aiEvidenceResearch !== false
+      ? new EvidenceResearchProvider(probabilityConfig)
+      : null;
     this.topicDiscoveryProvider = config.pulse?.aiTopicDiscovery !== false
       ? new TopicDiscoveryProvider(probabilityConfig)
       : null;
@@ -337,8 +341,8 @@ export class Scheduler {
   async predictCandidate(candidate) {
     const market = candidate.market;
     const evidence = await this.evidenceCrawler.collect({ market });
-    const gapEvidence = await this.fillEvidenceGaps({ market, evidence, candidate });
-    const allEvidence = [...evidence, ...gapEvidence];
+    const additionalEvidence = await this.runEvidenceResearch({ market, evidence, candidate });
+    const allEvidence = [...evidence, ...additionalEvidence];
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
@@ -347,11 +351,30 @@ export class Scheduler {
   async predictCandidateNoCache(candidate) {
     const market = candidate.market;
     const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
-    const gapEvidence = await this.fillEvidenceGaps({ market, evidence, candidate });
-    const allEvidence = [...evidence, ...gapEvidence];
+    const additionalEvidence = await this.runEvidenceResearch({ market, evidence, candidate });
+    const allEvidence = [...evidence, ...additionalEvidence];
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
+  }
+
+  async runEvidenceResearch({ market, evidence, candidate }) {
+    if (!this.evidenceResearchProvider) {
+      return await this.fillEvidenceGaps({ market, evidence, candidate });
+    }
+    try {
+      const triage = candidate?.summary?.ai_triage ?? null;
+      const researchResult = await this.evidenceResearchProvider.research({ market, evidence, triage });
+      if (!researchResult || !researchResult.directed_searches || researchResult.directed_searches.length === 0) {
+        return await this.fillEvidenceGaps({ market, evidence, candidate });
+      }
+      const searchQueries = researchResult.directed_searches
+        .sort((a, b) => a.priority - b.priority)
+        .map((s) => s.query);
+      return await this.evidenceGapRuntime.fillGaps({ market, evidenceGaps: searchQueries, priorEvidence: evidence });
+    } catch {
+      return await this.fillEvidenceGaps({ market, evidence, candidate });
+    }
   }
 
   async fillEvidenceGaps({ market, evidence, candidate }) {
