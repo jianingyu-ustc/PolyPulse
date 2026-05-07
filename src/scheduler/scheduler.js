@@ -961,6 +961,400 @@ export class Scheduler {
     }
   }
 
+  async runAcceptanceRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null, marketId = null } = {}) {
+    if (mode !== "live") {
+      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
+    }
+
+    const runId = monitorRunId();
+    const startedAt = nowIso();
+    const amountUsd = maxAmountUsd ?? this.config.risk.minTradeUsd;
+    const ledger = this.simulatedLedger;
+    const simulated = Boolean(ledger);
+    const accumulator = {
+      runId,
+      mode,
+      startedAt,
+      completedAt: null,
+      scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
+      candidates: [],
+      predictions: [],
+      decisions: [],
+      risks: [],
+      orders: [],
+      errors: [],
+      candidateTriage: null,
+      preScreen: null,
+      topicDiscovery: null,
+      semanticDiscovery: null,
+      recoveredRun: null
+    };
+    const stages = {
+      scan: null,
+      discovery: null,
+      evidence: null,
+      prediction: null,
+      risk: null,
+      execution: null
+    };
+
+    if (simulated) {
+      await ledger.beginRound({ runId, limit: marketId ? 1 : limit, maxAmountUsd: amountUsd });
+    } else {
+      accumulator.recoveredRun = await this.stateStore.recoverMonitorRun();
+      const monitorState = await this.stateStore.getMonitorState();
+      if (monitorState.status === "stopped") {
+        return {
+          ok: true,
+          status: "stopped",
+          mode,
+          runId,
+          reason: monitorState.stopReason ?? "monitor_stopped",
+          stages,
+          artifact: null
+        };
+      }
+      await this.stateStore.startMonitorRun({ runId, mode });
+    }
+
+    const finishReal = async (status = "completed", error = null) => {
+      accumulator.completedAt = nowIso();
+      const artifacts = simulated
+        ? null
+        : await this.artifactWriter.writeMonitorRun(accumulator);
+      if (!simulated) {
+        await this.stateStore.completeMonitorRun(runId, {
+          status,
+          error,
+          artifact: artifacts.summary.path,
+          markets: accumulator.scan.markets?.length ?? 0,
+          candidates: accumulator.candidates.filter((item) => item.selected).length,
+          predictions: accumulator.predictions.length,
+          orders: accumulator.orders.filter((order) => order.status === "filled").length
+        });
+      }
+      return artifacts;
+    };
+
+    try {
+      await withTimeout(async () => {
+        if (marketId) {
+          const market = await this.marketSource.getMarket(marketId, simulated ? { noCache: true } : {});
+          if (!market) {
+            throw new Error(`Market not found: ${marketId}`);
+          }
+          accumulator.scan = {
+            source: market.source ?? this.config.marketSource,
+            fetchedAt: market.fetchedAt ?? nowIso(),
+            totalFetched: 1,
+            totalReturned: 1,
+            riskFlags: market.riskFlags ?? [],
+            markets: [market],
+            errors: []
+          };
+        } else {
+          accumulator.scan = await this.marketSource.scan({
+            ...(limit == null ? {} : { limit }),
+            ...(simulated ? { noCache: true } : {})
+          });
+        }
+        if (simulated) {
+          await ledger.logScan(accumulator.scan);
+          await this.reviewSimulatedPositions({ runId, accumulator });
+        }
+
+        stages.scan = {
+          ok: true,
+          source: accumulator.scan.source,
+          totalFetched: accumulator.scan.totalFetched,
+          totalReturned: accumulator.scan.totalReturned,
+          riskFlags: accumulator.scan.riskFlags ?? [],
+          pulse: accumulator.scan.pulse ?? null,
+          markets: accumulator.scan.markets ?? []
+        };
+
+        const monitorState = simulated ? ledger.monitorState() : await this.stateStore.getMonitorState();
+        const portfolio = simulated ? ledger.portfolio() : await this.stateStore.getPortfolio();
+        const candidateEntries = buildCandidates({
+          markets: accumulator.scan.markets ?? [],
+          monitorState,
+          portfolio,
+          config: this.config
+        });
+        await this.applyPreScreen({ candidateEntries, accumulator, ledger: simulated ? ledger : null });
+        await this.applyCandidateTriage({ candidateEntries, accumulator, ledger: simulated ? ledger : null });
+        accumulator.candidates = candidateEntries.map((item) => item.summary);
+        if (simulated) {
+          for (const candidate of accumulator.candidates) {
+            await ledger.log("candidate", {
+              market: candidate.marketSlug,
+              selected: candidate.selected,
+              reasons: (candidate.skipped_reasons ?? []).join(",") || "none"
+            });
+          }
+        }
+        const selected = candidateEntries.filter((item) => item.summary.selected);
+        if (selected.length === 0) {
+          throw new Error("acceptance_no_selected_monitor_candidates");
+        }
+        stages.discovery = {
+          ok: true,
+          liveMonitorAligned: true,
+          topicDiscovery: accumulator.topicDiscovery ?? null,
+          semanticDiscovery: accumulator.semanticDiscovery ?? null,
+          preScreen: accumulator.preScreen ?? null,
+          candidateTriage: accumulator.candidateTriage ?? null,
+          candidates: accumulator.candidates,
+          selectedCandidates: selected.map((item) => item.summary)
+        };
+
+        const predictions = await mapLimit(
+          selected,
+          this.config.monitor.concurrency,
+          this.config.monitor.backoffMs,
+          async (candidate) => {
+            try {
+              return simulated
+                ? await this.predictCandidateNoCache(candidate)
+                : await this.predictCandidate(candidate);
+            } catch (error) {
+              accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${error instanceof Error ? error.message : String(error)}`);
+              return null;
+            }
+          }
+        );
+        accumulator.predictions = predictions.filter(Boolean);
+        if (accumulator.predictions.length === 0) {
+          throw new Error(`acceptance_no_predictions:${accumulator.errors.join(";") || "unknown"}`);
+        }
+        stages.evidence = {
+          ok: true,
+          predictions: accumulator.predictions.map((prediction) => ({
+            marketId: prediction.market.marketId,
+            marketSlug: prediction.market.marketSlug,
+            question: prediction.market.question,
+            evidenceCount: prediction.evidence?.length ?? 0,
+            sources: [...new Set((prediction.evidence ?? []).map((item) => item.source))],
+            evidence: prediction.evidence
+          }))
+        };
+
+        const portfolioForRanking = simulated ? ledger.portfolio() : await this.stateStore.getPortfolio();
+        const baseRanked = rankPredictionsForExecution({
+          predictions: accumulator.predictions,
+          portfolio: portfolioForRanking,
+          amountUsd,
+          decisionEngine: this.decisionEngine
+        });
+        const rankedPredictions = simulated
+          ? this.downsideRiskRanker.rankWithDownsideRisk({
+            rankedPredictions: baseRanked,
+            portfolio: ledger.portfolio(),
+            ledgerStatistics: ledger.statistics()
+          })
+          : baseRanked;
+        if (simulated) {
+          for (const [index, ranked] of rankedPredictions.entries()) {
+            await ledger.log("candidate.ranked", {
+              rank: index + 1,
+              market: ranked.prediction.market.marketSlug,
+              action: ranked.analysis.action,
+              confidence: ranked.analysis.confidence,
+              monthly_return: ranked.analysis.monthlyReturn ?? "n/a",
+              net_edge: ranked.analysis.netEdge ?? "n/a",
+              risk_adjusted_score: ranked.riskAdjusted?.riskAdjustedScore ?? "n/a",
+              downside_score: ranked.downsideRisk?.score ?? "n/a",
+              reason: ranked.analysis.noTradeReason ?? "none"
+            });
+            this.predictionTracker.recordPrediction({
+              marketId: ranked.prediction.market.marketId,
+              marketSlug: ranked.prediction.market.marketSlug,
+              category: ranked.prediction.market.category,
+              aiProbability: ranked.analysis.aiProbability,
+              marketProbability: ranked.analysis.marketProbability ?? ranked.analysis.marketImpliedProbability,
+              confidence: ranked.analysis.confidence,
+              netEdge: ranked.analysis.netEdge,
+              monthlyReturn: ranked.analysis.monthlyReturn,
+              quarterKellyPct: ranked.analysis.quarterKellyPct,
+              side: ranked.analysis.suggestedSide,
+              notionalUsd: ranked.analysis.suggestedNotionalUsd,
+              roundId: runId
+            });
+          }
+        }
+        stages.prediction = {
+          ok: true,
+          ranked: rankedPredictions.map((ranked, index) => ({
+            rank: index + 1,
+            marketId: ranked.prediction.market.marketId,
+            marketSlug: ranked.prediction.market.marketSlug,
+            question: ranked.prediction.market.question,
+            provider: ranked.prediction.estimate?.diagnostics?.provider ?? null,
+            effectiveProvider: ranked.prediction.estimate?.diagnostics?.effectiveProvider ?? null,
+            providerRuntimeArtifact: ranked.prediction.estimate?.diagnostics?.artifact ?? null,
+            ai_probability: ranked.prediction.estimate?.ai_probability ?? null,
+            confidence: ranked.prediction.estimate?.confidence ?? null,
+            reasoning_summary: ranked.prediction.estimate?.reasoning_summary ?? null,
+            key_evidence: ranked.prediction.estimate?.key_evidence ?? [],
+            counter_evidence: ranked.prediction.estimate?.counter_evidence ?? [],
+            uncertainty_factors: ranked.prediction.estimate?.uncertainty_factors ?? [],
+            analysis: ranked.analysis,
+            riskAdjusted: ranked.riskAdjusted ?? null,
+            downsideRisk: ranked.downsideRisk ?? null
+          }))
+        };
+
+        if (simulated) {
+          let orderCount = 0;
+          let filledUsdThisRun = 0;
+          for (const { prediction } of rankedPredictions) {
+            const result = await this.evaluateAndMaybeSimulatedOrder({
+              prediction,
+              mode,
+              confirmation,
+              maxAmountUsd: amountUsd,
+              runId,
+              orderCount,
+              filledUsdThisRun
+            });
+            prediction.decision = result.decision;
+            prediction.risk = result.risk;
+            prediction.order = result.order;
+            accumulator.decisions.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              question: prediction.market.question,
+              phase: "open-scan",
+              ...result.decision
+            });
+            accumulator.risks.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              ...result.risk
+            });
+            accumulator.orders.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              ...result.order
+            });
+            if (result.order.status === "filled" && result.order.filledUsd > 0) {
+              orderCount += 1;
+              filledUsdThisRun += result.order.filledUsd;
+            }
+          }
+          await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
+        } else {
+          const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ mode, confirmation });
+          let orderCount = 0;
+          let filledUsdThisRun = 0;
+          for (const { prediction } of rankedPredictions) {
+            const result = await this.evaluateAndMaybeOrder({
+              prediction,
+              mode,
+              confirmation,
+              maxAmountUsd: amountUsd,
+              runId,
+              orderCount,
+              filledUsdThisRun,
+              liveBalance,
+              liveBalanceError
+            });
+            prediction.decision = result.decision;
+            prediction.risk = result.risk;
+            prediction.order = result.order;
+            accumulator.decisions.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              question: prediction.market.question,
+              ...result.decision
+            });
+            accumulator.risks.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              ...result.risk
+            });
+            accumulator.orders.push({
+              marketId: prediction.market.marketId,
+              marketSlug: prediction.market.marketSlug,
+              ...result.order
+            });
+            if (result.order.status === "filled" && result.order.filledUsd > 0) {
+              orderCount += 1;
+              filledUsdThisRun += result.order.filledUsd;
+            }
+          }
+        }
+        stages.risk = {
+          ok: true,
+          risks: accumulator.risks
+        };
+      }, this.config.monitor.runTimeoutMs, "acceptance_monitor_round");
+
+      accumulator.completedAt = nowIso();
+      if (simulated) {
+        await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
+      }
+      const artifacts = await finishReal("completed");
+      stages.execution = {
+        ok: true,
+        orders: accumulator.orders,
+        filledOrders: accumulator.orders.filter((order) => order.status === "filled"),
+        action: accumulator.orders.some((order) => order.status === "filled")
+          ? (simulated ? "simulated-orders" : "live-orders")
+          : "no-trade",
+        log: simulated ? ledger.logPath : null,
+        artifact: simulated ? ledger.logPath : artifacts?.summary?.path ?? null,
+        performance: simulated ? ledger.statistics() : null
+      };
+      return {
+        ok: true,
+        status: "completed",
+        mode,
+        runId,
+        walletMode: this.config.liveWalletMode,
+        markets: accumulator.scan.markets?.length ?? 0,
+        candidates: accumulator.candidates.filter((item) => item.selected).length,
+        predictions: accumulator.predictions.length,
+        orders: accumulator.orders.filter((order) => order.status === "filled").length,
+        action: stages.execution.action,
+        artifact: stages.execution.artifact,
+        log: stages.execution.log,
+        stages,
+        accumulator
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      accumulator.errors.push(message);
+      accumulator.completedAt = nowIso();
+      if (simulated) {
+        await ledger.endRound({ runId, status: "failed", errors: accumulator.errors });
+      }
+      const artifacts = await finishReal("failed", message);
+      stages.execution = stages.execution ?? {
+        ok: false,
+        orders: accumulator.orders,
+        action: "no-trade",
+        log: simulated ? ledger.logPath : null,
+        artifact: simulated ? ledger.logPath : artifacts?.summary?.path ?? null,
+        performance: simulated ? ledger.statistics() : null,
+        error: message
+      };
+      return {
+        ok: false,
+        status: "failed",
+        mode,
+        runId,
+        walletMode: this.config.liveWalletMode,
+        error: message,
+        action: "no-trade",
+        artifact: stages.execution.artifact,
+        log: stages.execution.log,
+        stages,
+        accumulator
+      };
+    }
+  }
+
   async runSimulatedMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     if (mode !== "live") {
       throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);

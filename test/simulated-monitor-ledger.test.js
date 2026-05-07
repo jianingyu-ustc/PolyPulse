@@ -95,7 +95,10 @@ async function configForTest(dir) {
     "CHAIN_ID=137",
     "POLYMARKET_HOST=https://clob.polymarket.com",
     "PULSE_MIN_LIQUIDITY_USD=0",
+    "PULSE_AI_PRESCREEN=false",
     "PULSE_AI_CANDIDATE_TRIAGE=false",
+    "PULSE_AI_TOPIC_DISCOVERY=false",
+    "PULSE_AI_EVIDENCE_RESEARCH=false",
     "MIN_AI_CONFIDENCE=high",
     "MIN_TRADE_USD=1",
     "MAX_TRADE_PCT=1",
@@ -452,6 +455,79 @@ test("simulated trade once uses the same in-memory ledger and human log format a
   assert.match(log, /risk/);
   assert.match(log, /open\.filled/);
   assert.match(log, /round\.end/);
+});
+
+test("acceptance round uses monitor candidate ranking instead of the first scanned market", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-acceptance-rank-"));
+  const config = await configForTest(dir);
+  config.monitor.maxTradesPerRound = 1;
+  const firstScanned = market({
+    yesPrice: 0.8,
+    slug: "first-scanned-low-edge",
+    marketId: "first-scanned",
+    eventId: "event-first"
+  });
+  const betterCandidate = market({
+    yesPrice: 0.2,
+    slug: "second-scanned-high-edge",
+    marketId: "second-scanned",
+    eventId: "event-second"
+  });
+  const scheduler = new Scheduler({
+    config,
+    stateStore: {},
+    artifactWriter: {},
+    marketSource: {
+      async scan(request) {
+        assert.equal(request.noCache, true);
+        assert.equal(request.limit, 2);
+        return {
+          source: "test",
+          fetchedAt: new Date().toISOString(),
+          totalFetched: 2,
+          totalReturned: 2,
+          riskFlags: [],
+          markets: [firstScanned, betterCandidate]
+        };
+      }
+    }
+  });
+  scheduler.topicDiscoveryProvider = null;
+  scheduler.preScreenProvider = null;
+  scheduler.candidateTriageProvider = null;
+  scheduler.evidenceResearchProvider = null;
+  scheduler.evidenceCrawler = {
+    async collect({ noCache }) {
+      assert.equal(noCache, true);
+      return [
+        { status: "fetched", relevanceScore: 1, source: "test-source" },
+        { status: "fetched", relevanceScore: 1, source: "test-source-2" }
+      ];
+    }
+  };
+  scheduler.probabilityEstimator = {
+    async estimate({ market: estimateMarket }) {
+      return estimateForMarket(estimateMarket, {
+        aiProbability: estimateMarket.marketId === betterCandidate.marketId ? 0.8 : 0.82,
+        confidence: "high"
+      });
+    }
+  };
+
+  const result = await scheduler.runAcceptanceRound({
+    mode: "live",
+    confirmation: "LIVE",
+    limit: 2,
+    maxAmountUsd: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stages.scan.markets[0].marketSlug, firstScanned.marketSlug);
+  assert.equal(result.stages.prediction.ranked[0].marketSlug, betterCandidate.marketSlug);
+  assert.equal(result.stages.execution.filledOrders.length, 1);
+  assert.equal(result.stages.execution.filledOrders[0].marketSlug, betterCandidate.marketSlug);
+  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  assert.match(log, /candidate\.ranked \| rank=1 market=second-scanned-high-edge/);
 });
 
 test("simulated monitor closes positions by signal and records performance", async () => {

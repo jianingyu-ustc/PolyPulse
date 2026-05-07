@@ -13,6 +13,8 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
+概率和下单金额口径：AI provider 输出的 `ai_probability` 表示 Yes outcome 的独立概率估计；代码会为每个 outcome 生成可执行比较口径，Yes 使用 `ai_probability`，No 使用 `1 - ai_probability`。`DecisionEngine` 会同时评估 Yes 和 No，分别比较 `outcome_ai_probability` 和该 outcome 的 `market_implied_probability`，计算 `grossEdge = outcome_ai_probability - market_implied_probability`，再扣除 fee 得到 `netEdge`。因此当 Yes 的 `ai_probability < Yes market_implied_probability` 时，不是必然跳过；如果 No outcome 的 `1 - ai_probability` 高于 No 盘口且扣费后 `netEdge > 0`，系统会考虑买入 No，否则跳过。`pulse-direct` 下仓位先按 quarter Kelly 计算：`fullKellyPct = max(0, (outcome_ai_probability - market_implied_probability) / (1 - market_implied_probability))`，`quarterKellyPct = fullKellyPct / 4`，`suggestedNotionalUsd = bankrollUsd * quarterKellyPct`。最终可下单金额不是 AI 决定，也不等于 `--max-amount`，而是由代码取 `--max-amount`（或默认 `MIN_TRADE_USD`）、daily 剩余额度、`suggestedNotionalUsd`、单笔/总敞口/event 敞口/流动性上限、真实余额和 allowance 等约束后的 `approvedUsd`；实际提交的 `risk.order.amountUsd` 小于等于 `--max-amount`，风控不通过时为 0。
+
 PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
 主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；真实 monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
@@ -443,26 +445,25 @@ Codex 提示词版本：
 #### 一键执行全部 7 步
 
 ```bash
-# 自动选取市场，顺序执行 Step 1-7
+# 使用 live monitor 同一套逻辑，顺序输出 Step 1-7 验收日志
+# 可选参数：
+#   --market <market-slug>       手动指定市场；仍使用 monitor 的候选、预测、风控和执行阶段
+#   --max-amount <usd>           指定单笔交易金额上限；最终 approvedUsd 会小于等于该值
+#   --limit <n>                  指定 monitor 扫描候选数量
+#   --allow-live-execution       live real 下传入 LIVE confirmation，可能提交真实订单
 node scripts/acceptance.js --env-file .env
-
-# 手动指定市场
-node scripts/acceptance.js --env-file .env --market <market-slug>
-
-# 跳过 AI 话题发现（节省时间）
-node scripts/acceptance.js --env-file .env --skip-discovery
-
-# 指定交易金额上限
-node scripts/acceptance.js --env-file .env --max-amount 2
 ```
 
-脚本会依次执行：环境检查 → 规则扫描 → AI 话题发现 → 证据收集 → AI 预测 → 风控 → 交易。
-每步日志保存到 `runtime-artifacts/acceptance-runs/<timestamp>/`，失败时中断并输出原因。
-`live real` 模式下 Step 7 交易不会自动执行，需手动操作。
+脚本会在同一轮内存状态中依次输出：环境检查 → monitor 规则扫描和候选过滤 → monitor AI pre-screen/triage → monitor 证据收集 → monitor AI 预测和排序 → monitor 风控 → monitor 执行。
+只运行一次 `node scripts/acceptance.js --env-file .env` 即可生成全部 Step 1-7 日志；下面每个 Step 小节说明的是查看同一个 `runtime-artifacts/acceptance-runs/<timestamp>/` 目录中的对应输出文件，不是让每步重新执行一次验收。
+失败时脚本会写入 `summary.json` 和 `error.log`，并尽量保留已完成 Step 的 stdout/stderr 日志。
+Step 2-7 复用 live monitor 的 `Scheduler` 阶段，不再用 `topics[0]` 串联独立 CLI 命令。
+`live simulated` 模式下 Step 7 会走模拟订单路径，不连接真实钱包、不提交真实订单。
+`live real` 模式下默认不传 `LIVE` confirmation，因此会跑到 monitor 风控/执行器但不会自动提交真实订单；只有显式加 `--allow-live-execution` 才会把 `LIVE` confirmation 传入验收执行阶段。
 
 #### Step 1: 环境检查
 
-确认 `.env` 配置、provider、执行模式正确。
+确认 `.env` 配置、provider、执行模式正确。一次性验收会把结果写入 `step1-env-check.stdout.log`；也可以用下面命令单独做预检查。
 
 ```bash
 node ./bin/polypulse.js env check --mode live --env-file .env
@@ -476,96 +477,91 @@ Codex 提示词：
 
 #### Step 2: 规则扫描市场候选池
 
-从 Polymarket Gamma API 拉取活跃市场，按 liquidity、volume、category 等规则过滤，获取可用 marketId / marketSlug。不涉及 AI。
+从 Polymarket Gamma API 拉取活跃市场，使用 live monitor 相同的 pulse-compatible scan、watchlist/blocklist、已交易市场和持仓过滤逻辑生成候选池。不涉及独立取 `topics[0]`。
 
-```bash
-node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
-```
+查看本轮 `step2-monitor-scan-and-candidates.stdout.log`，重点确认 `scan.totalFetched`、`scan.totalReturned`、`scan.pulse`、`candidates[].selected` 和 `candidates[].skipped_reasons`。
 
 Codex 提示词：
 
 ```text
-请用 market topics --quick 抓取 20 个当前 Polymarket 真实市场 topic，并挑选 1-2 个可用于后续验收步骤的 marketId 或 marketSlug。
+请运行 acceptance Step 2，确认 monitor scan 返回真实 Polymarket 市场，并汇总 totalFetched、totalReturned、pulse selection、selectedCandidates 和 skipped_reasons。
 ```
 
-#### Step 3: AI Agent 话题发现（可选）
+#### Step 3: AI pre-screen / candidate triage
 
-调用 AI agent 从新闻/赛事/宏观/加密信号中发现可能被 Step 2 规则扫描遗漏的话题，补充候选池。
+调用 live monitor 相同的 AI pre-screen 和 candidate triage，对 Step 2 候选市场做适合性和优先级评估。一次性验收不再运行独立 topic discovery；这和当前 live real monitor 生产路径保持一致。
 
-```bash
-node ./bin/polypulse.js discover topics --env-file .env
-```
+查看本轮 `step3-monitor-ai-prescreen-triage.stdout.log`，重点确认 `preScreen`、`candidateTriage` 和 `selectedCandidates` 是否正常返回；如是 live simulated，同时检查 simulated monitor log 中的 triage 事件。
 
 Codex 提示词：
 
 ```text
-请运行 discover topics，确认 AI 话题发现正常返回话题列表（topic、category、search_terms），汇总发现的话题数量和类别分布。
+请查看 acceptance Step 3，确认 preScreen、candidateTriage、selectedCandidates 正常返回；如是 live simulated，同时汇总 topicDiscovery 输出。
 ```
 
 #### Step 4: 证据收集 + AI 研究指导
 
-先由规则适配器抓取基础证据（page scrape、order book、resolution source、领域适配器），再由 AI Evidence Research runtime 评估证据充分性并指导定向搜索。
+对 monitor 选中的候选市场运行与 live monitor 相同的证据收集路径：先由规则适配器抓取基础证据，再由 AI Evidence Research runtime 评估证据缺口并指导定向搜索。Step 5 使用同一轮内存中的 evidence，不再重新跑一个互不相干的 `predict` 命令。
 
-```bash
-node ./bin/polypulse.js evidence collect --env-file .env --market <market-id-or-slug>
-```
+查看本轮 `step4-monitor-evidence-collect.stdout.log`，重点确认每个 prediction 的 `evidenceCount`、`sources` 列表和各 evidence 状态。
 
 Codex 提示词：
 
 ```text
-请对选出的市场运行 evidence collect，确认证据收集正常，汇总 evidenceCount、sources 列表和各 adapter 状态。
+请查看 acceptance Step 4，确认证据收集正常，汇总每个 prediction 的 evidenceCount、sources 列表和各 evidence 状态。
 ```
 
 #### Step 5: AI Agent 预测
 
-调用 AI provider 做概率估算，输出 ai_probability、confidence、edge、Kelly。
+调用 live monitor 相同的 probability estimator，对 Step 4 同一批 evidence 做概率估算，然后用 monitor 相同的 ranking 逻辑排序。Step 5 日志会保存 AI provider 的 `reasoning_summary`、key/counter evidence、uncertainty factors 和 provider runtime artifact 路径（如当前 provider 配置会生成）。
 
-```bash
-node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-```
+查看本轮 `step5-monitor-ai-prediction-ranking.stdout.log`，重点确认 provider、`ai_probability`、盘口概率、edge、net edge、quarter Kelly、monthly return、`reasoning_summary` 和 provider runtime artifact 路径。
 
 Codex 提示词：
 
 ```text
-请对选出的市场运行 predict，汇总 provider、ai_probability、market_implied_probability、edge、net_edge、quarter_kelly_pct、monthly_return 和 artifact 路径。
+请查看 acceptance Step 5，汇总 provider、ai_probability、market_implied_probability、edge、net_edge、quarter_kelly_pct、monthly_return、reasoning_summary 和 provider runtime artifact 路径。
 ```
 
 #### Step 6: 风控评估
 
-在预测基础上运行完整风控检查（不执行交易），确认 RiskEngine 决策正确。
+在 Step 5 同一轮预测基础上运行 live monitor 相同的 RiskEngine 检查，确认 risk_allowed、blocked_reasons、warnings、approved_usd。
 
-```bash
-node ./bin/polypulse.js risk evaluate --env-file .env --market <market-id-or-slug> --max-amount 1
-```
+查看本轮 `step6-monitor-risk-evaluate.stdout.log`，重点确认 `risks[].allowed`、阻断原因、warnings 和 `approvedUsd`。交易金额上限需要在启动整轮验收时通过 `--max-amount <usd>` 指定。
 
 Codex 提示词：
 
 ```text
-请对选出的市场运行 risk evaluate，确认 risk_allowed 状态、blocked_reasons、warnings、approved_usd，不提交任何订单。
+请查看 acceptance Step 6，确认 risk_allowed 状态、blocked_reasons、warnings、approved_usd。
 ```
 
 #### Step 7: 交易执行
 
-风控通过后，提交真实或模拟交易。`live simulated` 不连接真实钱包、不提交真实订单。
+风控通过后，使用 live monitor 相同的 OrderExecutor 或 simulated ledger 路径执行。`live simulated` 不连接真实钱包、不提交真实订单。`live real` 默认不自动传 `LIVE` confirmation；需要真实执行时必须显式使用 `--allow-live-execution`，并且仍需先完成 account balance/audit。
+
+查看本轮 `step7-monitor-execution.stdout.log`，重点确认 `walletMode`、`orders`、`filledOrders`、最终 `action` 和 `performance`。如果是 live simulated，还可以查看追加的人类可读 monitor log：
 
 ```bash
 # live simulated
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 tail -n 80 /home/PolyPulse/logs/polypulse-simulated-monitor.log
 ```
 
+如果是 live real，需要先检查余额和审计；只有明确接受真实资金风险后，才在启动整轮验收时加 `--allow-live-execution`。
+
 ```bash
-# live real（先检查余额和审计）
+# live real 预检查
 node ./bin/polypulse.js account balance --mode live --env-file .env
 node ./bin/polypulse.js account audit --mode live --env-file .env
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+
+# 真实执行整轮验收
+node scripts/acceptance.js --env-file .env --max-amount 1 --allow-live-execution
 ```
 
 Codex 提示词：
 
 ```text
-如果是 live simulated，请运行 trade once 验收，并确认不连接真实钱包、不提交真实订单，检查 simulated log 输出。
-如果是 live real，请先运行 account balance 和 account audit；只在我明确确认接受真实资金风险且 audit 无阻断后运行 trade once。
+如果是 live simulated，请运行 acceptance 验收，并确认 Step 7 走 simulated ledger、不连接真实钱包、不提交真实订单，检查 simulated monitor log 输出。
+如果是 live real，请先运行 account balance 和 account audit；只在我明确确认接受真实资金风险且 audit 无阻断后，才用 --allow-live-execution 运行 acceptance。
 ```
 
 #### 流水线说明
@@ -685,4 +681,3 @@ Codex 提示词版本：
 4. 请把 /home/PolyPulse/.env 权限设置为 600，启动 systemd monitor 服务，并执行 status 和 healthcheck。
 5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log、account audit 和 market topics --quick 输出，确认部署后仍读取当前 Polymarket 真实市场且真实账户检查通过。
 ```
-

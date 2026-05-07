@@ -7,3 +7,4 @@ state/
 !src/state/file-state-store.js
 node_modules/
 .DS_Store
+logs/

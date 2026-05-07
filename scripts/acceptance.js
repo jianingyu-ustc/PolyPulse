@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 /**
- * 一次性验收脚本 —— 顺序执行 7 个 pipeline step
+ * 一次性验收脚本 —— 用 live monitor 同一套调度逻辑执行 7 个验收阶段
  *
  * 用法：
  *   node scripts/acceptance.js --env-file .env
- *   node scripts/acceptance.js --env-file .env --skip-discovery
  *   node scripts/acceptance.js --env-file .env --market <slug>
+ *   node scripts/acceptance.js --env-file .env --max-amount <n>
+ *   node scripts/acceptance.js --env-file .env --limit <n>
  *
- * 选项：
- *   --env-file <path>     指定 env 文件（默认 .env）
- *   --market <slug>       手动指定市场 slug/id，跳过自动选取
- *   --skip-discovery      跳过 Step 3（AI 话题发现）
- *   --max-amount <n>      交易金额上限（默认 1 USD）
+ * 说明：
+ *   - Step 2-7 复用 Scheduler 的 live monitor scan/candidate/predict/risk/order 流程。
+ *   - live simulated 会带 --confirm LIVE 走模拟订单路径，不连接真实钱包。
+ *   - live real 默认不传 LIVE confirmation，因此会跑到风控/订单执行器但不会自动提交真实订单。
  */
-import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
-// ─── 工具函数 ───────────────────────────────────────────────────────────────
+import { loadEnvConfig, redactSecrets, summarizeEnvConfig, validateEnvConfig } from "../src/config/env.js";
+import { PolymarketMarketSource } from "../src/adapters/polymarket-market-source.js";
+import { FileStateStore } from "../src/state/file-state-store.js";
+import { ArtifactWriter } from "../src/artifacts/artifact-writer.js";
+import { Scheduler } from "../src/scheduler/scheduler.js";
 
 function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -34,133 +37,211 @@ function hasFlag(args, name) {
   return args.includes(name);
 }
 
-// ─── 参数解析 ───────────────────────────────────────────────────────────────
+function parseNumber(value, fallback = null) {
+  if (value == null) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function writeStep(artifactDir, results, step, name, payload, ok = true) {
+  const safeName = name.replace(/[^a-zA-Z0-9_.-]+/g, "-");
+  writeFileSync(
+    path.join(artifactDir, `step${step}-${safeName}.stdout.log`),
+    `${JSON.stringify(redactSecrets(payload), null, 2)}\n`,
+    "utf8"
+  );
+  writeFileSync(path.join(artifactDir, `step${step}-${safeName}.stderr.log`), "", "utf8");
+  const entry = { step, name, ok: Boolean(ok), status: ok ? 0 : 1 };
+  results.push(entry);
+  console.log(`\n[Step ${step}] ${name}`);
+  console.log(`[Step ${step}] ${ok ? "✓ 成功" : "✗ 失败"}`);
+  return entry;
+}
+
+function summarizeEvidence(stage) {
+  return {
+    ok: stage?.ok === true,
+    predictions: (stage?.predictions ?? []).map((prediction) => ({
+      marketId: prediction.marketId,
+      marketSlug: prediction.marketSlug,
+      question: prediction.question,
+      evidenceCount: prediction.evidenceCount,
+      sources: prediction.sources,
+      evidence: prediction.evidence
+    }))
+  };
+}
+
+function summarizePrediction(stage) {
+  return {
+    ok: stage?.ok === true,
+    ranked: (stage?.ranked ?? []).map((item) => ({
+      rank: item.rank,
+      marketId: item.marketId,
+      marketSlug: item.marketSlug,
+      question: item.question,
+      provider: item.provider,
+      effectiveProvider: item.effectiveProvider,
+      providerRuntimeArtifact: item.providerRuntimeArtifact,
+      ai_probability: item.ai_probability,
+      confidence: item.confidence,
+      reasoning_summary: item.reasoning_summary,
+      key_evidence: item.key_evidence,
+      counter_evidence: item.counter_evidence,
+      uncertainty_factors: item.uncertainty_factors,
+      analysis: item.analysis,
+      riskAdjusted: item.riskAdjusted,
+      downsideRisk: item.downsideRisk
+    }))
+  };
+}
 
 const argv = process.argv.slice(2);
 const envFile = option(argv, "--env-file", ".env");
 const manualMarket = option(argv, "--market", null);
-const skipDiscovery = hasFlag(argv, "--skip-discovery");
-const maxAmount = option(argv, "--max-amount", "1");
-
-// ─── 产出目录 ───────────────────────────────────────────────────────────────
+const maxAmount = parseNumber(option(argv, "--max-amount", "1"), 1);
+const limit = parseNumber(option(argv, "--limit", null), null);
+const allowLiveExecution = hasFlag(argv, "--allow-live-execution");
+const deprecatedSkipDiscovery = hasFlag(argv, "--skip-discovery");
 
 const runId = timestamp();
 const artifactDir = path.resolve("runtime-artifacts", "acceptance-runs", runId);
 mkdirSync(artifactDir, { recursive: true });
 
-// ─── 执行器 ─────────────────────────────────────────────────────────────────
-
 const results = [];
-
-function exec(step, args, { allowFail = false } = {}) {
-  const label = `[Step ${step}]`;
-  const fullArgs = ["./bin/polypulse.js", ...args];
-  console.log(`\n${label} polypulse ${args.join(" ")}`);
-
-  const result = spawnSync(process.execPath, fullArgs, {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: process.env,
-    timeout: 300_000, // 5 分钟硬超时
-  });
-
-  const logName = `step${step}-${args.slice(0, 2).join("-")}`;
-  writeFileSync(path.join(artifactDir, `${logName}.stdout.log`), result.stdout ?? "", "utf8");
-  writeFileSync(path.join(artifactDir, `${logName}.stderr.log`), result.stderr ?? "", "utf8");
-
-  let parsed = null;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {}
-
-  const ok = result.status === 0 && (parsed?.ok !== false || allowFail);
-  const entry = { step, command: `polypulse ${args.join(" ")}`, ok, status: result.status };
-  results.push(entry);
-
-  if (ok) {
-    console.log(`${label} ✓ 成功`);
-  } else {
-    const reason = parsed?.failureReason || parsed?.error || `exit code ${result.status}`;
-    console.log(`${label} ✗ 失败: ${typeof reason === "string" ? reason.slice(0, 200) : JSON.stringify(reason).slice(0, 200)}`);
-    if (!allowFail) {
-      throw new Error(`${label} 中断: ${entry.command}`);
-    }
-  }
-
-  return parsed;
-}
-
-// ─── 主流程 ─────────────────────────────────────────────────────────────────
-
 let failed = false;
-let marketId = manualMarket;
-let skippedLiveExecution = false;
+let acceptance = null;
 
 try {
-  // ── Step 1: 环境检查 ──────────────────────────────────────────────────────
-  const envCheck = exec(1, ["env", "check", "--mode", "live", "--env-file", envFile]);
-
-  // ── Step 2: 规则扫描市场候选池 ────────────────────────────────────────────
-  if (!marketId) {
-    const topics = exec(2, ["market", "topics", "--env-file", envFile, "--limit", "20", "--quick"]);
-    const market = topics?.topics?.[0];
-    marketId = market?.marketId ?? market?.marketSlug;
-    if (!marketId) {
-      throw new Error("Step 2 未返回任何市场，无法继续");
-    }
-    console.log(`  → 自动选取市场: ${marketId}`);
-  } else {
-    console.log(`\n[Step 2] 跳过（使用手动指定市场: ${marketId}）`);
-    results.push({ step: 2, command: "(manual market)", ok: true, status: 0 });
+  const config = await loadEnvConfig({
+    envFile,
+    overrides: { POLYPULSE_EXECUTION_MODE: "live" }
+  });
+  if (config.executionMode !== "live") {
+    throw new Error(`unsupported_execution_mode: ${config.executionMode}; only live is supported`);
+  }
+  if (config.marketSource !== "polymarket") {
+    throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
   }
 
-  // ── Step 3: AI 话题发现（可选）────────────────────────────────────────────
-  if (skipDiscovery) {
-    console.log(`\n[Step 3] 跳过（--skip-discovery）`);
-    results.push({ step: 3, command: "(skipped)", ok: true, status: 0 });
-  } else {
-    exec(3, ["discover", "topics", "--env-file", envFile], { allowFail: true });
+  const stateStore = new FileStateStore(config);
+  const artifactWriter = new ArtifactWriter(config);
+  const marketSource = new PolymarketMarketSource(config, stateStore);
+  const scheduler = new Scheduler({ config, stateStore, artifactWriter, marketSource });
+
+  const report = validateEnvConfig(config, { mode: "live" });
+  const envArtifact = await artifactWriter.writeJson("env-check", randomUUID(), report);
+  writeStep(artifactDir, results, 1, "env-check", {
+    ok: report.ok,
+    env: summarizeEnvConfig(config, { mode: "live" }),
+    report,
+    artifact: envArtifact
+  }, report.ok);
+  if (!report.ok) {
+    throw new Error("acceptance_env_check_failed");
   }
 
-  // ── Step 4: 证据收集 + AI 研究指导 ───────────────────────────────────────
-  exec(4, ["evidence", "collect", "--env-file", envFile, "--market", marketId]);
+  const confirmation = config.liveWalletMode === "simulated" || allowLiveExecution ? "LIVE" : null;
+  acceptance = await scheduler.runAcceptanceRound({
+    mode: "live",
+    confirmation,
+    limit,
+    maxAmountUsd: maxAmount,
+    marketId: manualMarket
+  });
 
-  // ── Step 5: AI 预测 ──────────────────────────────────────────────────────
-  exec(5, ["predict", "--env-file", envFile, "--market", marketId]);
+  writeStep(artifactDir, results, 2, "monitor-scan-and-candidates", {
+    ok: acceptance.stages.scan?.ok === true,
+    liveMonitorAligned: true,
+    manualMarket,
+    limit,
+    scan: acceptance.stages.scan,
+    candidates: acceptance.stages.discovery?.candidates ?? []
+  }, acceptance.stages.scan?.ok === true);
 
-  // ── Step 6: 风控评估 ─────────────────────────────────────────────────────
-  exec(6, ["risk", "evaluate", "--env-file", envFile, "--market", marketId, "--max-amount", maxAmount]);
+  writeStep(artifactDir, results, 3, "monitor-ai-prescreen-triage", {
+    ok: acceptance.stages.discovery?.ok === true,
+    liveMonitorAligned: true,
+    skipDiscoveryIgnored: deprecatedSkipDiscovery,
+    note: deprecatedSkipDiscovery
+      ? "--skip-discovery is ignored because acceptance now mirrors live monitor logic."
+      : undefined,
+    topicDiscovery: acceptance.stages.discovery?.topicDiscovery ?? null,
+    semanticDiscovery: acceptance.stages.discovery?.semanticDiscovery ?? null,
+    preScreen: acceptance.stages.discovery?.preScreen ?? null,
+    candidateTriage: acceptance.stages.discovery?.candidateTriage ?? null,
+    selectedCandidates: acceptance.stages.discovery?.selectedCandidates ?? []
+  }, acceptance.stages.discovery?.ok === true);
 
-  // ── Step 7: 交易执行 ─────────────────────────────────────────────────────
-  if (envCheck?.report?.liveWalletMode === "simulated") {
-    exec(7, ["trade", "once", "--mode", "live", "--env-file", envFile, "--market", marketId, "--max-amount", maxAmount, "--confirm", "LIVE"]);
-  } else {
-    skippedLiveExecution = true;
-    console.log(`\n[Step 7] 跳过（live real 模式下不自动执行交易，需手动确认）`);
-    results.push({ step: 7, command: "(skipped: live real)", ok: true, status: 0 });
+  writeStep(artifactDir, results, 4, "monitor-evidence-collect", summarizeEvidence(acceptance.stages.evidence), acceptance.stages.evidence?.ok === true);
+
+  writeStep(artifactDir, results, 5, "monitor-ai-prediction-ranking", summarizePrediction(acceptance.stages.prediction), acceptance.stages.prediction?.ok === true);
+
+  writeStep(artifactDir, results, 6, "monitor-risk-evaluate", {
+    ok: acceptance.stages.risk?.ok === true,
+    risks: acceptance.stages.risk?.risks ?? []
+  }, acceptance.stages.risk?.ok === true);
+
+  writeStep(artifactDir, results, 7, "monitor-execution", {
+    ok: acceptance.stages.execution?.ok === true,
+    walletMode: config.liveWalletMode,
+    liveRealExecutionEnabled: config.liveWalletMode === "real" && allowLiveExecution,
+    confirmationPassed: confirmation === "LIVE",
+    orders: acceptance.stages.execution?.orders ?? [],
+    filledOrders: acceptance.stages.execution?.filledOrders ?? [],
+    action: acceptance.stages.execution?.action ?? acceptance.action,
+    artifact: acceptance.stages.execution?.artifact ?? acceptance.artifact,
+    log: acceptance.stages.execution?.log ?? acceptance.log,
+    performance: acceptance.stages.execution?.performance ?? null
+  }, acceptance.stages.execution?.ok === true);
+
+  if (!acceptance.ok) {
+    throw new Error(acceptance.error ?? "acceptance_monitor_round_failed");
   }
 } catch (error) {
   failed = true;
-  results.push({ step: "?", command: "acceptance", ok: false, error: error instanceof Error ? error.message : String(error) });
+  const message = error instanceof Error ? error.message : String(error);
+  results.push({ step: "?", name: "acceptance", ok: false, status: 1, error: message });
+  writeFileSync(path.join(artifactDir, "error.log"), `${message}\n`, "utf8");
 }
-
-// ─── 汇总 ───────────────────────────────────────────────────────────────────
 
 const summary = {
   ok: !failed,
-  steps: results.length,
-  pass: results.filter((r) => r.ok).length,
-  fail: results.filter((r) => !r.ok).length,
-  skippedLiveExecution,
-  market: marketId,
+  steps: results.filter((item) => typeof item.step === "number").length,
+  pass: results.filter((item) => item.ok).length,
+  fail: results.filter((item) => !item.ok).length,
+  liveMonitorAligned: true,
+  walletMode: acceptance?.walletMode ?? null,
+  runId: acceptance?.runId ?? null,
+  market: acceptance?.stages?.prediction?.ranked?.[0]?.marketId
+    ?? acceptance?.stages?.scan?.markets?.[0]?.marketId
+    ?? manualMarket
+    ?? null,
+  action: acceptance?.action ?? "no-trade",
+  monitorArtifact: acceptance?.artifact ?? null,
+  monitorLog: acceptance?.log ?? null,
   artifactDir: path.relative(process.cwd(), artifactDir),
+  results
 };
 
-writeFileSync(path.join(artifactDir, "summary.json"), `${JSON.stringify({ ...summary, results }, null, 2)}\n`, "utf8");
+writeFileSync(path.join(artifactDir, "summary.json"), `${JSON.stringify(redactSecrets(summary), null, 2)}\n`, "utf8");
 
 console.log("\n" + "─".repeat(60));
 console.log("验收结果：");
-console.log(JSON.stringify(summary, null, 2));
+console.log(JSON.stringify(redactSecrets({
+  ok: summary.ok,
+  steps: summary.steps,
+  pass: summary.pass,
+  fail: summary.fail,
+  liveMonitorAligned: summary.liveMonitorAligned,
+  walletMode: summary.walletMode,
+  runId: summary.runId,
+  market: summary.market,
+  action: summary.action,
+  monitorArtifact: summary.monitorArtifact,
+  monitorLog: summary.monitorLog,
+  artifactDir: summary.artifactDir
+}), null, 2));
 
 if (failed) {
   process.exit(1);
