@@ -15,6 +15,7 @@ import { TopicDiscoveryProvider } from "../runtime/topic-discovery-runtime.js";
 import { SemanticDiscoveryRuntime } from "../runtime/semantic-discovery-runtime.js";
 import { DownsideRiskRanker } from "../core/downside-risk-ranker.js";
 import { PredictionPerformanceTracker } from "../core/prediction-tracker.js";
+import { DynamicFeeService } from "../core/dynamic-fee-service.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
@@ -75,7 +76,7 @@ function compareOpportunityAnalysis(left, right) {
   return 0;
 }
 
-export function rankPredictionsForExecution({ predictions, portfolio, amountUsd, decisionEngine }) {
+export function rankPredictionsForExecution({ predictions, portfolio, amountUsd, decisionEngine, dynamicFeeParamsMap = null }) {
   return predictions
     .map((prediction, index) => ({
       prediction,
@@ -84,7 +85,8 @@ export function rankPredictionsForExecution({ predictions, portfolio, amountUsd,
         market: prediction.market,
         estimate: prediction.estimate,
         portfolio,
-        amountUsd
+        amountUsd,
+        dynamicFeeParams: dynamicFeeParamsMap?.get(prediction.market.marketId) ?? null
       })
     }))
     .sort((left, right) => compareOpportunityAnalysis(left.analysis, right.analysis) || left.index - right.index);
@@ -297,7 +299,8 @@ export class Scheduler {
     this.predictionTracker = new PredictionPerformanceTracker(config);
     this.decisionEngine = new DecisionEngine(config);
     this.riskEngine = new RiskEngine(config, { stateStore });
-    this.liveBroker = new LiveBroker(config);
+    this.dynamicFeeService = new DynamicFeeService(config);
+    this.liveBroker = new LiveBroker({ ...config, dynamicFeeService: this.dynamicFeeService });
     this.orderExecutor = new OrderExecutor({
       liveBroker: this.liveBroker
     });
@@ -319,8 +322,10 @@ export class Scheduler {
     const evidenceBundle = await this.evidenceCrawler.collect({ market });
     const portfolio = await this.stateStore.getPortfolio();
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: evidenceBundle });
-    const decision = this.decisionEngine.decide({ market, estimate, side, amountUsd, portfolio });
-    const risk = await this.riskEngine.evaluate({ decision, market, portfolio, confirmation, evidence: evidenceBundle, estimate });
+    const dynamicFeeParams = await this.dynamicFeeService.fetchDynamicFeeParams(market.marketId);
+    const decision = this.decisionEngine.decide({ market, estimate, side, amountUsd, portfolio, dynamicFeeParams });
+    const orderBook = await this.marketSource.getOrderBook?.(decision.tokenId) ?? null;
+    const risk = await this.riskEngine.evaluate({ decision, market, portfolio, confirmation, evidence: evidenceBundle, estimate, orderBook });
     const orderResult = await this.orderExecutor.execute({ risk, market, confirmation });
 
     const artifacts = [
@@ -601,11 +606,13 @@ export class Scheduler {
 
   async evaluateAndMaybeOrder({ prediction, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, liveBalance, liveBalanceError }) {
     const portfolio = await this.stateStore.getPortfolio();
+    const dynamicFeeParams = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
     const analysis = this.decisionEngine.analyze({
       market: prediction.market,
       estimate: prediction.estimate,
       portfolio,
-      amountUsd: maxAmountUsd
+      amountUsd: maxAmountUsd,
+      dynamicFeeParams
     });
     const chosenSide = analysis.suggested_side ?? "yes";
     const decision = this.decisionEngine.decide({
@@ -613,7 +620,8 @@ export class Scheduler {
       estimate: prediction.estimate,
       side: chosenSide,
       amountUsd: maxAmountUsd,
-      portfolio
+      portfolio,
+      dynamicFeeParams
     });
 
     if (orderCount >= this.config.monitor.maxTradesPerRound) {
@@ -636,8 +644,10 @@ export class Scheduler {
       estimate: prediction.estimate,
       side: chosenSide,
       amountUsd,
-      portfolio
+      portfolio,
+      dynamicFeeParams
     });
+    const orderBook = await this.marketSource.getOrderBook?.(boundedDecision.tokenId) ?? null;
     const risk = await this.riskEngine.evaluate({
       decision: boundedDecision,
       market: prediction.market,
@@ -646,7 +656,8 @@ export class Scheduler {
       evidence: prediction.evidence,
       estimate: prediction.estimate,
       liveBalance,
-      liveBalanceError
+      liveBalanceError,
+      orderBook
     });
     const order = await this.orderExecutor.execute({ risk, market: prediction.market, confirmation });
     if (order.status === "filled" && order.filledUsd > 0) {
@@ -690,11 +701,13 @@ export class Scheduler {
       }
       const prediction = await this.predictCandidateNoCache({ market });
       const portfolio = ledger.portfolio();
+      const dynamicFeeParamsReview = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
       const analysis = this.decisionEngine.analyze({
         market: prediction.market,
         estimate: prediction.estimate,
         portfolio,
-        amountUsd: this.config.risk.minTradeUsd
+        amountUsd: this.config.risk.minTradeUsd,
+        dynamicFeeParams: dynamicFeeParamsReview
       });
       const chosenSide = analysis.suggested_side ?? position.side ?? "yes";
       const decision = this.decisionEngine.decide({
@@ -702,7 +715,8 @@ export class Scheduler {
         estimate: prediction.estimate,
         side: chosenSide,
         amountUsd: this.config.risk.minTradeUsd,
-        portfolio
+        portfolio,
+        dynamicFeeParams: dynamicFeeParamsReview
       });
       prediction.decision = decision;
       prediction.phase = "position-review";
@@ -749,11 +763,13 @@ export class Scheduler {
   async evaluateAndMaybeSimulatedOrder({ prediction, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, side = null }) {
     const ledger = this.simulatedLedger;
     const portfolio = ledger.portfolio();
+    const dynamicFeeParams = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
     const analysis = this.decisionEngine.analyze({
       market: prediction.market,
       estimate: prediction.estimate,
       portfolio,
-      amountUsd: maxAmountUsd
+      amountUsd: maxAmountUsd,
+      dynamicFeeParams
     });
     const chosenSide = side ?? analysis.suggested_side ?? "yes";
     const decision = this.decisionEngine.decide({
@@ -761,7 +777,8 @@ export class Scheduler {
       estimate: prediction.estimate,
       side: chosenSide,
       amountUsd: maxAmountUsd,
-      portfolio
+      portfolio,
+      dynamicFeeParams
     });
 
     if (orderCount >= this.config.monitor.maxTradesPerRound) {
@@ -787,8 +804,10 @@ export class Scheduler {
       estimate: prediction.estimate,
       side: chosenSide,
       amountUsd,
-      portfolio
+      portfolio,
+      dynamicFeeParams
     });
+    const orderBook = await this.marketSource.getOrderBook?.(boundedDecision.tokenId) ?? null;
     const risk = await new RiskEngine(this.config).evaluate({
       decision: boundedDecision,
       market: prediction.market,
@@ -798,7 +817,8 @@ export class Scheduler {
       estimate: prediction.estimate,
       systemState: ledger.riskState(),
       liveBalance: ledger.liveBalance(),
-      liveBalanceError: null
+      liveBalanceError: null,
+      orderBook
     });
     await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision: boundedDecision, phase: "open-scan" });
     await ledger.logRisk({ market: prediction.market, risk });
@@ -1120,11 +1140,17 @@ export class Scheduler {
         };
 
         const portfolioForRanking = simulated ? ledger.portfolio() : await this.stateStore.getPortfolio();
+        const dynamicFeeParamsMap = new Map();
+        for (const prediction of accumulator.predictions) {
+          const params = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
+          if (params) dynamicFeeParamsMap.set(prediction.market.marketId, params);
+        }
         const baseRanked = rankPredictionsForExecution({
           predictions: accumulator.predictions,
           portfolio: portfolioForRanking,
           amountUsd,
-          decisionEngine: this.decisionEngine
+          decisionEngine: this.decisionEngine,
+          dynamicFeeParamsMap
         });
         const rankedPredictions = simulated
           ? this.downsideRiskRanker.rankWithDownsideRisk({
@@ -1393,11 +1419,17 @@ export class Scheduler {
         );
         const validPredictions = predictions.filter(Boolean);
         accumulator.predictions.push(...validPredictions);
+        const dynamicFeeParamsMapSim = new Map();
+        for (const prediction of validPredictions) {
+          const params = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
+          if (params) dynamicFeeParamsMapSim.set(prediction.market.marketId, params);
+        }
         const baseRanked = rankPredictionsForExecution({
           predictions: validPredictions,
           portfolio: ledger.portfolio(),
           amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
-          decisionEngine: this.decisionEngine
+          decisionEngine: this.decisionEngine,
+          dynamicFeeParamsMap: dynamicFeeParamsMapSim
         });
         const rankedPredictions = this.downsideRiskRanker.rankWithDownsideRisk({
           rankedPredictions: baseRanked,
@@ -1579,11 +1611,17 @@ export class Scheduler {
           }
         );
         accumulator.predictions = predictions.filter(Boolean);
+        const dynamicFeeParamsMapLive = new Map();
+        for (const prediction of accumulator.predictions) {
+          const params = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
+          if (params) dynamicFeeParamsMapLive.set(prediction.market.marketId, params);
+        }
         const rankedPredictions = rankPredictionsForExecution({
           predictions: accumulator.predictions,
           portfolio: await this.stateStore.getPortfolio(),
           amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
-          decisionEngine: this.decisionEngine
+          decisionEngine: this.decisionEngine,
+          dynamicFeeParamsMap: dynamicFeeParamsMapLive
         });
         const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
         let orderCount = 0;

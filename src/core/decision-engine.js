@@ -99,7 +99,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   });
 }
 
-export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now() }) {
+export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now(), dynamicFeeParams = null }) {
   const wantedSide = normalizeSide(side);
   const outcome = outcomeForSide(market, wantedSide);
   const outcomeEstimate = estimateForSide(estimate, wantedSide);
@@ -116,7 +116,8 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     aiProb: aiProbability,
     marketProb: implied,
     bankrollUsd,
-    nowMs
+    nowMs,
+    dynamicFeeParams
   });
   const notional = plan.suggestedNotionalUsd;
   const expectedValue = round(plan.netEdge * notional, 4);
@@ -143,6 +144,7 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     action: noTradeReason ? "skip" : "open",
     noTradeReason,
     categorySlug: plan.categorySlug,
+    feeSource: plan.feeSource,
     entryFeePct: plan.entryFeePct,
     roundTripFeePct: plan.roundTripFeePct,
     fullKellyPct: plan.fullKellyPct,
@@ -165,11 +167,11 @@ export class DecisionEngine {
     this.pulseDirect = isPulseDirectStrategy(config);
   }
 
-  analyze({ market, estimate, portfolio = null, amountUsd = 1 }) {
+  analyze({ market, estimate, portfolio = null, amountUsd = 1, dynamicFeeParams = null }) {
     const buildCandidate = this.pulseDirect ? buildPulseTradeCandidate : buildTradeCandidate;
     const candidates = [
-      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd }),
-      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd })
+      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd, dynamicFeeParams }),
+      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd, dynamicFeeParams })
     ];
     const candidate = this.pulseDirect
       ? candidates.filter(Boolean).sort((a, b) => (b.monthlyReturn ?? -Infinity) - (a.monthlyReturn ?? -Infinity))[0] ?? null
@@ -201,9 +203,9 @@ export class DecisionEngine {
     };
   }
 
-  decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null }) {
+  decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null, dynamicFeeParams = null }) {
     const candidate = this.pulseDirect
-      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd })
+      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams })
       : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
     const common = {
       marketId: market.marketId,
@@ -261,6 +263,7 @@ export class DecisionEngine {
       suggestedNotionalUsd: candidate.suggestedNotionalUsd,
       noTradeReason: candidate.noTradeReason,
       categorySlug: candidate.categorySlug,
+      feeSource: candidate.feeSource,
       entryFeePct: candidate.entryFeePct,
       roundTripFeePct: candidate.roundTripFeePct,
       fullKellyPct: candidate.fullKellyPct,

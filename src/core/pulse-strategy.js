@@ -251,13 +251,15 @@ export function calculateMonthlyReturn({ edge, endDate, nowMs = Date.now() }) {
   };
 }
 
-export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now() }) {
+export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now(), dynamicFeeParams = null }) {
   const categorySlug = inferCategorySlug(market);
-  const feeParams = lookupCategoryFeeParams(categorySlug, {
+  const staticFeeParams = lookupCategoryFeeParams(categorySlug, {
     negRisk: Boolean(market?.negRisk),
     feesEnabled: market?.feesEnabled,
     feeSchedule: market?.feeSchedule
   });
+  const feeParams = dynamicFeeParams ?? staticFeeParams;
+  const feeSource = dynamicFeeParams ? "dynamic" : "static";
   const grossEdge = round(aiProb - marketProb);
   const entryFeePct = round(calculateFeePct(marketProb, feeParams));
   const roundTripFeePct = round(calculateRoundTripFeePct(marketProb, marketProb, feeParams));
@@ -268,6 +270,7 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
     side,
     categorySlug,
     feeParams,
+    feeSource,
     grossEdge,
     netEdge,
     entryFeePct,

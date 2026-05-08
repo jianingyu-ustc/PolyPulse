@@ -57,6 +57,12 @@ const DEFAULTS = {
   PULSE_PERFORMANCE_REPORT_INTERVAL: "5",
   PULSE_FETCH_DIMENSIONS: "volume24hr,liquidity,startDate,competitive",
   PULSE_REQUIRE_EVIDENCE_GUARD: "false",
+  PULSE_DYNAMIC_FEE_ENABLED: "true",
+  PULSE_DYNAMIC_FEE_TTL_MS: "3600000",
+  PULSE_FEE_VERIFY_ENABLED: "true",
+  PULSE_FEE_VERIFY_THRESHOLD: "0",
+  RISK_MAX_PRICE_IMPACT_PCT: "0.04",
+  RISK_EXCHANGE_MIN_ORDER_CHECK: "true",
   EVIDENCE_CACHE_TTL_SECONDS: "1800",
   EVIDENCE_REQUEST_TIMEOUT_MS: "10000",
   EVIDENCE_REQUEST_RETRIES: "1",
@@ -220,7 +226,9 @@ export async function loadEnvConfig(options = {}) {
       liquidityTradeCapPct: readNumber(values, "LIQUIDITY_TRADE_CAP_PCT", 0.01),
       marketMaxAgeSeconds: Math.max(1, Math.floor(readNumber(values, "MARKET_MAX_AGE_SECONDS", 600))),
       minAiConfidence: String(values.MIN_AI_CONFIDENCE || "medium").toLowerCase(),
-      minTradeUsd: readNumber(values, "MIN_TRADE_USD", 1)
+      minTradeUsd: readNumber(values, "MIN_TRADE_USD", 1),
+      maxPriceImpactPct: readNumber(values, "RISK_MAX_PRICE_IMPACT_PCT", 0.04),
+      exchangeMinOrderCheck: String(values.RISK_EXCHANGE_MIN_ORDER_CHECK ?? "true").toLowerCase() !== "false"
     },
     scan: {
       marketScanLimit: Math.max(1, Math.floor(readNumber(values, "MARKET_SCAN_LIMIT", 5000))),
@@ -293,6 +301,12 @@ export async function loadEnvConfig(options = {}) {
     calibration: {
       enabled: String(values.PULSE_CALIBRATION_ENABLED ?? "true").toLowerCase() !== "false",
       dynamicEnabled: String(values.PULSE_DYNAMIC_CALIBRATION ?? "true").toLowerCase() !== "false"
+    },
+    dynamicFee: {
+      enabled: String(values.PULSE_DYNAMIC_FEE_ENABLED ?? "true").toLowerCase() !== "false",
+      ttlMs: Math.max(0, Math.floor(readNumber(values, "PULSE_DYNAMIC_FEE_TTL_MS", 3600000))),
+      verifyEnabled: String(values.PULSE_FEE_VERIFY_ENABLED ?? "true").toLowerCase() !== "false",
+      verifyThreshold: Math.max(0, readNumber(values, "PULSE_FEE_VERIFY_THRESHOLD", 0))
     },
     ai: {
       provider: values.AI_PROVIDER ?? "codex",

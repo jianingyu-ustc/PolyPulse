@@ -3,6 +3,7 @@ import { EvidenceCrawler } from "../adapters/evidence-crawler.js";
 import { ProbabilityEstimator } from "../core/probability-estimator.js";
 import { DecisionEngine } from "../core/decision-engine.js";
 import { RiskEngine } from "../core/risk-engine.js";
+import { DynamicFeeService } from "../core/dynamic-fee-service.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { Scheduler } from "../scheduler/scheduler.js";
@@ -52,11 +53,13 @@ export async function runTradeOnce({
   const { market, evidence, estimate } = await buildPrediction(context, marketId);
   const portfolio = await context.stateStore.getPortfolio();
   const decisionEngine = new DecisionEngine(context.config);
-  const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd });
+  const dynamicFeeService = new DynamicFeeService(context.config);
+  const dynamicFeeParams = await dynamicFeeService.fetchDynamicFeeParams(market.marketId);
+  const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd, dynamicFeeParams });
   const chosenSide = side ?? analysis.suggested_side ?? "yes";
-  const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
+  const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio, dynamicFeeParams });
 
-  const liveBroker = new LiveBroker(context.config);
+  const liveBroker = new LiveBroker({ ...context.config, dynamicFeeService });
   let liveBalance = null;
   let liveBalanceError = null;
   if (confirmation === "LIVE") {
@@ -75,7 +78,8 @@ export async function runTradeOnce({
     evidence,
     estimate,
     liveBalance,
-    liveBalanceError
+    liveBalanceError,
+    orderBook: await context.marketSource.getOrderBook?.(decision.tokenId) ?? null
   });
   const orderResult = await new OrderExecutor({ liveBroker }).execute({ risk, market, confirmation });
   const action = oneShotAction({ risk, orderResult });

@@ -48,15 +48,16 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - provider prompt 要求区分盘口价格和独立证据，并在 `reasoning_summary` / `uncertainty_factors` 中说明可研究性、外部证据充分性和相对盘口的信息优势；不可研究或信息优势不足时必须降为 `low` confidence。
 - 真实 monitor artifact 会保留 `candidate-triage.json`；live simulated monitor 会把 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy` 追加到人类可读日志。
 - `live real` 仍必须通过 env preflight、余额/allowance 检查、账户审计、`confirm LIVE` 和 `RiskEngine`。
+- V2 动态费率查询：`DynamicFeeService` 通过 CLOB API `GET /markets/{conditionId}` 获取市场实时 `{ feeRate, exponent }` 参数（1h 内存 Map 缓存），在决策引擎计算 fee/edge/Kelly/monthly return 之前预取并传入 `buildPulseTradePlan`，替代纯静态费率表；失败时自动回退到 `lookupCategoryFeeParams` 静态查找。这对齐了 Predict-Raven 的 `fetchDynamicFeeParams`（V2 SDK `getClobMarketInfo` + 1h cache + null fallback）。
+- 费率验证：`DynamicFeeService.verifyAndLog` 在 `LiveBroker.submit` 下单前对比静态 fee params 与 CLOB API 返回的动态 fee params（feeRate 和 exponent），偏差超 `PULSE_FEE_VERIFY_THRESHOLD` 时记录到 `{artifactDir}/fee-discrepancies.jsonl`；验证失败不阻断下单。这对齐了 Predict-Raven 的 `verifyFeeEstimate` + `logFeeDiscrepancyIfNeeded`。
+
+- 滑点限制下单（order book walk）：`RiskEngine.evaluate` 接受预取的 order book（通过 `PolymarketMarketSource.getOrderBook` 获取 CLOB `/book` 端点），在风控层调用 `walkAskBook` 遍历 ask book 计算在最大 `RISK_MAX_PRICE_IMPACT_PCT`（默认 4%）price impact 内可买入的最大 notional，作为 `approvedUsd` 的硬约束上限（`orderbookSlippageCapUsd`）；获取失败时跳过不阻断。这对齐了 Predict-Raven 的 `computeMaxBuyNotionalWithinSlippage`。
+- 交易所最小订单验证：`RiskEngine.evaluate` 在最终 adjusted notional 确定后，通过 `validateMinOrderSize` 检查 `shares = amountUsd / bestAsk >= exchange minOrderSize`（从 CLOB `/book` 响应中读取 `min_order_size`），不满足时以 `below_exchange_minimum_order_size` 阻断下单。这对齐了 Predict-Raven 的交易所最小订单检查。
 
 PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 
 - 缺少跨轮资金占用的动态优化（当前是单轮内按 risk-adjusted score 排序后顺序分配）。
 - 缺少历史回放机制：用真实结算市场和已产生 artifact 比较不同参数组合对收益的影响。
-- 缺少滑点限制下单（order book walk）：Predict-Raven 遍历 ask book 在最大 4% price impact 内确定可买入 notional 上限。
-- 缺少交易所最小订单验证：Predict-Raven 检查 `shares * bestAsk >= exchange minimum`，不满足时阻断。
-- 缺少 V2 动态费率查询：Predict-Raven 通过 CLOB API 获取市场实时费率参数（1h 缓存），PolyPulse 只用静态费率表。
-- 缺少费率验证：Predict-Raven 对比静态估算与 API 实际 `base_fee`，记录偏差并用实际值覆盖。
 
 **待办项**（直接影响预测成功率、概率校准和净收益率；所有项保持 live-only，读取当前 Polymarket 真实市场）：
 
@@ -73,10 +74,10 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
 - [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score、pre-screen 分类和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
 - [ ] 把 order book 证据中的 spread、深度和滑点估算纳入 expected return 计算（当前 order book 只作为 AI 证据输入），避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
-- [ ] 增加滑点限制下单（order book walk）：遍历 ask book 计算在最大 price impact（如 4%）内可买入的最大 notional，将此作为 `approvedUsd` 的硬约束上限。对齐 Predict-Raven 的 `computeMaxBuyNotionalWithinSlippage`。
-- [ ] 增加交易所最小订单验证：在风控层检查 `shares * bestAsk >= exchange minimum order size`，不满足时阻断下单。对齐 Predict-Raven 的交易所最小订单检查。
-- [ ] 增加 V2 动态费率查询：通过 CLOB API `getClobMarketInfo(conditionID)` 获取市场实时费率参数（带缓存），替代纯静态费率表估算。对齐 Predict-Raven 的 `fetchDynamicFeeParams`。
-- [ ] 增加费率验证：下单前对比静态费率估算与 CLOB API 返回的实际 `base_fee`，偏差超阈值时记录 warning 并用实际值覆盖。对齐 Predict-Raven 的 `verifyFeeEstimate`。
+- [x] ~~增加滑点限制下单（order book walk）~~：已实现 `walkAskBook` 纯函数模块（`src/core/orderbook-walk.js`），`RiskEngine` 在风控层预取 order book 后遍历 ask book 计算最大 4% price impact 内的 notional 上限，作为 `approvedUsd` 硬约束。对齐 Predict-Raven 的 `computeMaxBuyNotionalWithinSlippage`。
+- [x] ~~增加交易所最小订单验证~~：已实现 `validateMinOrderSize`，在 `RiskEngine` 最终 adjusted 确定后检查 `shares = amountUsd / bestAsk >= minOrderSize`（从 CLOB `/book` 获取），不满足时以 `below_exchange_minimum_order_size` 阻断。对齐 Predict-Raven 的交易所最小订单检查。
+- [x] ~~增加 V2 动态费率查询~~：已实现 `DynamicFeeService`，通过 CLOB API `GET /markets/{conditionId}` 获取市场实时费率参数（1h 内存缓存），在决策引擎计算 fee/edge/Kelly 之前预取并传入，失败时回退到静态费率表。对齐 Predict-Raven 的 `fetchDynamicFeeParams`。
+- [x] ~~增加费率验证~~：已实现 `DynamicFeeService.verifyAndLog`，下单前通过 CLOB API 获取动态费率参数，对比静态估算的 feeRate/exponent，偏差超阈值时记录 `fee-discrepancies.jsonl` 并用动态值覆盖。对齐 Predict-Raven 的 `verifyFeeEstimate`。
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
 

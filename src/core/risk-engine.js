@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { assertSchema } from "../domain/schemas.js";
 import { validateEnvConfig } from "../config/env.js";
 import { isPulseDirectStrategy } from "./pulse-strategy.js";
+import { walkAskBook, validateMinOrderSize } from "./orderbook-walk.js";
 
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
@@ -100,7 +101,8 @@ export class RiskEngine {
     estimate = null,
     systemState = null,
     liveBalance = null,
-    liveBalanceError = null
+    liveBalanceError = null,
+    orderBook = null
   }) {
     const blockedReasons = [];
     const warnings = [];
@@ -220,7 +222,27 @@ export class RiskEngine {
       blockedReasons.push("liquidity_unavailable");
     }
 
+    if (orderBook && Array.isArray(orderBook.asks) && orderBook.asks.length > 0) {
+      const walk = walkAskBook(orderBook.asks, this.config.risk.maxPriceImpactPct);
+      if (Number.isFinite(walk.maxNotionalUsd) && walk.maxNotionalUsd < adjusted) {
+        adjusted = walk.maxNotionalUsd;
+        addLimit(appliedLimits, "orderbookSlippageCapUsd", walk.maxNotionalUsd);
+      }
+    }
+
     adjusted = roundUsd(adjusted);
+    if (this.config.risk.exchangeMinOrderCheck && orderBook && adjusted > 0) {
+      const minCheck = validateMinOrderSize({
+        amountUsd: adjusted,
+        bestAsk: orderBook.bestAsk,
+        minOrderSize: orderBook.minOrderSize ?? 1
+      });
+      if (!minCheck.valid) {
+        blockedReasons.push("below_exchange_minimum_order_size");
+        addLimit(appliedLimits, "exchangeMinOrderSize", minCheck.minRequired);
+        addLimit(appliedLimits, "sharesAtBestAsk", minCheck.sharesAtBestAsk);
+      }
+    }
     if (requestedUsdRaw < this.config.risk.minTradeUsd) {
       blockedReasons.push("below_min_trade_usd");
     }

@@ -3,6 +3,7 @@ import { loadEnvConfig, summarizeEnvConfig, validateEnvConfig } from "./config/e
 import { PolymarketMarketSource } from "./adapters/polymarket-market-source.js";
 import { DecisionEngine } from "./core/decision-engine.js";
 import { RiskEngine } from "./core/risk-engine.js";
+import { DynamicFeeService } from "./core/dynamic-fee-service.js";
 import { FileStateStore } from "./state/file-state-store.js";
 import { ArtifactWriter } from "./artifacts/artifact-writer.js";
 import { Scheduler } from "./scheduler/scheduler.js";
@@ -264,9 +265,11 @@ async function commandRiskEvaluate(args) {
   const { market, evidence, estimate } = await buildPrediction(context, marketId);
   const portfolio = await context.stateStore.getPortfolio();
   const decisionEngine = new DecisionEngine(context.config);
-  const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd });
+  const dynamicFeeService = new DynamicFeeService(context.config);
+  const dynamicFeeParams = await dynamicFeeService.fetchDynamicFeeParams(market.marketId);
+  const analysis = decisionEngine.analyze({ market, estimate, portfolio, amountUsd: maxAmountUsd, dynamicFeeParams });
   const chosenSide = side ?? analysis.suggested_side ?? "yes";
-  const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio });
+  const decision = decisionEngine.decide({ market, estimate, side: chosenSide, amountUsd: maxAmountUsd, portfolio, dynamicFeeParams });
 
   const risk = await new RiskEngine(context.config, { stateStore: context.stateStore }).evaluate({
     decision,
@@ -274,7 +277,8 @@ async function commandRiskEvaluate(args) {
     portfolio,
     confirmation,
     evidence,
-    estimate
+    estimate,
+    orderBook: await context.marketSource.getOrderBook?.(decision.tokenId) ?? null
   });
 
   const artifact = await context.artifactWriter.writeJson("risk-evaluate", randomUUID(), {

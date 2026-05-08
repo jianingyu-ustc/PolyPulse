@@ -18,6 +18,7 @@ export class LiveBroker {
   constructor(config) {
     this.kind = "live";
     this.config = config;
+    this.dynamicFeeService = config.dynamicFeeService ?? null;
     this.client = config.liveWalletMode === "simulated"
       ? new SimulatedLiveWalletClient(config)
       : new LivePolymarketClient(config);
@@ -116,6 +117,20 @@ export class LiveBroker {
     if (order.side === "BUY" && Number(balance.allowance) < order.amountUsd) {
       return blockedResult(order, "insufficient_live_allowance");
     }
+    let feeVerification = null;
+    if (this.dynamicFeeService) {
+      try {
+        feeVerification = await this.dynamicFeeService.verifyAndLog({
+          tokenId: order.tokenId,
+          conditionId: _market?.marketId,
+          marketSlug: _market?.marketSlug,
+          categorySlug: _market?.category,
+          market: _market
+        });
+      } catch {
+        // fee verification failure must not block order execution
+      }
+    }
     try {
       const posted = await this.client.postMarketOrder(order);
       return assertSchema("OrderResult", {
@@ -125,7 +140,8 @@ export class LiveBroker {
         filledUsd: Number(posted.filledUsd ?? 0),
         avgPrice: posted.avgPrice ?? null,
         reason: posted.ok ? null : "polymarket_order_rejected",
-        raw: redactSecrets(posted.raw)
+        raw: redactSecrets(posted.raw),
+        feeVerification
       });
     } catch (error) {
       return assertSchema("OrderResult", {
