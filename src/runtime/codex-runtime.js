@@ -431,14 +431,12 @@ async function runCodex({
     "-C",
     repoRoot,
     "-s",
-    "read-only",
-    "--output-schema",
-    schemaPath,
-    "-o",
-    outputPath,
-    "--color",
-    "never"
+    "read-only"
   ];
+  if (schemaPath) {
+    args.push("--output-schema", schemaPath);
+  }
+  args.push("-o", outputPath, "--color", "never");
 
   if (settings.model) {
     args.push("-m", settings.model);

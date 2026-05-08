@@ -30,7 +30,7 @@
  * - Simple text output format (TRADE|slug|reason or SKIP|slug|reason)
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveEffectiveProvider, resolveCodexSkillSettings } from "./codex-skill-settings.js";
@@ -179,7 +179,7 @@ export class PreScreenProvider {
           this.timeoutMs
         );
       } else {
-        output = await this.runWithTimeout(
+        await this.runWithTimeout(
           () => runCodex({
             prompt,
             outputPath,
@@ -190,6 +190,7 @@ export class PreScreenProvider {
           }),
           this.timeoutMs
         );
+        output = await readFile(outputPath, "utf8");
       }
 
       const results = parsePreScreenResponse(output, candidates);

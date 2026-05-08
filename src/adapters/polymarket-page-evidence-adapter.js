@@ -1,12 +1,12 @@
 /**
  * PolymarketPageEvidenceAdapter
  *
- * Scrapes Polymarket event pages (__NEXT_DATA__ SSR payload) to extract:
+ * Fetches Polymarket event data to extract:
  * - Detailed resolution rules and resolution source URL
  * - Market annotations (announcements/context updates)
  * - Community top comments (sorted by likes)
  *
- * This aligns with Predict-Raven's scrape-market.ts deep research step.
+ * Strategy: Gamma API first (reliable), HTML scrape fallback (fragile).
  */
 
 function truncate(text, maxLength) {
@@ -15,14 +15,10 @@ function truncate(text, maxLength) {
 }
 
 function extractNextData(html) {
-  const marker = '<script id="__NEXT_DATA__" type="application/json">';
-  const start = html.indexOf(marker);
-  if (start < 0) return null;
-  const jsonStart = start + marker.length;
-  const end = html.indexOf("</script>", jsonStart);
-  if (end < 0) return null;
+  const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!match) return null;
   try {
-    return JSON.parse(html.slice(jsonStart, end));
+    return JSON.parse(match[1]);
   } catch {
     return null;
   }
@@ -80,12 +76,26 @@ function extractComments(pageProps, limit = 10) {
   }));
 }
 
+function extractFromGammaPayload(payload) {
+  if (!payload) return null;
+  const event = Array.isArray(payload) ? payload[0] : payload;
+  if (!event) return null;
+  const markets = event.markets ?? [];
+  const first = markets[0] ?? event;
+  const rules = first?.description ?? first?.resolutionRules ?? first?.resolution_rules ?? first?.rules ?? null;
+  const source = first?.resolutionSource ?? first?.resolution_source ?? first?.resolutionSourceUrl ?? first?.resolution_source_url ?? null;
+  const annotations = (event.annotations ?? event.context ?? []);
+  const comments = (event.comments ?? event.topComments ?? []);
+  return { event, rules, source, annotations, comments };
+}
+
 export class PolymarketPageEvidenceAdapter {
   constructor(config = {}) {
     this.id = "polymarket-page-scrape";
     this.commentLimit = config.evidence?.pageCommentLimit ?? 10;
     this.timeoutMs = config.evidence?.pageTimeoutMs ?? 15000;
     this.enabled = config.evidence?.pageScrape !== false;
+    this.gammaHost = config.polymarketGammaHost || "https://gamma-api.polymarket.com";
   }
 
   async search({ market }) {
@@ -101,6 +111,89 @@ export class PolymarketPageEvidenceAdapter {
     const slug = market.eventSlug || market.marketSlug;
     const url = `https://polymarket.com/event/${slug}`;
 
+    const gammaResult = await this.fetchFromGammaApi(slug, market, signal);
+    if (gammaResult) return gammaResult;
+
+    return this.fetchFromHtmlScrape(ref, slug, url, signal);
+  }
+
+  async fetchFromGammaApi(slug, market, signal) {
+    try {
+      const controller = new AbortController();
+      if (signal) {
+        signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+      let payload;
+      try {
+        const eventUrl = `${this.gammaHost}/events?slug=${encodeURIComponent(slug)}`;
+        const response = await globalThis.fetch(eventUrl, {
+          signal: controller.signal,
+          headers: { "user-agent": "PolyPulse/0.1 market-scan" }
+        });
+        if (!response.ok) {
+          const marketUrl = `${this.gammaHost}/markets?slug=${encodeURIComponent(market.marketSlug || slug)}`;
+          const marketResp = await globalThis.fetch(marketUrl, {
+            signal: controller.signal,
+            headers: { "user-agent": "PolyPulse/0.1 market-scan" }
+          });
+          if (!marketResp.ok) return null;
+          payload = await marketResp.json();
+        } else {
+          payload = await response.json();
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const extracted = extractFromGammaPayload(payload);
+      if (!extracted || !extracted.rules) return null;
+
+      const summaryParts = [];
+      summaryParts.push(`[Resolution Rules]\n${truncate(extracted.rules, 2500)}`);
+      if (extracted.source) {
+        summaryParts.push(`[Resolution Source] ${extracted.source}`);
+      }
+
+      const annotations = Array.isArray(extracted.annotations) ? extracted.annotations.slice(0, 5) : [];
+      if (annotations.length > 0) {
+        const annotationLines = annotations.map((a) =>
+          `- ${a.title || a.headline || "Untitled"}${a.createdAt || a.created_at || a.date ? ` (${a.createdAt || a.created_at || a.date})` : ""}${a.hidden ? " [hidden]" : ""}: ${truncate(a.summary || a.body || a.content || "", 400)}`
+        );
+        summaryParts.push(`[Annotations]\n${annotationLines.join("\n")}`);
+      }
+
+      const comments = Array.isArray(extracted.comments) ? extracted.comments : [];
+      const sortedComments = [...comments].sort((a, b) => (b.likes ?? b.numLikes ?? 0) - (a.likes ?? a.numLikes ?? 0)).slice(0, this.commentLimit);
+      if (sortedComments.length > 0) {
+        const commentLines = sortedComments.map((c) =>
+          `- @${c.username ?? c.author ?? "anonymous"}${c.isHolder || c.is_holder ? " [holder]" : ""} (${c.likes ?? c.numLikes ?? 0} likes): ${truncate(c.body ?? c.content ?? c.text ?? "", 320)}`
+        );
+        summaryParts.push(`[Top Comments]\n${commentLines.join("\n")}`);
+      }
+
+      return {
+        source: this.id,
+        sourceUrl: `https://polymarket.com/event/${slug}`,
+        title: "Polymarket event page: resolution rules, annotations, and community comments",
+        summary: summaryParts.join("\n\n"),
+        status: "fetched",
+        credibility: extracted.source ? "high" : "medium",
+        relevanceScore: 0.9,
+        metadata: {
+          resolutionSource: extracted.source,
+          annotationCount: annotations.length,
+          commentCount: sortedComments.length,
+          dataSource: "gamma-api"
+        }
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async fetchFromHtmlScrape(ref, slug, url, signal) {
     let html;
     try {
       const controller = new AbortController();
@@ -111,7 +204,11 @@ export class PolymarketPageEvidenceAdapter {
       try {
         const response = await globalThis.fetch(url, {
           signal: controller.signal,
-          headers: { "user-agent": "PolyPulse/0.1 evidence-scrape" }
+          headers: {
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-language": "en-US,en;q=0.9"
+          }
         });
         if (!response.ok) {
           return this.failedEvidence(ref, `HTTP ${response.status} from ${url}`);
@@ -174,7 +271,8 @@ export class PolymarketPageEvidenceAdapter {
       metadata: {
         resolutionSource: resolution.source,
         annotationCount: annotations.length,
-        commentCount: comments.length
+        commentCount: comments.length,
+        dataSource: "html-scrape"
       }
     };
   }
