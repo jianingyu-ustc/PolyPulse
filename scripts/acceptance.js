@@ -98,7 +98,7 @@ function summarizePrediction(stage) {
 const argv = process.argv.slice(2);
 const envFile = option(argv, "--env-file", ".env");
 const manualMarket = option(argv, "--market", null);
-const maxAmount = parseNumber(option(argv, "--max-amount", "1"), 1);
+const maxAmount = parseNumber(option(argv, "--max-amount", "10"), 10);
 const allowLiveExecution = hasFlag(argv, "--allow-live-execution");
 
 const runId = timestamp();

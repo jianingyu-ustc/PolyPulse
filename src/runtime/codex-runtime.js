@@ -422,7 +422,8 @@ async function runCodex({
   tempDir,
   outputPath,
   schemaPath,
-  timeoutMs
+  timeoutMs,
+  configOverrides
 }) {
   const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
   const args = [
@@ -440,6 +441,12 @@ async function runCodex({
 
   if (settings.model) {
     args.push("-m", settings.model);
+  }
+
+  if (Array.isArray(configOverrides)) {
+    for (const override of configOverrides) {
+      args.push("-c", override);
+    }
   }
 
   const skillRootOutsideRepo = settings.skillRootDir !== repoRoot

@@ -135,7 +135,7 @@ function parsePreScreenResponse(output, candidates) {
 export class PreScreenProvider {
   constructor(config) {
     this.config = config;
-    this.timeoutMs = config.pulse?.prescreenTimeoutMs ?? 60000;
+    this.timeoutMs = config.pulse?.prescreenTimeoutMs ?? 120000;
     this.enabled = config.pulse?.aiPrescreen !== false;
   }
 
@@ -186,7 +186,8 @@ export class PreScreenProvider {
             repoRoot: this.config.repoRoot,
             settings,
             schemaPath: null,
-            timeoutMs: this.timeoutMs
+            timeoutMs: this.timeoutMs,
+            configOverrides: ['model_reasoning_effort="low"']
           }),
           this.timeoutMs
         );
