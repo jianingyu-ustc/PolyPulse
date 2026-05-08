@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULTS = {
-  POLYPULSE_EXECUTION_MODE: "live",
   POLYPULSE_LIVE_WALLET_MODE: "real",
   SIMULATED_WALLET_ADDRESS: "",
   SIMULATED_WALLET_BALANCE_USD: "100",
@@ -148,10 +147,6 @@ function readNumber(values, key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function normalizeMode(value) {
-  return String(value ?? "live").trim().toLowerCase() || "live";
-}
-
 function normalizeWalletMode(value) {
   return value === "simulated" ? "simulated" : "real";
 }
@@ -202,7 +197,6 @@ export async function loadEnvConfig(options = {}) {
   return {
     repoRoot,
     envFilePath,
-    executionMode: normalizeMode(values.POLYPULSE_EXECUTION_MODE),
     liveWalletMode: normalizeWalletMode(values.POLYPULSE_LIVE_WALLET_MODE),
     simulatedWalletAddress: values.SIMULATED_WALLET_ADDRESS ?? "",
     simulatedWalletBalanceUsd: readNumber(values, "SIMULATED_WALLET_BALANCE_USD", 100),
@@ -331,8 +325,7 @@ function check(key, ok, summary, blocking = true) {
   return { key, ok, blocking, summary };
 }
 
-export function validateEnvConfig(config, options = {}) {
-  const mode = normalizeMode(options.mode ?? config.executionMode);
+export function validateEnvConfig(config) {
   const walletMode = normalizeWalletMode(config.liveWalletMode);
   const pulse = {
     strategy: config.pulse?.strategy ?? "pulse-direct",
@@ -343,7 +336,6 @@ export function validateEnvConfig(config, options = {}) {
   };
   const provider = effectiveAiProvider(config);
   const checks = [
-    check("execution-mode", mode === "live", `mode=${mode}; only live is supported.`),
     check("market-source", config.marketSource === "polymarket", `marketSource=${config.marketSource}; only polymarket is supported.`),
     check("AI_PROVIDER", ["codex", "claude-code"].includes(String(config.ai?.provider ?? "")), `AI_PROVIDER=${config.ai?.provider}; only codex or claude-code is supported.`),
     check("AGENT_RUNTIME_PROVIDER", ["codex", "claude-code"].includes(provider), `effectiveProvider=${provider}; only codex or claude-code is supported.`),
@@ -380,17 +372,17 @@ export function validateEnvConfig(config, options = {}) {
   ];
 
   checks.push(
-    check("env-file", Boolean(config.envFilePath), "live mode requires an explicit env file or .env."),
+    check("env-file", Boolean(config.envFilePath), "requires an explicit env file or .env."),
     check("POLYPULSE_LIVE_WALLET_MODE", ["real", "simulated"].includes(walletMode), "POLYPULSE_LIVE_WALLET_MODE must be real or simulated."),
     check("CHAIN_ID", config.chainId === 137, "CHAIN_ID must be 137 for Polygon mainnet.")
   );
   if (walletMode === "real") {
     checks.push(
-      check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required for live mode with a real wallet."),
-      check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required for live mode with a real wallet."),
+      check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required with a real wallet."),
+      check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required with a real wallet."),
       check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
-      check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required for live mode with a real wallet."),
-      check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required for live mode with a real wallet.")
+      check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required with a real wallet."),
+      check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required with a real wallet.")
     );
   } else {
     checks.push(
@@ -401,7 +393,6 @@ export function validateEnvConfig(config, options = {}) {
 
   return {
     ok: checks.every((item) => item.ok || !item.blocking),
-    mode,
     envFilePath: config.envFilePath,
     chainId: config.chainId,
     liveWalletMode: walletMode,
@@ -411,10 +402,8 @@ export function validateEnvConfig(config, options = {}) {
   };
 }
 
-export function summarizeEnvConfig(config, options = {}) {
-  const mode = normalizeMode(options.mode ?? config.executionMode);
+export function summarizeEnvConfig(config) {
   return {
-    executionMode: mode,
     envFilePath: config.envFilePath,
     chainId: config.chainId,
     liveWalletMode: normalizeWalletMode(config.liveWalletMode),
@@ -426,7 +415,7 @@ export function summarizeEnvConfig(config, options = {}) {
 }
 
 export function assertLivePreflight(config) {
-  const report = validateEnvConfig(config, { mode: "live" });
+  const report = validateEnvConfig(config);
   if (!report.ok) {
     const missing = report.checks.filter((item) => item.blocking && !item.ok).map((item) => item.key).join(", ");
     throw new Error(`live_preflight_failed: ${missing}`);

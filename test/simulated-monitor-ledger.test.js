@@ -86,7 +86,6 @@ function highYesEstimate(inputMarket) {
 async function configForTest(dir) {
   const envPath = path.join(dir, "live.env");
   await writeFile(envPath, [
-    "POLYPULSE_EXECUTION_MODE=live",
     "POLYPULSE_LIVE_WALLET_MODE=simulated",
     "SIMULATED_WALLET_BALANCE_USD=100",
     `SIMULATED_MONITOR_LOG_PATH=${path.join(dir, "simulated-monitor.log")}`,

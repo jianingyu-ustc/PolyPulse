@@ -5,12 +5,11 @@ Use this checklist before any command that may submit real orders.
 ## Environment
 
 ```bash
-node ./bin/polypulse.js env check --mode live --env-file .env
+node ./bin/polypulse.js env check --env-file .env
 ```
 
 Confirm:
 
-- `POLYPULSE_EXECUTION_MODE=live`
 - `POLYPULSE_MARKET_SOURCE=polymarket`
 - `POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com`
 - `CHAIN_ID=137`
@@ -37,8 +36,8 @@ return, confidence, and artifacts.
 Only for `POLYPULSE_LIVE_WALLET_MODE=real`:
 
 ```bash
-node ./bin/polypulse.js account balance --mode live --env-file .env
-node ./bin/polypulse.js account audit --mode live --env-file .env
+node ./bin/polypulse.js account balance --env-file .env
+node ./bin/polypulse.js account audit --env-file .env
 ```
 
 Proceed only if `account audit` returns `ok=true` with no blocking reasons for
@@ -49,7 +48,7 @@ Run only after explicit operator approval if CLOB collateral allowance is
 insufficient:
 
 ```bash
-node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
+node ./bin/polypulse.js account approve --env-file .env --confirm APPROVE
 ```
 
 ## One-Time Execution
@@ -57,18 +56,18 @@ node ./bin/polypulse.js account approve --mode live --env-file .env --confirm AP
 Run only after explicit operator approval for real funds:
 
 ```bash
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
 ## Monitor
 
 ```bash
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
+node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop
 ```
 
 Stop and resume:
 
 ```bash
-node ./bin/polypulse.js monitor stop --mode live --env-file .env --reason manual_stop
-node ./bin/polypulse.js monitor resume --mode live --env-file .env
+node ./bin/polypulse.js monitor stop --env-file .env --reason manual_stop
+node ./bin/polypulse.js monitor resume --env-file .env
 ```

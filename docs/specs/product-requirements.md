@@ -14,8 +14,6 @@ routes through the live broker path.
 - `live simulated`
 - `live real`
 
-No other execution mode is supported.
-
 ## Requirements
 
 - The market source is always Polymarket Gamma.

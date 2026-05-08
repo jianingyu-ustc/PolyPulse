@@ -20,7 +20,6 @@ market and account-audit smoke check.
 Choose one wallet mode in `/home/PolyPulse/.env`.
 
 ```dotenv
-POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_WALLET_MODE=simulated
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
@@ -46,7 +45,7 @@ POLYMARKET_HOST=https://clob.polymarket.com
 The systemd service runs:
 
 ```bash
-node ./bin/polypulse.js monitor run --mode live --env-file /home/PolyPulse/.env --confirm LIVE --loop
+node ./bin/polypulse.js monitor run --env-file /home/PolyPulse/.env --confirm LIVE --loop
 ```
 
 ## Verify
@@ -54,6 +53,6 @@ node ./bin/polypulse.js monitor run --mode live --env-file /home/PolyPulse/.env 
 ```bash
 /home/PolyPulse/deploy/scripts/healthcheck.sh
 node ./bin/polypulse.js market topics --env-file /home/PolyPulse/.env --limit 20 --quick
-node ./bin/polypulse.js account audit --mode live --env-file /home/PolyPulse/.env
-node ./bin/polypulse.js monitor status --mode live --env-file /home/PolyPulse/.env
+node ./bin/polypulse.js account audit --env-file /home/PolyPulse/.env
+node ./bin/polypulse.js monitor status --env-file /home/PolyPulse/.env
 ```

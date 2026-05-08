@@ -8,7 +8,6 @@ Current repository policy:
 - Supported wallet modes are `live simulated` and `live real`.
 - Market source is always current Polymarket Gamma.
 - CLI rejects `--source`.
-- CLI rejects any non-live `--mode`.
 - Tests that need market data read the real Gamma API.
 - Provider runtime is restricted to Codex or Claude Code.
 - Custom provider shell commands are not supported.

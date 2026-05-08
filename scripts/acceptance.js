@@ -6,7 +6,6 @@
  *   node scripts/acceptance.js --env-file .env
  *   node scripts/acceptance.js --env-file .env --market <slug>
  *   node scripts/acceptance.js --env-file .env --max-amount <n>
- *   node scripts/acceptance.js --env-file .env --limit <n>
  *
  * 说明：
  *   - Step 2-7 复用 Scheduler 的 live monitor scan/candidate/predict/risk/order 流程。
@@ -100,9 +99,7 @@ const argv = process.argv.slice(2);
 const envFile = option(argv, "--env-file", ".env");
 const manualMarket = option(argv, "--market", null);
 const maxAmount = parseNumber(option(argv, "--max-amount", "1"), 1);
-const limit = parseNumber(option(argv, "--limit", null), null);
 const allowLiveExecution = hasFlag(argv, "--allow-live-execution");
-const deprecatedSkipDiscovery = hasFlag(argv, "--skip-discovery");
 
 const runId = timestamp();
 const artifactDir = path.resolve("runtime-artifacts", "acceptance-runs", runId);
@@ -114,12 +111,8 @@ let acceptance = null;
 
 try {
   const config = await loadEnvConfig({
-    envFile,
-    overrides: { POLYPULSE_EXECUTION_MODE: "live" }
+    envFile
   });
-  if (config.executionMode !== "live") {
-    throw new Error(`unsupported_execution_mode: ${config.executionMode}; only live is supported`);
-  }
   if (config.marketSource !== "polymarket") {
     throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
   }
@@ -129,11 +122,11 @@ try {
   const marketSource = new PolymarketMarketSource(config, stateStore);
   const scheduler = new Scheduler({ config, stateStore, artifactWriter, marketSource });
 
-  const report = validateEnvConfig(config, { mode: "live" });
+  const report = validateEnvConfig(config);
   const envArtifact = await artifactWriter.writeJson("env-check", randomUUID(), report);
   writeStep(artifactDir, results, 1, "env-check", {
     ok: report.ok,
-    env: summarizeEnvConfig(config, { mode: "live" }),
+    env: summarizeEnvConfig(config),
     report,
     artifact: envArtifact
   }, report.ok);
@@ -143,9 +136,7 @@ try {
 
   const confirmation = config.liveWalletMode === "simulated" || allowLiveExecution ? "LIVE" : null;
   acceptance = await scheduler.runAcceptanceRound({
-    mode: "live",
     confirmation,
-    limit,
     maxAmountUsd: maxAmount,
     marketId: manualMarket
   });
@@ -154,7 +145,6 @@ try {
     ok: acceptance.stages.scan?.ok === true,
     liveMonitorAligned: true,
     manualMarket,
-    limit,
     scan: acceptance.stages.scan,
     candidates: acceptance.stages.discovery?.candidates ?? []
   }, acceptance.stages.scan?.ok === true);
@@ -162,10 +152,6 @@ try {
   writeStep(artifactDir, results, 3, "monitor-ai-prescreen-triage", {
     ok: acceptance.stages.discovery?.ok === true,
     liveMonitorAligned: true,
-    skipDiscoveryIgnored: deprecatedSkipDiscovery,
-    note: deprecatedSkipDiscovery
-      ? "--skip-discovery is ignored because acceptance now mirrors live monitor logic."
-      : undefined,
     topicDiscovery: acceptance.stages.discovery?.topicDiscovery ?? null,
     semanticDiscovery: acceptance.stages.discovery?.semanticDiscovery ?? null,
     preScreen: acceptance.stages.discovery?.preScreen ?? null,

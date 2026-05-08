@@ -23,7 +23,6 @@ function execCli(args, options = {}) {
 
 function liveEnvLines({ stateDir, artifactDir, walletMode = "simulated" }) {
   return [
-    "POLYPULSE_EXECUTION_MODE=live",
     `POLYPULSE_LIVE_WALLET_MODE=${walletMode}`,
     "SIMULATED_WALLET_BALANCE_USD=100",
     "POLYPULSE_MARKET_SOURCE=polymarket",
@@ -175,14 +174,13 @@ test("CLI market topics returns current Polymarket topics", async (t) => {
 
 test("live simulated balance uses the live broker path", async () => {
   const { envPath } = await createConfig();
-  const result = await execCli(["account", "balance", "--mode", "live", "--env-file", envPath], {
+  const result = await execCli(["account", "balance", "--env-file", envPath], {
     env: { ...process.env }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout);
 
   assert.equal(output.ok, true);
-  assert.equal(output.executionMode, "live");
   assert.equal(output.wallet.walletMode, "simulated");
   assert.equal(output.collateral.source, "simulated-live-wallet");
   assert.equal(output.collateralBalance, 100);
@@ -190,7 +188,7 @@ test("live simulated balance uses the live broker path", async () => {
 
 test("live simulated account audit stays on the live broker path without remote account checks", async () => {
   const { envPath } = await createConfig();
-  const result = await execCli(["account", "audit", "--mode", "live", "--env-file", envPath], {
+  const result = await execCli(["account", "audit", "--env-file", envPath], {
     env: { ...process.env }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -206,13 +204,13 @@ test("live simulated account audit stays on the live broker path without remote 
 
 test("allowance approval requires explicit APPROVE confirmation", async () => {
   const { envPath } = await createConfig();
-  const denied = await execCli(["account", "approve", "--mode", "live", "--env-file", envPath], {
+  const denied = await execCli(["account", "approve", "--env-file", envPath], {
     env: { ...process.env }
   });
   assert.notEqual(denied.status, 0);
   assert.match(denied.stderr || denied.stdout, /account_approve_requires_confirm_approve/);
 
-  const approved = await execCli(["account", "approve", "--mode", "live", "--env-file", envPath, "--confirm", "APPROVE"], {
+  const approved = await execCli(["account", "approve", "--env-file", envPath, "--confirm", "APPROVE"], {
     env: { ...process.env }
   });
   assert.equal(approved.status, 0, approved.stderr || approved.stdout);

@@ -6,7 +6,7 @@ Last updated: 2026-05-06
 
 - Keep all CLI, tests, smoke checks, and deployment scripts live-only.
 - Keep `POLYPULSE_MARKET_SOURCE=polymarket` mandatory.
-- Keep `--source` and non-live execution modes rejected.
+- Keep `--source` rejected.
 
 ## P1
 

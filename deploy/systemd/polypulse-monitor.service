@@ -13,7 +13,7 @@ Environment=POLYPULSE_HOME=/home/PolyPulse
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--max-old-space-size=256
 ExecStartPre=/home/PolyPulse/deploy/scripts/healthcheck.sh --preflight
-ExecStart=/usr/bin/env node ./bin/polypulse.js monitor run --mode live --env-file /home/PolyPulse/.env --confirm LIVE --loop
+ExecStart=/usr/bin/env node ./bin/polypulse.js monitor run --env-file /home/PolyPulse/.env --confirm LIVE --loop
 Restart=always
 RestartSec=15
 TimeoutStartSec=180

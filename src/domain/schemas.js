@@ -136,7 +136,6 @@ export const schemas = {
   },
   OrderRequest: {
     orderId: "string",
-    mode: "string",
     marketId: "string",
     tokenId: "string",
     side: "string",
@@ -145,7 +144,6 @@ export const schemas = {
   OrderResult: {
     orderId: "string",
     status: "string",
-    mode: "string",
     requestedUsd: "number",
     filledUsd: "number",
     avgPrice: "number?",

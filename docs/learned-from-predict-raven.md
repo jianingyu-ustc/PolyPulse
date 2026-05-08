@@ -10,6 +10,5 @@ PolyPulse keeps the useful separation of duties:
 - Provider runtime receives a bounded market snapshot, evidence JSON, risk doc,
   and output schema.
 
-PolyPulse does not keep alternate market sources or alternate execution modes.
-The only supported market source is current Polymarket Gamma, and the only
-supported execution mode is live.
+PolyPulse does not keep alternate market sources.
+The only supported market source is current Polymarket Gamma.

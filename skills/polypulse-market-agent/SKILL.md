@@ -26,7 +26,7 @@ PolyPulse 当前只保留两条路径：
 
 - 默认读取当前 Polymarket 真实市场。
 - 默认不打印真实 env 值、私钥、session token 或 cookie。
-- `live simulated` 可以用于演练，但仍必须使用 `--mode live --confirm LIVE`。
+- `live simulated` 可以用于演练，但仍必须使用 `--confirm LIVE`。
 - `live real` 会触发真实资金路径；除非用户在本次会话明确确认真实资金风险，否则不要启动真实下单或真实 monitor。
 - 失败时要 fail-closed：不绕过风控，不为了满足最小下单额而放大仓位。
 
@@ -37,7 +37,7 @@ PolyPulse 当前只保留两条路径：
 ### Live Preflight
 
 ```bash
-node ./bin/polypulse.js env check --mode live --env-file .env
+node ./bin/polypulse.js env check --env-file .env
 ```
 
 ### Market Topics
@@ -51,8 +51,8 @@ node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
 ### Account Balance
 
 ```bash
-node ./bin/polypulse.js account balance --mode live --env-file .env
-node ./bin/polypulse.js account audit --mode live --env-file .env
+node ./bin/polypulse.js account balance --env-file .env
+node ./bin/polypulse.js account audit --env-file .env
 ```
 
 `account audit` 必须核对 collateral allowance、已有仓位、远端成交、本地撤单/拒单记录、已平仓胜率、净收益率和最大回撤；如果返回 blocking reasons，停止真实下单。
@@ -60,7 +60,7 @@ node ./bin/polypulse.js account audit --mode live --env-file .env
 只有用户明确确认真实授权风险时，才可以运行：
 
 ```bash
-node ./bin/polypulse.js account approve --mode live --env-file .env --confirm APPROVE
+node ./bin/polypulse.js account approve --env-file .env --confirm APPROVE
 ```
 
 ### Single-Market Prediction
@@ -85,7 +85,6 @@ node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 要求 `.env`：
 
 ```bash
-POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_WALLET_MODE=simulated
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
@@ -94,7 +93,7 @@ POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 命令：
 
 ```bash
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
 ### Live Real Once
@@ -102,7 +101,6 @@ node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-
 要求 `.env`：
 
 ```bash
-POLYPULSE_EXECUTION_MODE=live
 POLYPULSE_LIVE_WALLET_MODE=real
 PRIVATE_KEY=<server-local-secret>
 FUNDER_ADDRESS=<0x...>
@@ -116,13 +114,13 @@ POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 命令：
 
 ```bash
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
 ### Live Monitor
 
 ```bash
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --loop
+node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop
 ```
 
 ## 运行结束应汇报哪些路径

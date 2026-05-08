@@ -19,7 +19,6 @@ Polymarket Gamma
 
 - CLI creates one context with `PolymarketMarketSource`.
 - `--source` is rejected.
-- `--mode` only accepts `live`.
 - `ProbabilityEstimator` constructs the configured real provider runtime.
 - `OrderExecutor` submits only when `RiskDecision.allowed` is true.
 - `LiveBroker` always runs live env preflight before balance or order calls.

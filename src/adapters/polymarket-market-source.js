@@ -230,7 +230,6 @@ export class PolymarketMarketSource {
     const portfolio = this.stateStore ? await this.stateStore.getPortfolio() : null;
     return {
       accountId: maskAddress(this.config.funderAddress),
-      mode: this.config.executionMode,
       availableUsd: portfolio?.cashUsd ?? 0,
       totalEquityUsd: portfolio?.totalEquityUsd ?? 0,
       openPositions: portfolio?.positions.length ?? 0,

@@ -37,9 +37,6 @@ async function createContext(args, overrides = {}) {
     envFile,
     overrides
   });
-  if (config.executionMode !== "live") {
-    throw new Error(`unsupported_execution_mode: ${config.executionMode}; only live is supported`);
-  }
   if (config.marketSource !== "polymarket") {
     throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
   }
@@ -47,14 +44,6 @@ async function createContext(args, overrides = {}) {
   const artifactWriter = new ArtifactWriter(config);
   const marketSource = new PolymarketMarketSource(config, stateStore);
   return { config, stateStore, artifactWriter, marketSource };
-}
-
-function liveModeFromArgs(args) {
-  const mode = option(args, "--mode", "live");
-  if (mode !== "live") {
-    throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-  }
-  return mode;
 }
 
 function parseAmount(args) {
@@ -74,23 +63,20 @@ function parseOptionalBoolean(args, name) {
 }
 
 async function commandEnv(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
-  const report = validateEnvConfig(context.config, { mode: mode ?? context.config.executionMode });
+  const context = await createContext(args);
+  const report = validateEnvConfig(context.config);
   const runId = randomUUID();
   const artifact = await context.artifactWriter.writeJson("env-check", runId, report);
-  print({ ok: report.ok, env: summarizeEnvConfig(context.config, { mode: report.mode }), report, artifact });
+  print({ ok: report.ok, env: summarizeEnvConfig(context.config), report, artifact });
 }
 
 async function commandBalance(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
+  const context = await createContext(args);
   const service = new AccountService({ config: context.config, stateStore: context.stateStore });
-  const balance = await service.getBalance({ mode: mode ?? context.config.executionMode });
+  const balance = await service.getBalance();
   const artifact = await context.artifactWriter.writeAccountBalance(balance);
   print({
     ok: true,
-    executionMode: balance.executionMode,
     envFilePath: balance.env.envFilePath,
     chainId: balance.env.chainId,
     wallet: balance.wallet,
@@ -101,14 +87,12 @@ async function commandBalance(args) {
 }
 
 async function commandAccountAudit(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
+  const context = await createContext(args);
   const service = new AccountService({ config: context.config, stateStore: context.stateStore });
-  const audit = await service.audit({ mode: mode ?? context.config.executionMode });
+  const audit = await service.audit();
   const artifact = await context.artifactWriter.writeAccountAudit(audit);
   print({
     ok: audit.ok,
-    executionMode: audit.executionMode,
     scope: audit.scope ?? "real-remote",
     envFilePath: audit.env.envFilePath,
     chainId: audit.env.chainId,
@@ -131,17 +115,14 @@ async function commandAccountAudit(args) {
 }
 
 async function commandAccountApprove(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, mode ? { POLYPULSE_EXECUTION_MODE: mode } : {});
+  const context = await createContext(args);
   const service = new AccountService({ config: context.config, stateStore: context.stateStore });
   const approval = await service.approveCollateral({
-    mode: mode ?? context.config.executionMode,
     confirmation: option(args, "--confirm")
   });
   const artifact = await context.artifactWriter.writeAccountApproval(approval);
   print({
     ok: true,
-    executionMode: approval.executionMode,
     envFilePath: approval.env.envFilePath,
     chainId: approval.env.chainId,
     wallet: approval.wallet,
@@ -271,8 +252,7 @@ async function commandEvidenceCollect(args) {
 }
 
 async function commandRiskEvaluate(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
+  const context = await createContext(args);
   const marketId = option(args, "--market");
   if (!marketId) {
     throw new Error("risk evaluate requires --market <market-id-or-slug>");
@@ -292,7 +272,6 @@ async function commandRiskEvaluate(args) {
     decision,
     market,
     portfolio,
-    mode,
     confirmation,
     evidence,
     estimate
@@ -306,7 +285,6 @@ async function commandRiskEvaluate(args) {
   });
   print({
     ok: true,
-    mode,
     market_question: market.question,
     ai_probability: estimate.ai_probability,
     confidence: estimate.confidence,
@@ -325,8 +303,7 @@ async function commandRiskEvaluate(args) {
 }
 
 async function commandTradeOnce(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
+  const context = await createContext(args);
   const marketId = option(args, "--market");
   const side = option(args, "--side");
   const maxAmountUsd = parseAmount(args);
@@ -338,7 +315,6 @@ async function commandTradeOnce(args) {
   const result = await runTradeOnce({
     context,
     marketId,
-    mode,
     side,
     maxAmountUsd,
     confirmation
@@ -346,7 +322,6 @@ async function commandTradeOnce(args) {
   print({
     ok: result.ok ?? true,
     status: result.status,
-    mode: result.mode,
     provider: result.provider,
     effectiveProvider: result.effectiveProvider,
     market_question: result.market_question,
@@ -364,8 +339,7 @@ async function commandTradeOnce(args) {
 }
 
 async function commandMonitorRun(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
+  const context = await createContext(args);
   const scheduler = new Scheduler(context);
   const roundsOption = option(args, "--rounds");
   const parsedRounds = Number(roundsOption ?? "1");
@@ -377,7 +351,6 @@ async function commandMonitorRun(args) {
   const compact = (result) => ({
     ok: result.ok,
     status: result.status,
-    mode: result.mode,
     runId: result.runId,
     markets: result.markets,
     candidates: result.candidates,
@@ -389,7 +362,6 @@ async function commandMonitorRun(args) {
     error: result.error
   });
   const result = await scheduler.monitorLoop({
-    mode,
     confirmation: option(args, "--confirm"),
     rounds,
     limit: limit == null ? null : Number(limit),
@@ -402,8 +374,7 @@ async function commandMonitorRun(args) {
 }
 
 async function commandMonitor(args) {
-  const mode = liveModeFromArgs(args);
-  const context = await createContext(args, { POLYPULSE_EXECUTION_MODE: mode });
+  const context = await createContext(args);
   if (args[1] === "run") {
     return await commandMonitorRun(args);
   }
@@ -411,7 +382,6 @@ async function commandMonitor(args) {
     const state = await context.stateStore.getMonitorState();
     print({
       ok: true,
-      mode,
       status: state.status,
       lastRunId: state.lastRunId,
       lastStartedAt: state.lastStartedAt,
@@ -427,12 +397,12 @@ async function commandMonitor(args) {
   }
   if (args[1] === "stop") {
     const state = await context.stateStore.stopMonitor(option(args, "--reason", "manual_stop"));
-    print({ ok: true, mode, status: state.status, stopReason: state.stopReason, updatedAt: state.updatedAt });
+    print({ ok: true, status: state.status, stopReason: state.stopReason, updatedAt: state.updatedAt });
     return;
   }
   if (args[1] === "resume") {
     const state = await context.stateStore.resumeMonitor();
-    print({ ok: true, mode, status: state.status, resumedAt: state.resumedAt, updatedAt: state.updatedAt });
+    print({ ok: true, status: state.status, resumedAt: state.resumedAt, updatedAt: state.updatedAt });
     return;
   }
   throw new Error(`Unknown monitor command: ${args.join(" ")}`);
@@ -465,8 +435,8 @@ function help() {
     commands: [
       "polypulse env check",
       "polypulse account balance --env-file <path>",
-      "polypulse account audit --mode live --env-file <path>",
-      "polypulse account approve --mode live --env-file <path> --confirm APPROVE",
+      "polypulse account audit --env-file <path>",
+      "polypulse account approve --env-file <path> --confirm APPROVE",
       "polypulse market topics --limit 20",
       "polypulse market topics --quick --limit 20",
       "polypulse market topics --limit 20 --min-liquidity 1000 --min-volume 500 --category politics --tradable true",
@@ -475,9 +445,9 @@ function help() {
       "polypulse evidence collect --market <market-id-or-slug> --env-file <path>",
       "polypulse predict --market <market-id-or-slug>",
       "polypulse risk evaluate --market <market-id-or-slug> --max-amount 1 --env-file <path>",
-      "polypulse trade once --mode live --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
+      "polypulse trade once --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
       "polypulse risk status|pause|halt|resume",
-      "polypulse monitor run --mode live --env-file <path> --confirm LIVE --rounds 1",
+      "polypulse monitor run --env-file <path> --confirm LIVE --rounds 1",
       "polypulse monitor status|stop|resume"
     ]
   };

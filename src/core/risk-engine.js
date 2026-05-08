@@ -9,10 +9,9 @@ function roundUsd(value) {
   return Number(Math.max(0, Number(value) || 0).toFixed(4));
 }
 
-function orderForDecision({ decision, mode, approvedUsd }) {
+function orderForDecision({ decision, approvedUsd }) {
   return assertSchema("OrderRequest", {
     orderId: randomUUID(),
-    mode,
     marketId: decision.marketId,
     tokenId: decision.tokenId,
     side: decision.side,
@@ -96,7 +95,6 @@ export class RiskEngine {
     decision,
     market,
     portfolio,
-    mode,
     confirmation = null,
     evidence = [],
     estimate = null,
@@ -113,7 +111,7 @@ export class RiskEngine {
     const requireEvidenceGuard = !pulseDirect || this.config.pulse?.requireEvidenceGuard;
     const liveCollateral = availableLiveCollateral(liveBalance);
     const liveAllowance = availableLiveAllowance(liveBalance);
-    const portfolioEquityUsd = mode === "live" && liveCollateral != null
+    const portfolioEquityUsd = liveCollateral != null
       ? liveCollateral
       : Number(portfolio.totalEquityUsd ?? 0);
     let adjusted = Number.isFinite(suggestedUsd)
@@ -124,9 +122,6 @@ export class RiskEngine {
     const riskState = systemState ?? (this.stateStore ? await this.stateStore.getRiskState() : { status: "active", highWaterMarkUsd: portfolioEquityUsd });
     warnings.push(...positionLossWarnings(portfolio, this.config.risk.maxPositionLossPct));
 
-    if (mode !== "live") {
-      blockedReasons.push(`unsupported_execution_mode:${mode}`);
-    }
     if (riskState.status === "paused") {
       blockedReasons.push("system_paused");
     }
@@ -239,7 +234,7 @@ export class RiskEngine {
     if (confirmation !== "LIVE") {
       blockedReasons.push("live_requires_confirm_live");
     }
-    const preflight = validateEnvConfig(this.config, { mode: "live" });
+    const preflight = validateEnvConfig(this.config);
     if (!preflight.ok) {
       blockedReasons.push("live_preflight_failed");
     }
@@ -275,7 +270,7 @@ export class RiskEngine {
       adjusted_notional: adjusted,
       adjustedNotional: adjusted,
       approvedUsd,
-      order: allow ? orderForDecision({ decision, mode, approvedUsd }) : null
+      order: allow ? orderForDecision({ decision, approvedUsd }) : null
     };
     return assertSchema("RiskDecision", result);
   }

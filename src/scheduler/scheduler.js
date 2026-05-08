@@ -107,11 +107,10 @@ function blockedRisk(reason) {
   };
 }
 
-function blockedOrder({ mode, reason }) {
+function blockedOrder({ reason }) {
   return {
     orderId: "blocked-before-order",
     status: "blocked",
-    mode,
     requestedUsd: 0,
     filledUsd: 0,
     avgPrice: null,
@@ -307,10 +306,7 @@ export class Scheduler {
       : null;
   }
 
-  async runOnce({ mode = "live", confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async runOnce({ confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
     const runId = randomUUID();
     const run = await this.stateStore.createRun({ runId, stage: "started" });
     const market = marketId
@@ -324,8 +320,8 @@ export class Scheduler {
     const portfolio = await this.stateStore.getPortfolio();
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: evidenceBundle });
     const decision = this.decisionEngine.decide({ market, estimate, side, amountUsd, portfolio });
-    const risk = await this.riskEngine.evaluate({ decision, market, portfolio, mode, confirmation, evidence: evidenceBundle, estimate });
-    const orderResult = await this.orderExecutor.execute({ risk, market, mode, confirmation });
+    const risk = await this.riskEngine.evaluate({ decision, market, portfolio, confirmation, evidence: evidenceBundle, estimate });
+    const orderResult = await this.orderExecutor.execute({ risk, market, confirmation });
 
     const artifacts = [
       await this.artifactWriter.writeJson("evidence", runId, evidenceBundle),
@@ -335,7 +331,7 @@ export class Scheduler {
     ];
     artifacts.push(await this.artifactWriter.writeJson("execution", runId, orderResult));
     await this.stateStore.updateRunStage(run.runId, "completed", { status: "completed" });
-    return { ok: true, runId, mode, market, decision, risk, orderResult, artifacts };
+    return { ok: true, runId, market, decision, risk, orderResult, artifacts };
   }
 
   async predictCandidate(candidate) {
@@ -588,8 +584,8 @@ export class Scheduler {
     }
   }
 
-  async getLiveBalanceContext({ mode, confirmation }) {
-    if (mode !== "live" || confirmation !== "LIVE") {
+  async getLiveBalanceContext({ confirmation }) {
+    if (confirmation !== "LIVE") {
       return { liveBalance: null, liveBalanceError: null };
     }
     try {
@@ -603,7 +599,7 @@ export class Scheduler {
     }
   }
 
-  async evaluateAndMaybeOrder({ prediction, mode, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, liveBalance, liveBalanceError }) {
+  async evaluateAndMaybeOrder({ prediction, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, liveBalance, liveBalanceError }) {
     const portfolio = await this.stateStore.getPortfolio();
     const analysis = this.decisionEngine.analyze({
       market: prediction.market,
@@ -622,7 +618,7 @@ export class Scheduler {
 
     if (orderCount >= this.config.monitor.maxTradesPerRound) {
       const risk = blockedRisk("monitor_round_trade_limit_reached");
-      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_round_trade_limit_reached" }) };
+      return { decision, risk, order: blockedOrder({ reason: "monitor_round_trade_limit_reached" }) };
     }
 
     const monitorState = await this.stateStore.getMonitorState();
@@ -631,7 +627,7 @@ export class Scheduler {
     const remainingDaily = Math.max(0, maxDaily - dailyUsed - filledUsdThisRun);
     if (remainingDaily < this.config.risk.minTradeUsd) {
       const risk = blockedRisk("monitor_daily_trade_limit_reached");
-      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_daily_trade_limit_reached" }) };
+      return { decision, risk, order: blockedOrder({ reason: "monitor_daily_trade_limit_reached" }) };
     }
 
     const amountUsd = Math.min(maxAmountUsd, remainingDaily);
@@ -646,16 +642,15 @@ export class Scheduler {
       decision: boundedDecision,
       market: prediction.market,
       portfolio,
-      mode,
       confirmation,
       evidence: prediction.evidence,
       estimate: prediction.estimate,
       liveBalance,
       liveBalanceError
     });
-    const order = await this.orderExecutor.execute({ risk, market: prediction.market, mode, confirmation });
+    const order = await this.orderExecutor.execute({ risk, market: prediction.market, confirmation });
     if (order.status === "filled" && order.filledUsd > 0) {
-      await this.stateStore.recordMonitorTrade({ market: prediction.market, orderResult: order, runId, mode });
+      await this.stateStore.recordMonitorTrade({ market: prediction.market, orderResult: order, runId });
     }
     return { decision: boundedDecision, risk, order };
   }
@@ -670,7 +665,6 @@ export class Scheduler {
         marketSlug: closed.marketSlug,
         orderId: `sim-close-${closed.positionId}`,
         status: "filled",
-        mode: "live",
         requestedUsd: 0,
         filledUsd: closed.proceedsUsd,
         avgPrice: closed.currentPrice,
@@ -728,7 +722,6 @@ export class Scheduler {
           marketSlug: closed.marketSlug,
           orderId: `sim-close-${closed.positionId}`,
           status: "filled",
-          mode: "live",
           requestedUsd: 0,
           filledUsd: closed.proceedsUsd,
           avgPrice: closed.currentPrice,
@@ -753,7 +746,7 @@ export class Scheduler {
     });
   }
 
-  async evaluateAndMaybeSimulatedOrder({ prediction, mode, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, side = null }) {
+  async evaluateAndMaybeSimulatedOrder({ prediction, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, side = null }) {
     const ledger = this.simulatedLedger;
     const portfolio = ledger.portfolio();
     const analysis = this.decisionEngine.analyze({
@@ -775,7 +768,7 @@ export class Scheduler {
       const risk = blockedRisk("monitor_round_trade_limit_reached");
       await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "open-scan" });
       await ledger.logRisk({ market: prediction.market, risk });
-      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_round_trade_limit_reached" }) };
+      return { decision, risk, order: blockedOrder({ reason: "monitor_round_trade_limit_reached" }) };
     }
 
     const maxDaily = this.config.monitor.maxDailyTradeUsd;
@@ -785,7 +778,7 @@ export class Scheduler {
       const risk = blockedRisk("monitor_daily_trade_limit_reached");
       await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "open-scan" });
       await ledger.logRisk({ market: prediction.market, risk });
-      return { decision, risk, order: blockedOrder({ mode, reason: "monitor_daily_trade_limit_reached" }) };
+      return { decision, risk, order: blockedOrder({ reason: "monitor_daily_trade_limit_reached" }) };
     }
 
     const amountUsd = Math.min(maxAmountUsd, remainingDaily);
@@ -800,7 +793,6 @@ export class Scheduler {
       decision: boundedDecision,
       market: prediction.market,
       portfolio,
-      mode,
       confirmation,
       evidence: prediction.evidence,
       estimate: prediction.estimate,
@@ -821,10 +813,7 @@ export class Scheduler {
     return { decision: boundedDecision, risk, order };
   }
 
-  async runSimulatedTradeOnce({ mode = "live", confirmation = null, marketId, side = null, maxAmountUsd = 1 } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async runSimulatedTradeOnce({ confirmation = null, marketId, side = null, maxAmountUsd = 1 } = {}) {
     if (!this.simulatedLedger) {
       throw new Error("simulated_ledger_unavailable");
     }
@@ -833,7 +822,6 @@ export class Scheduler {
     const ledger = this.simulatedLedger;
     const accumulator = {
       runId,
-      mode,
       startedAt,
       completedAt: null,
       scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
@@ -877,7 +865,6 @@ export class Scheduler {
         accumulator.predictions.push(prediction);
         const result = await this.evaluateAndMaybeSimulatedOrder({
           prediction,
-          mode,
           confirmation,
           maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
           runId,
@@ -917,7 +904,6 @@ export class Scheduler {
       return {
         ok: true,
         status: "completed",
-        mode,
         runId,
         provider: prediction?.estimate?.diagnostics?.provider,
         effectiveProvider: prediction?.estimate?.diagnostics?.effectiveProvider,
@@ -949,7 +935,6 @@ export class Scheduler {
       return {
         ok: false,
         status: "failed",
-        mode,
         runId,
         error: message,
         action: "no-trade",
@@ -961,10 +946,7 @@ export class Scheduler {
     }
   }
 
-  async runAcceptanceRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null, marketId = null } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async runAcceptanceRound({ confirmation = null, limit = null, maxAmountUsd = null, marketId = null } = {}) {
 
     const runId = monitorRunId();
     const startedAt = nowIso();
@@ -973,7 +955,6 @@ export class Scheduler {
     const simulated = Boolean(ledger);
     const accumulator = {
       runId,
-      mode,
       startedAt,
       completedAt: null,
       scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
@@ -1007,14 +988,13 @@ export class Scheduler {
         return {
           ok: true,
           status: "stopped",
-          mode,
           runId,
           reason: monitorState.stopReason ?? "monitor_stopped",
           stages,
           artifact: null
         };
       }
-      await this.stateStore.startMonitorRun({ runId, mode });
+      await this.stateStore.startMonitorRun({ runId });
     }
 
     const finishReal = async (status = "completed", error = null) => {
@@ -1210,7 +1190,6 @@ export class Scheduler {
           for (const { prediction } of rankedPredictions) {
             const result = await this.evaluateAndMaybeSimulatedOrder({
               prediction,
-              mode,
               confirmation,
               maxAmountUsd: amountUsd,
               runId,
@@ -1244,13 +1223,12 @@ export class Scheduler {
           }
           await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
         } else {
-          const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ mode, confirmation });
+          const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
           let orderCount = 0;
           let filledUsdThisRun = 0;
           for (const { prediction } of rankedPredictions) {
             const result = await this.evaluateAndMaybeOrder({
               prediction,
-              mode,
               confirmation,
               maxAmountUsd: amountUsd,
               runId,
@@ -1309,7 +1287,6 @@ export class Scheduler {
       return {
         ok: true,
         status: "completed",
-        mode,
         runId,
         walletMode: this.config.liveWalletMode,
         markets: accumulator.scan.markets?.length ?? 0,
@@ -1342,7 +1319,6 @@ export class Scheduler {
       return {
         ok: false,
         status: "failed",
-        mode,
         runId,
         walletMode: this.config.liveWalletMode,
         error: message,
@@ -1355,16 +1331,12 @@ export class Scheduler {
     }
   }
 
-  async runSimulatedMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async runSimulatedMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     const runId = monitorRunId();
     const startedAt = nowIso();
     const ledger = this.simulatedLedger;
     const accumulator = {
       runId,
-      mode,
       startedAt,
       completedAt: null,
       scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
@@ -1464,7 +1436,6 @@ export class Scheduler {
         for (const { prediction } of rankedPredictions) {
           const result = await this.evaluateAndMaybeSimulatedOrder({
             prediction,
-            mode,
             confirmation,
             maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
             runId,
@@ -1506,7 +1477,6 @@ export class Scheduler {
       return {
         ok: true,
         status: "completed",
-        mode,
         runId,
         markets: accumulator.scan.markets?.length ?? 0,
         candidates: accumulator.candidates.filter((item) => item.selected).length,
@@ -1525,7 +1495,6 @@ export class Scheduler {
       return {
         ok: false,
         status: "failed",
-        mode,
         runId,
         error: message,
         artifact: ledger.logPath,
@@ -1535,12 +1504,9 @@ export class Scheduler {
     }
   }
 
-  async runMonitorRound({ mode = "live", confirmation = null, limit = null, maxAmountUsd = null } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async runMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     if (this.simulatedLedger) {
-      return await this.runSimulatedMonitorRound({ mode, confirmation, limit, maxAmountUsd });
+      return await this.runSimulatedMonitorRound({ confirmation, limit, maxAmountUsd });
     }
     const runId = monitorRunId();
     const startedAt = nowIso();
@@ -1550,16 +1516,14 @@ export class Scheduler {
       return {
         ok: true,
         status: "stopped",
-        mode,
         reason: monitorState.stopReason ?? "monitor_stopped",
         artifact: null
       };
     }
 
-    await this.stateStore.startMonitorRun({ runId, mode });
+    await this.stateStore.startMonitorRun({ runId });
     const accumulator = {
       runId,
-      mode,
       startedAt,
       completedAt: null,
       scan: { source: this.config.marketSource, fetchedAt: startedAt, markets: [], errors: [] },
@@ -1621,13 +1585,12 @@ export class Scheduler {
           amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
           decisionEngine: this.decisionEngine
         });
-        const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ mode, confirmation });
+        const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
         let orderCount = 0;
         let filledUsdThisRun = 0;
         for (const { prediction } of rankedPredictions) {
           const result = await this.evaluateAndMaybeOrder({
             prediction,
-            mode,
             confirmation,
             maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
             runId,
@@ -1665,7 +1628,6 @@ export class Scheduler {
       return {
         ok: true,
         status: "completed",
-        mode,
         runId,
         markets: accumulator.scan.markets?.length ?? 0,
         candidates: accumulator.candidates.filter((item) => item.selected).length,
@@ -1681,7 +1643,6 @@ export class Scheduler {
       return {
         ok: false,
         status: "failed",
-        mode,
         runId,
         error: message,
         artifact: artifacts.summary.path
@@ -1693,21 +1654,18 @@ export class Scheduler {
     return await this.runMonitorRound(options);
   }
 
-  async monitorLoop({ mode = "live", confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, onRound = null } = {}) {
-    if (mode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-    }
+  async monitorLoop({ confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, onRound = null } = {}) {
     const results = [];
     let completed = 0;
     while (rounds == null || completed < rounds) {
       const state = this.simulatedLedger ? { status: "active" } : await this.stateStore.getMonitorState();
       if (!this.simulatedLedger && state.status === "stopped") {
-        const result = { ok: true, status: "stopped", mode, reason: state.stopReason ?? "monitor_stopped", artifact: null };
+        const result = { ok: true, status: "stopped", reason: state.stopReason ?? "monitor_stopped", artifact: null };
         results.push(result);
         if (onRound) await onRound(result);
         break;
       }
-      const result = await this.monitorRun({ mode, confirmation, limit, maxAmountUsd });
+      const result = await this.monitorRun({ confirmation, limit, maxAmountUsd });
       results.push(result);
       if (onRound) await onRound(result);
       completed += 1;
@@ -1719,7 +1677,6 @@ export class Scheduler {
     return {
       ok: results.every((item) => item.ok),
       status: results.at(-1)?.status ?? "completed",
-      mode,
       rounds: results.length,
       last: results.at(-1) ?? null
     };

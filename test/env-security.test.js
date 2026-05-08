@@ -39,7 +39,6 @@ function execCli(args, options = {}) {
 test(".env.example contains the required configuration fields", async () => {
   const env = parseEnvContent(await readFile(path.join(repoRoot, ".env.example"), "utf8"));
   const required = [
-    "POLYPULSE_EXECUTION_MODE",
     "POLYPULSE_LIVE_WALLET_MODE",
     "SIMULATED_WALLET_ADDRESS",
     "SIMULATED_WALLET_BALANCE_USD",
@@ -92,13 +91,11 @@ test("live preflight fails when PRIVATE_KEY is missing", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-real-"));
   const envPath = path.join(dir, "live.env");
   await writeFile(envPath, [
-    "POLYPULSE_EXECUTION_MODE=live",
     "POLYPULSE_LIVE_WALLET_MODE=real"
   ].join("\n"), "utf8");
   const config = await loadEnvConfig({
     envFile: envPath,
     overrides: {
-      POLYPULSE_EXECUTION_MODE: "live",
       POLYPULSE_LIVE_WALLET_MODE: "real",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
@@ -115,7 +112,6 @@ test("live preflight allows simulated wallet without a private key", async () =>
   const config = await loadEnvConfig({
     envFile: "/tmp/polypulse-simulated-live.env",
     overrides: {
-      POLYPULSE_EXECUTION_MODE: "live",
       POLYPULSE_LIVE_WALLET_MODE: "simulated",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "",
@@ -138,7 +134,6 @@ test("private key value is excluded from stdout, artifacts, and memory", async (
   const envPath = path.join(dir, "live.env");
   const keyName = "PRIVATE" + "_KEY";
   await writeFile(envPath, [
-    "POLYPULSE_EXECUTION_MODE=live",
     `${keyName}=${secret}`,
     "FUNDER_ADDRESS=0x1111111111111111111111111111111111111111",
     "SIGNATURE_TYPE=1",
@@ -149,7 +144,7 @@ test("private key value is excluded from stdout, artifacts, and memory", async (
     `ARTIFACT_DIR=${artifactDir}`
   ].join("\n"), "utf8");
 
-  const result = await execCli(["env", "check", "--mode", "live", "--env-file", envPath]);
+  const result = await execCli(["env", "check", "--env-file", envPath]);
   const artifacts = await readTreeText(artifactDir);
   const memory = await readFile(path.join(repoRoot, "docs", "memory", "POLYPULSE_MEMORY.md"), "utf8");
 

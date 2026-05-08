@@ -32,5 +32,4 @@ Last updated: 2026-05-06
 ## AI Boundary
 
 - AI providers only return probability and evidence judgment.
-- AI output cannot override token id, side, notional, broker options, balance, or
-  execution mode.
+- AI output cannot override token id, side, notional, broker options, or balance.

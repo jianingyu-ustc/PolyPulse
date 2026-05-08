@@ -5,13 +5,11 @@ POLYPULSE_HOME="${POLYPULSE_HOME:-/home/PolyPulse}"
 ENV_FILE="${POLYPULSE_ENV_FILE:-$POLYPULSE_HOME/.env}"
 SERVICE_NAME="polypulse-monitor.service"
 
-MODE="live"
 if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
-  MODE="${POLYPULSE_EXECUTION_MODE:-live}"
 fi
 
 systemctl is-active "$SERVICE_NAME" || true
@@ -19,7 +17,7 @@ systemctl --no-pager --full status "$SERVICE_NAME" || true
 
 if [ -f "$ENV_FILE" ] && [ -d "$POLYPULSE_HOME" ]; then
   cd "$POLYPULSE_HOME"
-  node ./bin/polypulse.js monitor status --mode live --env-file "$ENV_FILE" || true
+  node ./bin/polypulse.js monitor status --env-file "$ENV_FILE" || true
 fi
 
 echo "[status] recent logs"

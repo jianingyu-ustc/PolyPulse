@@ -7,7 +7,7 @@ import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { Scheduler } from "../scheduler/scheduler.js";
 
-function oneShotAction({ mode, risk, orderResult }) {
+function oneShotAction({ risk, orderResult }) {
   if (!risk.allowed || !risk.order || orderResult?.status === "blocked") {
     return "no-trade";
   }
@@ -29,26 +29,20 @@ export async function buildPrediction(context, marketId) {
 export async function runTradeOnce({
   context,
   marketId,
-  mode = "live",
   side = null,
   maxAmountUsd = 1,
   confirmation = null
 }) {
-  if (mode !== "live") {
-    throw new Error(`unsupported_execution_mode: ${mode}; only live is supported`);
-  }
   const input = {
     command: "trade once",
-    mode,
     market: marketId,
     side,
     max_amount_usd: Number(maxAmountUsd),
     confirm_live: confirmation === "LIVE",
-    env: summarizeEnvConfig(context.config, { mode })
+    env: summarizeEnvConfig(context.config)
   };
   if (context.config.liveWalletMode === "simulated") {
     return await new Scheduler(context).runSimulatedTradeOnce({
-      mode,
       confirmation,
       marketId,
       side,
@@ -77,15 +71,14 @@ export async function runTradeOnce({
     decision,
     market,
     portfolio,
-    mode,
     confirmation,
     evidence,
     estimate,
     liveBalance,
     liveBalanceError
   });
-  const orderResult = await new OrderExecutor({ liveBroker }).execute({ risk, market, mode, confirmation });
-  const action = oneShotAction({ mode, risk, orderResult });
+  const orderResult = await new OrderExecutor({ liveBroker }).execute({ risk, market, confirmation });
+  const action = oneShotAction({ risk, orderResult });
   const artifacts = await context.artifactWriter.writeOnceRun({
     input,
     market,
@@ -98,7 +91,6 @@ export async function runTradeOnce({
   });
   const summary = {
     ok: true,
-    mode,
     provider: estimate.diagnostics?.provider,
     effectiveProvider: estimate.diagnostics?.effectiveProvider,
     market_question: market.question,

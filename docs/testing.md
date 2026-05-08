@@ -1,7 +1,7 @@
 # PolyPulse Testing
 
 PolyPulse tests are live-only. The repository no longer keeps an offline market
-source or an isolated execution mode. Tests that need markets read the current
+source. Tests that need markets read the current
 Polymarket Gamma API through the same `PolymarketMarketSource` used by CLI runs.
 
 ## Commands

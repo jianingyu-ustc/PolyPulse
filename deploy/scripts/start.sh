@@ -36,12 +36,10 @@ set -a
 . "$ENV_FILE"
 set +a
 
-MODE="${POLYPULSE_EXECUTION_MODE:-live}"
 WALLET_MODE="${POLYPULSE_LIVE_WALLET_MODE:-real}"
 if [ -n "$WALLET_MODE_ARG" ] && [ "$WALLET_MODE_ARG" != "$WALLET_MODE" ]; then
   fail "--wallet $WALLET_MODE_ARG does not match POLYPULSE_LIVE_WALLET_MODE=$WALLET_MODE in $ENV_FILE"
 fi
-[ "$MODE" = "live" ] || fail "POLYPULSE_EXECUTION_MODE must be live"
 [ "$CONFIRM" = "LIVE" ] || fail "live start requires ./deploy/scripts/start.sh --confirm LIVE"
 case "$WALLET_MODE" in
   real)

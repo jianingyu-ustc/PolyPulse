@@ -52,9 +52,9 @@ function run(args) {
 let failed = false;
 let skippedLiveExecution = false;
 try {
-  const envCheck = run(["env", "check", "--mode", "live", "--env-file", envFile]);
-  run(["account", "balance", "--mode", "live", "--env-file", envFile]);
-  run(["account", "audit", "--mode", "live", "--env-file", envFile]);
+  const envCheck = run(["env", "check", "--env-file", envFile]);
+  run(["account", "balance", "--env-file", envFile]);
+  run(["account", "audit", "--env-file", envFile]);
   const topics = run(["market", "topics", "--env-file", envFile, "--limit", "20", "--quick"]);
   const market = topics?.topics?.[0];
   const marketId = market?.marketId ?? market?.marketSlug;
@@ -62,10 +62,10 @@ try {
     throw new Error("smoke_no_polymarket_topic_returned");
   }
   run(["predict", "--env-file", envFile, "--market", marketId]);
-  run(["monitor", "status", "--mode", "live", "--env-file", envFile]);
+  run(["monitor", "status", "--env-file", envFile]);
   if (envCheck?.report?.liveWalletMode === "simulated") {
-    run(["trade", "once", "--mode", "live", "--env-file", envFile, "--market", marketId, "--max-amount", "1", "--confirm", "LIVE"]);
-    run(["monitor", "run", "--mode", "live", "--env-file", envFile, "--rounds", "1", "--limit", "1", "--max-amount", "1", "--confirm", "LIVE"]);
+    run(["trade", "once", "--env-file", envFile, "--market", marketId, "--max-amount", "1", "--confirm", "LIVE"]);
+    run(["monitor", "run", "--env-file", envFile, "--rounds", "1", "--limit", "1", "--max-amount", "1", "--confirm", "LIVE"]);
   } else {
     skippedLiveExecution = true;
   }

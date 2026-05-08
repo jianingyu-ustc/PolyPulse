@@ -15,12 +15,8 @@ function roundUsd(value) {
   return Number((Number(value) || 0).toFixed(4));
 }
 
-function modeFor(config) {
-  return "live";
-}
-
 function stateFilePath(config) {
-  return path.join(config.stateDir, `${modeFor(config)}-state.json`);
+  return path.join(config.stateDir, "live-state.json");
 }
 
 function emptyPortfolio(config, now = nowIso()) {
@@ -74,7 +70,7 @@ function defaultState(config) {
   const portfolio = emptyPortfolio(config, now);
   return {
     version: 1,
-    mode: modeFor(config),
+    mode: "live",
     portfolio,
     riskState: emptyRiskState(portfolio, now),
     monitorState: emptyMonitorState(now),
@@ -131,7 +127,7 @@ function normalizeState(config, value) {
   return {
     ...base,
     ...state,
-    mode: modeFor(config),
+    mode: "live",
     portfolio,
     riskState,
     monitorState,
@@ -317,13 +313,13 @@ export class FileStateStore {
     return recovered;
   }
 
-  async startMonitorRun({ runId, mode = modeFor(this.config) }) {
+  async startMonitorRun({ runId }) {
     const state = await this.readState();
     const now = nowIso();
     state.monitorState.status = state.monitorState.status === "stopped" ? "stopped" : "active";
     state.monitorState.lastRunId = runId;
     state.monitorState.lastStartedAt = now;
-    state.monitorState.inFlightRun = { runId, mode, startedAt: now };
+    state.monitorState.inFlightRun = { runId, startedAt: now };
     state.monitorState.updatedAt = now;
     await this.writeState(state);
     return state.monitorState.inFlightRun;
@@ -348,7 +344,7 @@ export class FileStateStore {
     return entry;
   }
 
-  async recordMonitorTrade({ market, orderResult, runId, mode = modeFor(this.config) }) {
+  async recordMonitorTrade({ market, orderResult, runId }) {
     const state = await this.readState();
     const now = nowIso();
     state.monitorState.dailyTradeUsd = normalizeDailyTradeUsd(state.monitorState.dailyTradeUsd);
@@ -359,7 +355,6 @@ export class FileStateStore {
     for (const key of dedupeKeys(market)) {
       state.monitorState.tradedMarkets[key] = {
         runId,
-        mode,
         orderId: orderResult.orderId,
         filledUsd: orderResult.filledUsd,
         tradedAt: now

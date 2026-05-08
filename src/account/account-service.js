@@ -193,13 +193,8 @@ export class AccountService {
     this.liveBroker = new LiveBroker(config);
   }
 
-  async getBalance({ mode = null } = {}) {
-    const executionMode = mode ?? this.config.executionMode;
-    if (executionMode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${executionMode}; only live is supported`);
-    }
-
-    const preflight = validateEnvConfig(this.config, { mode: "live" });
+  async getBalance() {
+    const preflight = validateEnvConfig(this.config);
     if (!preflight.ok) {
       const missing = preflight.checks.filter((item) => item.blocking && !item.ok).map((item) => item.key);
       throw new Error(`live_preflight_failed: ${missing.join(", ")}`);
@@ -208,8 +203,7 @@ export class AccountService {
     const balance = await this.liveBroker.getBalance();
     const address = this.config.funderAddress || this.config.simulatedWalletAddress;
     return {
-      executionMode: "live",
-      env: summarizeEnvConfig(this.config, { mode: "live" }),
+      env: summarizeEnvConfig(this.config),
       wallet: {
         walletMode: this.config.liveWalletMode ?? "real",
         funderAddress: maskAddress(address),
@@ -225,20 +219,15 @@ export class AccountService {
     };
   }
 
-  async approveCollateral({ mode = null, confirmation = null } = {}) {
-    const executionMode = mode ?? this.config.executionMode;
-    if (executionMode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${executionMode}; only live is supported`);
-    }
+  async approveCollateral({ confirmation = null } = {}) {
     if (confirmation !== "APPROVE") {
       throw new Error("account_approve_requires_confirm_approve");
     }
-    const before = await this.getBalance({ mode: executionMode });
+    const before = await this.getBalance();
     const updated = await this.liveBroker.approveCollateralAllowance();
-    const after = await this.getBalance({ mode: executionMode });
+    const after = await this.getBalance();
     return {
-      executionMode: "live",
-      env: summarizeEnvConfig(this.config, { mode: "live" }),
+      env: summarizeEnvConfig(this.config),
       wallet: before.wallet,
       before: before.collateral,
       update: {
@@ -306,19 +295,14 @@ export class AccountService {
     };
   }
 
-  async audit({ mode = null } = {}) {
-    const executionMode = mode ?? this.config.executionMode;
-    if (executionMode !== "live") {
-      throw new Error(`unsupported_execution_mode: ${executionMode}; only live is supported`);
-    }
-    const balance = await this.getBalance({ mode: executionMode });
+  async audit() {
+    const balance = await this.getBalance();
     const localState = await this.getLocalStateSummary();
     if (this.config.liveWalletMode !== "real") {
       return {
         ok: true,
-        executionMode: "live",
         scope: "simulated-local",
-        env: summarizeEnvConfig(this.config, { mode: "live" }),
+        env: summarizeEnvConfig(this.config),
         wallet: balance.wallet,
         collateral: balance.collateral,
         positions: [],
@@ -447,9 +431,8 @@ export class AccountService {
 
     return {
       ok: blockingReasons.length === 0,
-      executionMode: "live",
       scope: "real-remote",
-      env: summarizeEnvConfig(this.config, { mode: "live" }),
+      env: summarizeEnvConfig(this.config),
       wallet: balance.wallet,
       collateral: balance.collateral,
       positions: positions ?? [],

@@ -18,13 +18,13 @@ PolyPulse is live-only. The repository keeps two execution paths:
 ```bash
 npm test
 npm run agent:check -- --env-file .env --expect codex
-node ./bin/polypulse.js env check --mode live --env-file .env
-node ./bin/polypulse.js account balance --mode live --env-file .env
-node ./bin/polypulse.js account audit --mode live --env-file .env
+node ./bin/polypulse.js env check --env-file .env
+node ./bin/polypulse.js account balance --env-file .env
+node ./bin/polypulse.js account audit --env-file .env
 node ./bin/polypulse.js market topics --env-file .env --limit 20 --quick
 node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
-node ./bin/polypulse.js trade once --mode live --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
-node ./bin/polypulse.js monitor run --mode live --env-file .env --confirm LIVE --rounds 1 --limit 1 --max-amount 1
+node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
+node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --rounds 1 --limit 1 --max-amount 1
 ```
 
 For `live real`, `account audit` must return `ok=true` before any execution
@@ -32,7 +32,6 @@ command, and real orders still require explicit operator approval for real funds
 
 ## Acceptance Criteria
 
-- Non-live execution modes are rejected.
 - `--source` is rejected.
 - Market topics come from the current Polymarket Gamma API.
 - Prediction uses the configured real Codex or Claude Code provider.

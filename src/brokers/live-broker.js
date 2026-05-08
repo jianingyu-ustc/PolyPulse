@@ -7,7 +7,6 @@ function blockedResult(order, reason) {
   return assertSchema("OrderResult", {
     orderId: order.orderId,
     status: "blocked",
-    mode: "live",
     requestedUsd: order.amountUsd,
     filledUsd: 0,
     avgPrice: null,
@@ -25,7 +24,7 @@ export class LiveBroker {
   }
 
   async preflight() {
-    const env = validateEnvConfig(this.config, { mode: "live" });
+    const env = validateEnvConfig(this.config);
     if (!env.ok) {
       return {
         ...env,
@@ -122,7 +121,6 @@ export class LiveBroker {
       return assertSchema("OrderResult", {
         orderId: posted.orderId ?? order.orderId,
         status: posted.ok ? "filled" : "rejected",
-        mode: "live",
         requestedUsd: order.amountUsd,
         filledUsd: Number(posted.filledUsd ?? 0),
         avgPrice: posted.avgPrice ?? null,
@@ -133,7 +131,6 @@ export class LiveBroker {
       return assertSchema("OrderResult", {
         orderId: order.orderId,
         status: "rejected",
-        mode: "live",
         requestedUsd: order.amountUsd,
         filledUsd: 0,
         avgPrice: null,

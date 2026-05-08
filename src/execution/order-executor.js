@@ -1,10 +1,9 @@
 import { assertSchema } from "../domain/schemas.js";
 
-function blockedOrderResult({ risk, mode }) {
+function blockedOrderResult({ risk }) {
   return assertSchema("OrderResult", {
     orderId: risk.order?.orderId ?? "blocked-before-order",
     status: "blocked",
-    mode,
     requestedUsd: risk.order?.amountUsd ?? 0,
     filledUsd: 0,
     avgPrice: null,
@@ -17,15 +16,12 @@ export class OrderExecutor {
     this.liveBroker = liveBroker;
   }
 
-  async execute({ risk, market, mode = "live", confirmation = null }) {
-    if (mode !== "live") {
-      return blockedOrderResult({ risk: { order: risk?.order, reasons: [`unsupported_execution_mode:${mode}`] }, mode });
-    }
+  async execute({ risk, market, confirmation = null }) {
     if (!risk?.allowed || !risk.order) {
-      return blockedOrderResult({ risk: risk ?? { reasons: ["missing_risk_decision"] }, mode });
+      return blockedOrderResult({ risk: risk ?? { reasons: ["missing_risk_decision"] } });
     }
     if (!this.liveBroker) {
-      return blockedOrderResult({ risk: { order: risk.order, reasons: ["live_broker_unavailable"] }, mode });
+      return blockedOrderResult({ risk: { order: risk.order, reasons: ["live_broker_unavailable"] } });
     }
     return await this.liveBroker.submit(risk.order, market, confirmation);
   }

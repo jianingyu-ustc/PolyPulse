@@ -210,7 +210,6 @@ export class SimulatedMonitorLedger {
       return {
         orderId: "blocked-before-order",
         status: "blocked",
-        mode: "live",
         requestedUsd: risk.order?.amountUsd ?? 0,
         filledUsd: 0,
         avgPrice: null,
@@ -224,7 +223,6 @@ export class SimulatedMonitorLedger {
       return {
         orderId: "blocked-before-order",
         status: "blocked",
-        mode: "live",
         requestedUsd: risk.order.amountUsd,
         filledUsd: 0,
         avgPrice: null,
@@ -237,7 +235,6 @@ export class SimulatedMonitorLedger {
       return {
         orderId: "blocked-before-order",
         status: "blocked",
-        mode: "live",
         requestedUsd: risk.order.amountUsd,
         filledUsd: 0,
         avgPrice: null,
@@ -280,7 +277,6 @@ export class SimulatedMonitorLedger {
     const order = {
       orderId: `sim-log-${randomUUID()}`,
       status: "filled",
-      mode: "live",
       requestedUsd: risk.order.amountUsd,
       filledUsd,
       avgPrice: price,
