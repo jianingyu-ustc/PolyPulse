@@ -1,6 +1,5 @@
 .env
 .env.*
-!.env.example
 runtime-artifacts/
 state/
 !src/state/

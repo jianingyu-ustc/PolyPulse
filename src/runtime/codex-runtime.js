@@ -449,6 +449,12 @@ async function runCodex({
     }
   }
 
+  const hasReasoningOverride = Array.isArray(configOverrides)
+    && configOverrides.some(o => o.includes("model_reasoning_effort"));
+  if (!hasReasoningOverride && settings.reasoningEffort) {
+    args.push("-c", `model_reasoning_effort="${settings.reasoningEffort}"`);
+  }
+
   const skillRootOutsideRepo = settings.skillRootDir !== repoRoot
     && !settings.skillRootDir.startsWith(`${repoRoot}${path.sep}`);
   if (skillRootOutsideRepo) {

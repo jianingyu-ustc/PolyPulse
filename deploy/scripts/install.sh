@@ -20,7 +20,7 @@ fi
 
 [ -d "$POLYPULSE_HOME" ] || fail "$POLYPULSE_HOME does not exist; copy the repository there first"
 [ -f "$POLYPULSE_HOME/package.json" ] || fail "$POLYPULSE_HOME/package.json not found"
-[ -f "$POLYPULSE_HOME/.env.example" ] || fail ".env.example not found"
+[ -f "$POLYPULSE_HOME/src/config/env.js" ] || fail "src/config/env.js not found"
 [ -f "$POLYPULSE_HOME/deploy/systemd/$SERVICE_NAME" ] || fail "systemd service file not found"
 
 command -v node >/dev/null 2>&1 || fail "node is required"
@@ -31,9 +31,16 @@ mkdir -p "$POLYPULSE_HOME/runtime-artifacts/state" "$POLYPULSE_HOME/logs"
 chmod 700 "$POLYPULSE_HOME/runtime-artifacts" "$POLYPULSE_HOME/runtime-artifacts/state" "$POLYPULSE_HOME/logs"
 
 if [ ! -f "$ENV_FILE" ]; then
-  cp "$POLYPULSE_HOME/.env.example" "$ENV_FILE"
+  node --input-type=module -e "
+import { DEFAULTS } from './src/config/env.js';
+const lines = ['# PolyPulse .env — 所有变量必须显式配置，无默认值', '# 变量说明见 src/config/env.js 的 DEFAULTS 注释', ''];
+for (const key of Object.keys(DEFAULTS)) {
+  lines.push(key + '=');
+}
+process.stdout.write(lines.join('\n') + '\n');
+" > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  info "created $ENV_FILE from .env.example; edit it before starting live mode"
+  info "created $ENV_FILE with all required keys (${#} vars); fill in values before starting"
 else
   chmod 600 "$ENV_FILE"
   info "kept existing $ENV_FILE and enforced chmod 600"

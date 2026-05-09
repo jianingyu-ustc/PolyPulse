@@ -274,9 +274,7 @@ export class Scheduler {
     this.stateStore = stateStore;
     this.artifactWriter = artifactWriter;
     this.evidenceCrawler = new EvidenceCrawler(config);
-    const probabilityConfig = config.liveWalletMode === "simulated"
-      ? { ...config, suppressProviderRuntimeArtifacts: true }
-      : config;
+    const probabilityConfig = config;
     this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
     this.calibrationLayer = new ProbabilityCalibrationLayer(config);
     this.candidateTriageProvider = config.pulse?.aiCandidateTriage
@@ -1019,9 +1017,7 @@ export class Scheduler {
 
     const finishReal = async (status = "completed", error = null) => {
       accumulator.completedAt = nowIso();
-      const artifacts = simulated
-        ? null
-        : await this.artifactWriter.writeMonitorRun(accumulator);
+      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator);
       if (!simulated) {
         await this.stateStore.completeMonitorRun(runId, {
           status,
@@ -1505,6 +1501,7 @@ export class Scheduler {
       if (this.predictionTracker.shouldEmitReport()) {
         await this.predictionTracker.emitReport(ledger);
       }
+      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator);
       await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
       return {
         ok: true,
@@ -1515,7 +1512,7 @@ export class Scheduler {
         predictions: accumulator.predictions.length,
         orders: accumulator.orders.filter((order) => order.status === "filled").length,
         action: accumulator.orders.some((order) => order.status === "filled") ? "simulated-orders" : "no-trade",
-        artifact: ledger.logPath,
+        artifact: artifacts?.summary?.path ?? ledger.logPath,
         log: ledger.logPath,
         performance: ledger.statistics()
       };
@@ -1523,13 +1520,14 @@ export class Scheduler {
       const message = error instanceof Error ? error.message : String(error);
       accumulator.errors.push(message);
       accumulator.completedAt = nowIso();
+      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator).catch(() => null);
       await ledger.endRound({ runId, status: "failed", errors: accumulator.errors });
       return {
         ok: false,
         status: "failed",
         runId,
         error: message,
-        artifact: ledger.logPath,
+        artifact: artifacts?.summary?.path ?? ledger.logPath,
         log: ledger.logPath,
         performance: ledger.statistics()
       };

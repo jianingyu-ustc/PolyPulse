@@ -8,7 +8,7 @@ Tests must use the same live-only boundaries as production commands.
 
 ## Automated Tests
 
-- Validate `.env.example` contains required live-only fields.
+- Validate `DEFAULTS` in `src/config/env.js` contains required live-only fields.
 - Validate missing real wallet secrets fail `live real` preflight.
 - Validate `live simulated` preflight passes without a private key.
 - Validate secret values are redacted from stdout and artifacts.

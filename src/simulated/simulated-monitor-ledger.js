@@ -329,6 +329,7 @@ export class SimulatedMonitorLedger {
 
   closeSignal(position) {
     if (position.marketClosed) return "market_closed";
+    if (this.config.monitor?.holdUntilSettlement) return null;
     if (position.currentPrice >= 0.99) return "near_full_value";
     if (position.currentPrice <= 0.01) return "near_zero_value";
     const lossPct = position.costUsd > 0
@@ -381,6 +382,16 @@ export class SimulatedMonitorLedger {
   }
 
   async closeOnDecision({ position, decision }) {
+    if (this.config.monitor?.holdUntilSettlement) {
+      await this.log("hold", {
+        market: position.marketSlug,
+        outcome: position.outcome,
+        current_price: position.currentPrice,
+        unrealized_pnl_usd: position.unrealizedPnlUsd,
+        reason: "hold_until_settlement"
+      });
+      return null;
+    }
     const decisionToken = decision.tokenId;
     const shouldClose = decision.action !== "open"
       || decisionToken !== position.tokenId

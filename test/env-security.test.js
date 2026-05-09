@@ -5,10 +5,18 @@ import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadEnvConfig, parseEnvContent, validateEnvConfig } from "../src/config/env.js";
+import { DEFAULTS, loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = path.join(repoRoot, "bin", "polypulse.js");
+
+function allKeysOverride(extra = {}) {
+  const base = {};
+  for (const key of Object.keys(DEFAULTS)) {
+    base[key] = "";
+  }
+  return { ...base, ...extra };
+}
 
 async function readTreeText(root) {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
@@ -36,8 +44,7 @@ function execCli(args, options = {}) {
   });
 }
 
-test(".env.example contains the required configuration fields", async () => {
-  const env = parseEnvContent(await readFile(path.join(repoRoot, ".env.example"), "utf8"));
+test("DEFAULTS contains the required configuration fields (all null)", async () => {
   const required = [
     "POLYPULSE_LIVE_WALLET_MODE",
     "SIMULATED_WALLET_ADDRESS",
@@ -82,26 +89,31 @@ test(".env.example contains the required configuration fields", async () => {
   ];
 
   for (const key of required) {
-    assert.ok(Object.hasOwn(env, key), `${key} missing from .env.example`);
+    assert.ok(Object.hasOwn(DEFAULTS, key), `${key} missing from DEFAULTS in src/config/env.js`);
   }
-  assert.equal(env.PRIVATE_KEY, "");
+  for (const value of Object.values(DEFAULTS)) {
+    assert.equal(value, null, "All DEFAULTS values must be null (no defaults allowed)");
+  }
 });
 
 test("live preflight fails when PRIVATE_KEY is missing", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-real-"));
   const envPath = path.join(dir, "live.env");
-  await writeFile(envPath, [
-    "POLYPULSE_LIVE_WALLET_MODE=real"
-  ].join("\n"), "utf8");
+  await writeFile(envPath, "POLYPULSE_LIVE_WALLET_MODE=real\n", "utf8");
   const config = await loadEnvConfig({
     envFile: envPath,
-    overrides: {
+    skipValidation: true,
+    overrides: allKeysOverride({
       POLYPULSE_LIVE_WALLET_MODE: "real",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
       SIGNATURE_TYPE: "1",
-      POLYMARKET_HOST: "https://clob.polymarket.com"
-    }
+      CHAIN_ID: "137",
+      POLYMARKET_HOST: "https://clob.polymarket.com",
+      SIMULATED_MONITOR_LOG_PATH: "logs/test.log",
+      STATE_DIR: dir,
+      ARTIFACT_DIR: dir
+    })
   });
   const report = validateEnvConfig(config, { mode: "live" });
   assert.equal(report.ok, false);
@@ -109,17 +121,34 @@ test("live preflight fails when PRIVATE_KEY is missing", async () => {
 });
 
 test("live preflight allows simulated wallet without a private key", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-simulated-"));
   const config = await loadEnvConfig({
     envFile: "/tmp/polypulse-simulated-live.env",
-    overrides: {
+    skipValidation: true,
+    overrides: allKeysOverride({
       POLYPULSE_LIVE_WALLET_MODE: "simulated",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "",
       SIGNATURE_TYPE: "",
       CHAIN_ID: "137",
       POLYMARKET_HOST: "",
-      SIMULATED_WALLET_BALANCE_USD: "100"
-    }
+      POLYMARKET_GAMMA_HOST: "https://gamma-api.polymarket.com",
+      POLYPULSE_MARKET_SOURCE: "polymarket",
+      SIMULATED_WALLET_BALANCE_USD: "100",
+      SIMULATED_MONITOR_LOG_PATH: "logs/test.log",
+      STATE_DIR: dir,
+      ARTIFACT_DIR: dir,
+      AI_PROVIDER: "codex",
+      AGENT_RUNTIME_PROVIDER: "codex",
+      MAX_TRADE_PCT: "0.05",
+      MAX_TOTAL_EXPOSURE_PCT: "0.5",
+      MAX_EVENT_EXPOSURE_PCT: "0.2",
+      MAX_POSITION_LOSS_PCT: "0.5",
+      DRAWDOWN_HALT_PCT: "0.2",
+      LIQUIDITY_TRADE_CAP_PCT: "0.01",
+      PULSE_STRATEGY: "pulse-direct",
+      PULSE_BATCH_CAP_PCT: "0.2"
+    })
   });
   const report = validateEnvConfig(config, { mode: "live" });
   assert.equal(report.ok, true);
@@ -133,16 +162,30 @@ test("private key value is excluded from stdout, artifacts, and memory", async (
   const secret = ["stage10", "private", "redaction", "value"].join("-");
   const envPath = path.join(dir, "live.env");
   const keyName = "PRIVATE" + "_KEY";
-  await writeFile(envPath, [
-    `${keyName}=${secret}`,
-    "FUNDER_ADDRESS=0x1111111111111111111111111111111111111111",
-    "SIGNATURE_TYPE=1",
-    "CHAIN_ID=137",
-    "POLYMARKET_HOST=https://clob.polymarket.com",
-    "POLYPULSE_MARKET_SOURCE=polymarket",
-    `STATE_DIR=${stateDir}`,
-    `ARTIFACT_DIR=${artifactDir}`
-  ].join("\n"), "utf8");
+
+  const lines = [];
+  for (const key of Object.keys(DEFAULTS)) {
+    if (key === "PRIVATE_KEY") {
+      lines.push(`${keyName}=${secret}`);
+    } else if (key === "STATE_DIR") {
+      lines.push(`STATE_DIR=${stateDir}`);
+    } else if (key === "ARTIFACT_DIR") {
+      lines.push(`ARTIFACT_DIR=${artifactDir}`);
+    } else if (key === "FUNDER_ADDRESS") {
+      lines.push("FUNDER_ADDRESS=0x1111111111111111111111111111111111111111");
+    } else if (key === "SIGNATURE_TYPE") {
+      lines.push("SIGNATURE_TYPE=1");
+    } else if (key === "CHAIN_ID") {
+      lines.push("CHAIN_ID=137");
+    } else if (key === "POLYMARKET_HOST") {
+      lines.push("POLYMARKET_HOST=https://clob.polymarket.com");
+    } else if (key === "POLYPULSE_MARKET_SOURCE") {
+      lines.push("POLYPULSE_MARKET_SOURCE=polymarket");
+    } else {
+      lines.push(`${key}=`);
+    }
+  }
+  await writeFile(envPath, lines.join("\n") + "\n", "utf8");
 
   const result = await execCli(["env", "check", "--env-file", envPath]);
   const artifacts = await readTreeText(artifactDir);

@@ -17,11 +17,11 @@ Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEs
 
 PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；真实 monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 的执行路径是例外：`trade once` 和 `monitor run` 都使用进程内 paper-trading 账本，程序退出后只保留 `SIMULATED_MONITOR_LOG_PATH` 指向的人类可读日志。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；monitor artifact 中会包含 `candidate-triage.json`。`live simulated` 和 `live real` 生成完全相同的结构化 artifact（per-round 目录和 provider runtime 日志）；`live simulated` 额外使用进程内 paper-trading 账本，追加写入 `SIMULATED_MONITOR_LOG_PATH` 人类可读日志记录仓位、PnL 和胜率。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
-部署相关文件：`.env.example` 是服务器 `.env` 模板，`deploy/systemd/polypulse-monitor.service` 是 systemd 常驻 monitor 服务，`deploy/scripts/*.sh` 覆盖安装、启动、停止、状态和健康检查。
+部署相关文件：`src/config/env.js` 的 `DEFAULTS` 对象是所有环境变量的唯一定义（含注释说明），`deploy/systemd/polypulse-monitor.service` 是 systemd 常驻 monitor 服务，`deploy/scripts/*.sh` 覆盖安装、启动、停止、状态和健康检查。
 
 ### 与 Predict-Raven 的关系和当前差距
 
@@ -46,7 +46,7 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - 候选排序增加了 Downside Risk Ranking（DownsideRiskRanker）：在原有 monthly return / net edge / Kelly 排序基础上，计算每个机会的下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本比例、边际递减），输出 risk-adjusted score 用于最终排序。这对齐了 Predict-Raven 的 downside risk ranking 和 cross-round capital allocation。
 - 预测效果评估追踪器（PredictionPerformanceTracker）记录每次预测和平仓结果，每 N 轮（默认 5 轮）在 simulated log 中输出完整评估报表：包括 hit rate、Brier score、概率校准偏差（predicted vs actual by bucket）、按 confidence/category 分组的胜率和收益、edge 预测精度（预测 edge vs 实际 return）。这对齐了 Predict-Raven 的预测效果评估和持续改进反馈环。
 - provider prompt 要求区分盘口价格和独立证据，并在 `reasoning_summary` / `uncertainty_factors` 中说明可研究性、外部证据充分性和相对盘口的信息优势；不可研究或信息优势不足时必须降为 `low` confidence。
-- 真实 monitor artifact 会保留 `candidate-triage.json`；live simulated monitor 会把 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy` 追加到人类可读日志。
+- `live simulated` 和 `live real` monitor artifact 均保留 `candidate-triage.json` 和完整 per-round 结构化目录；`live simulated` 额外把 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy` 追加到人类可读日志。
 - `live real` 仍必须通过 env preflight、余额/allowance 检查、账户审计、`confirm LIVE` 和 `RiskEngine`。
 - V2 动态费率查询：`DynamicFeeService` 通过 CLOB API `GET /markets/{conditionId}` 获取市场实时 `{ feeRate, exponent }` 参数（1h 内存 Map 缓存），在决策引擎计算 fee/edge/Kelly/monthly return 之前预取并传入 `buildPulseTradePlan`，替代纯静态费率表；失败时自动回退到 `lookupCategoryFeeParams` 静态查找。这对齐了 Predict-Raven 的 `fetchDynamicFeeParams`（V2 SDK `getClobMarketInfo` + 1h cache + null fallback）。
 - 费率验证：`DynamicFeeService.verifyAndLog` 在 `LiveBroker.submit` 下单前对比静态 fee params 与 CLOB API 返回的动态 fee params（feeRate 和 exponent），偏差超 `PULSE_FEE_VERIFY_THRESHOLD` 时记录到 `{artifactDir}/fee-discrepancies.jsonl`；验证失败不阻断下单。这对齐了 Predict-Raven 的 `verifyFeeEstimate` + `logFeeDiscrepancyIfNeeded`。
@@ -58,6 +58,14 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 
 - 缺少跨轮资金占用的动态优化（当前是单轮内按 risk-adjusted score 排序后顺序分配）。
 - 缺少历史回放机制：用真实结算市场和已产生 artifact 比较不同参数组合对收益的影响。
+- 平仓逻辑差异（三层退出策略）：
+
+| 退出层 | Predict-Raven | PolyPulse 当前 |
+| --- | --- | --- |
+| **Position Review（每轮）** | 基于 edge 做梯度退出：强正 edge(>0.05) hold、弱正 edge(0~0.05) hold+人工复核标记、微负 edge(-0.05~0) 减仓 50%、显著负 edge(<-0.05) 全部平仓、对立信号直接平仓 | 简化为二元判断：edge > 0 hold，edge ≤ 0 或方向反转直接全部平仓（`edge_reversal_or_no_trade`）；无减仓 50%、无人工复核标记 |
+| **Stop-Loss（独立守护）** | 独立进程每 30 秒轮询，unrealized loss > 30% VWAP 成本时市价卖出 | 集成在每轮 round 内检查，`RISK_MAX_POSITION_LOSS_PCT`（默认 50%）触发平仓；非独立进程，依赖 round 间隔 |
+| **Auto-Redeem（结算）** | 每轮开始扫描已结算市场，调用 Polygon ConditionalTokens 合约自动赎回 USDC | 仅检测 `closed=true` 后以 mark-to-market 价格平仓记入内存账本；无合约交互 |
+| **额外退出信号** | 无 | `near_full_value`（价格 ≥ 0.99）和 `near_zero_value`（价格 ≤ 0.01）提前退出，不等结算 |
 
 **待办项**（直接影响预测成功率、概率校准和净收益率；所有项保持 live-only，读取当前 Polymarket 真实市场）：
 
@@ -80,6 +88,61 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~增加费率验证~~：已实现 `DynamicFeeService.verifyAndLog`，下单前通过 CLOB API 获取动态费率参数，对比静态估算的 feeRate/exponent，偏差超阈值时记录 `fee-discrepancies.jsonl` 并用动态值覆盖。对齐 Predict-Raven 的 `verifyFeeEstimate`。
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
+
+### 一次性验收 vs 持续 Monitor
+
+一次性验收（`scripts/acceptance.js`）和持续 monitor（`monitor run --loop`）共用同一套内部逻辑（scan → prescreen → triage → evidence → prediction → risk → execution），但状态模型和输出完全不同：
+
+| 维度 | 一次性验收 | 持续 Monitor |
+| --- | --- | --- |
+| 轮次 | 1 轮，运行后退出 | 无限循环或 N 轮，间隔 `MONITOR_INTERVAL_SECONDS` |
+| 仓位持久性 | 不持久，round 结束即丢 | `SimulatedMonitorLedger` 跨轮持久：开仓、持有、平仓都在同一进程内存中累积 |
+| 仓位复核 | 仅对已有模拟仓位做一次 mark-to-market | 每轮对所有持仓做 mark-to-market + 重新预测，决定 hold/reduce/close |
+| 胜率计算 | 无（单轮无平仓结算） | 有：`wins / (wins + losses)`，每次平仓时更新 |
+| 输出 | `runtime-artifacts/acceptance-runs/<ts>/step1-7.stdout.log` + `summary.json` | 追加写入 `SIMULATED_MONITOR_LOG_PATH` + per-round `runtime-artifacts/monitor/<date>/<run-slug>/` |
+| runtime-artifacts | 有：per-round 目录 + provider runtime 日志 | 有：与 `live real` 完全相同的结构化 artifact |
+
+持续 monitor 不是"每 N 分钟执行一遍验收"，而是一个**有状态的交易循环**。关键区别：验收是无状态的 pipeline 健康检查；monitor 是有仓位、有资金、有 PnL 积累的连续交易系统。
+
+### 仓位生命周期和平仓逻辑
+
+PolyPulse 的平仓逻辑参考 Predict-Raven 的三层退出策略，但做了简化实现：
+
+**Predict-Raven 的退出策略**（三层）：
+1. **Position Review Module**（每轮 pulse:live cycle）：基于刷新后的 edge 做梯度退出 —— 强正 edge 持有、弱正 edge 持有但标记人工复核、微负 edge 减仓 50%、显著负 edge 全部平仓、对立信号直接平仓。
+2. **Stop-Loss Monitor**（独立守护进程，每 30 秒）：纯价格驱动，unrealized loss > 30% VWAP 入场成本时自动市价卖出，不涉及 AI 判断。
+3. **Auto-Redeem**（每轮开始时）：扫描已结算市场，调用 Polygon ConditionalTokens 合约自动赎回 USDC。
+
+**PolyPulse 当前实现**（简化版）：
+
+| 平仓触发 | 条件 | 对应 Predict-Raven |
+| --- | --- | --- |
+| `market_closed` | 市场 `closed=true`（已结算） | Auto-Redeem |
+| `near_full_value` | `currentPrice >= 0.99` | PolyPulse 独有 |
+| `near_zero_value` | `currentPrice <= 0.01` | PolyPulse 独有 |
+| `stop_loss` | 亏损 > `RISK_MAX_POSITION_LOSS_PCT`（默认 50%） | Stop-Loss Monitor |
+| `edge_reversal_or_no_trade` | 重新预测后 edge ≤ 0 或方向反转 | Position Review Module |
+
+**胜率计算**（`SimulatedMonitorLedger.statistics()`）：
+```
+realizedPnlUsd = currentValueUsd - costUsd
+wins = closedTrades.filter(t => t.realizedPnlUsd > 0).length
+losses = closedTrades.filter(t => t.realizedPnlUsd < 0).length
+winRate = wins / (wins + losses)
+```
+
+胜率在 log 中的体现：每次平仓时 `close.filled` 事件带 `realized_pnl_usd` 和累计 `win_rate`；每轮 `round.end` 汇报 `wins`、`losses`、`win_rate`；每 N 轮 `performance.report` 输出完整评估报表。
+
+**是否可以不平仓（buy and hold until settlement）**：可以。设置环境变量 `POSITION_HOLD_UNTIL_SETTLEMENT=true` 即可关闭所有主动平仓逻辑（stop-loss、near_full_value、near_zero_value、edge_reversal），仓位仅在市场结算（`market_closed`）时退出。该模式下 `closeOnDecision` 也会被跳过，所有已开仓位一律持有到期。注意：Predict-Raven 早期版本曾使用过"全部 hold 不卖"的策略，后来被明确替换为主动仓位复核，原因是不平仓会导致资金被低质量仓位长期锁定、无法及时止损或释放资金给更好的机会。
+
+### 持续 Monitor 的 runtime-artifacts
+
+`live simulated` 和 `live real` 模式下，持续 monitor 生成**完全相同的** per-round 结构化 artifact：
+- `runtime-artifacts/monitor/<date>/<run-slug>/` 目录，含 markets.json, candidates.json, candidate-triage.json, decisions.json, risk.json, orders.json, summary.md
+- `runtime-artifacts/codex-runtime/<ts>/runtime-log.md` — 每次 AI 调用的完整 prompt/output 归档
+- 每个候选的 `predictions/<market-slug>/evidence.json, estimate.json, decision.json`
+
+两种模式的唯一区别是 `live simulated` 额外追加写入 `SIMULATED_MONITOR_LOG_PATH` 人类可读日志（含仓位、PnL、胜率等内存账本状态）。
 
 ### Simulated Monitor Log 格式
 
@@ -393,7 +456,7 @@ Codex 提示词版本：
 
 默认 `.env` 使用 Predict-Raven `pulse-direct` 兼容口径。这里的”兼容”只表示职责分离和收益计算口径相近，不表示 PolyPulse 已实现完整 Predict-Raven 方法。
 
-所有 `PULSE_*` 和 `EVIDENCE_*` 环境变量的完整枚举和逐项说明见 `.env.example`。
+所有环境变量的完整枚举和逐项说明见 `src/config/env.js` 的 `DEFAULTS` 对象。**所有变量必须在 `.env` 中显式定义，无默认值**；缺失任何 key 启动时报错退出。
 
 行为概要：
 
@@ -596,7 +659,7 @@ node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop
 - 风控允许时在内存 paper-trading 账本开仓；已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
 - 每一步都会追加到 `SIMULATED_MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
 - `trade once` 和 `monitor run` 在 live simulated 下共用同一套初始资金、日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留模拟仓位。
-- 程序退出后不保留模拟仓位、现金、交易状态或 JSON execution artifact；只保留日志。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+- 程序退出后不保留模拟仓位、现金或交易状态（内存 paper-trading 账本随进程消亡）；持久保留的有：`SIMULATED_MONITOR_LOG_PATH` 人类可读日志和 `runtime-artifacts/` 下的 per-round 结构化 artifact（与 `live real` 格式完全相同）。需要停止 simulated monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
 
 Codex 提示词版本：
 
