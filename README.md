@@ -394,6 +394,43 @@ codex exec \
 
 ## 使用方法
 
+### Clone 与解密
+
+本仓库使用 [git-crypt](https://github.com/AGWA/git-crypt) 加密 `.env` 文件。Clone 后需要 unlock 才能读取明文配置。
+
+**安装 git-crypt：**
+
+```bash
+# macOS
+brew install git-crypt
+
+# Ubuntu/Debian
+apt-get install git-crypt
+```
+
+**首次 clone：**
+
+```bash
+git clone git@github.com:jianingyu-ustc/PolyPulse.git
+cd PolyPulse
+
+# 方式 A：使用对称密钥文件
+git-crypt unlock /path/to/polypulse-git-crypt-key
+
+# 方式 B：使用 GPG（需要已被 add-gpg-user 添加）
+git-crypt unlock
+```
+
+**验证解密成功：**
+
+```bash
+head -1 .env
+# 应看到明文（如 POLYPULSE_LIVE_WALLET_MODE=simulated）
+# 如果看到乱码，说明未成功 unlock
+```
+
+**注意：** git-crypt 密钥文件等同于 `.env` 明文访问权限，请勿提交到任何仓库或公开分享。
+
 只保留必要配置和命令；所有命令都使用 `.env`，并读取当前 Polymarket 真实市场。每个关键流程保留 `Codex 提示词版本`，可直接交给 Codex 代跑；`live real` 必须先确认真实资金风险。
 
 ### 必需运行模式
