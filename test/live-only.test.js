@@ -30,7 +30,6 @@ function liveEnvLines({ stateDir, artifactDir, walletMode = "simulated" }) {
     "CHAIN_ID=137",
     "POLYMARKET_HOST=https://clob.polymarket.com",
     "AI_PROVIDER=codex",
-    "AGENT_RUNTIME_PROVIDER=codex",
     "MARKET_SCAN_LIMIT=50",
     "MARKET_PAGE_SIZE=50",
     "MARKET_MAX_PAGES=2",

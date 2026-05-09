@@ -89,6 +89,15 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
 
+### Monitor 候选去重（已持仓市场处理）
+
+`buildCandidates()` 对每个扫描到的市场执行两项去重检查，确保不会对同一话题重复开仓：
+
+1. **`tradedByMonitor`** — 检查 `monitorState.tradedMarkets`，即本轮 monitor 生命周期内已经交易过的市场。命中时标记 `already_traded_market_or_event`，跳过。
+2. **`heldInPortfolio`** — 检查当前组合中是否已持有同 `marketId`、`marketSlug`、`eventId` 或 `eventSlug` 的仓位。命中时标记 `existing_position_market_or_event`，跳过。
+
+匹配粒度是 **event 级别**：同一事件下的不同子市场（outcome token）也会被跳过（通过 `eventId`/`eventSlug` 匹配）。被标记的候选 `selected: false`，不进入后续 prescreen、triage、prediction 和下单流程。
+
 ### 一次性验收 vs 持续 Monitor
 
 一次性验收（`scripts/acceptance.js`）和持续 monitor（`monitor run --loop`）共用同一套内部逻辑（scan → prescreen → triage → evidence → prediction → risk → execution），但状态模型和输出完全不同：
@@ -144,7 +153,7 @@ winRate = wins / (wins + losses)
 
 两种模式的唯一区别是 `live simulated` 额外追加写入 `SIMULATED_MONITOR_LOG_PATH` 人类可读日志（含仓位、PnL、胜率等内存账本状态）。
 
-### Simulated Monitor Log 格式
+### Monitor Log 格式（simulated / real 通用）
 
 `SIMULATED_MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 live simulated `trade once` 或 `monitor run` 都会先写入 session header：
 
@@ -478,7 +487,6 @@ Codex 提示词版本：
 
 ```bash
 AI_PROVIDER=codex
-AGENT_RUNTIME_PROVIDER=codex
 CODEX_SKILL_ROOT_DIR=skills
 CODEX_SKILL_LOCALE=zh
 CODEX_SKILLS=polypulse-market-agent
@@ -488,7 +496,6 @@ CODEX_SKILLS=polypulse-market-agent
 
 ```bash
 AI_PROVIDER=claude-code
-AGENT_RUNTIME_PROVIDER=claude-code
 CLAUDE_CODE_SKILL_ROOT_DIR=skills
 CLAUDE_CODE_SKILL_LOCALE=zh
 CLAUDE_CODE_SKILLS=polypulse-market-agent

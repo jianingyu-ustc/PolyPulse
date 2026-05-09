@@ -54,7 +54,7 @@ function checkClaudeCli() {
 async function main(args = process.argv.slice(2)) {
   const envFile = option(args, "--env-file");
   const expectedProvider = option(args, "--expect");
-  const config = await loadEnvConfig({ envFile });
+  const config = await loadEnvConfig({ envFile, skipValidation: true });
   const effectiveProvider = resolveEffectiveProvider(config);
   const checks = [];
 
@@ -75,21 +75,9 @@ async function main(args = process.argv.slice(2)) {
     );
     if (expectedProvider === "codex") {
       addCheck(checks, "AI_PROVIDER", config.ai.provider === "codex", `AI_PROVIDER=${config.ai.provider}`);
-      addCheck(
-        checks,
-        "AGENT_RUNTIME_PROVIDER",
-        config.agentRuntimeProvider === "codex",
-        `AGENT_RUNTIME_PROVIDER=${config.agentRuntimeProvider}`
-      );
     }
     if (expectedProvider === "claude-code") {
       addCheck(checks, "AI_PROVIDER", config.ai.provider === "claude-code", `AI_PROVIDER=${config.ai.provider}`);
-      addCheck(
-        checks,
-        "AGENT_RUNTIME_PROVIDER",
-        config.agentRuntimeProvider === "claude-code",
-        `AGENT_RUNTIME_PROVIDER=${config.agentRuntimeProvider}`
-      );
     }
   }
 
@@ -192,7 +180,6 @@ async function main(args = process.argv.slice(2)) {
     ok,
     envFilePath: config.envFilePath,
     aiProvider: config.ai.provider,
-    agentRuntimeProvider: config.agentRuntimeProvider,
     effectiveProvider,
     expectedProvider,
     codex,

@@ -10,7 +10,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const scriptPath = path.join(repoRoot, "scripts", "check-agent-config.js");
 const agentEnvKeys = [
   "AI_PROVIDER",
-  "AGENT_RUNTIME_PROVIDER",
   "CODEX_MODEL",
   "CODEX_SKILL_ROOT_DIR",
   "CODEX_SKILLS",
@@ -38,7 +37,6 @@ test("agent config check passes for the real codex CLI path", async () => {
   const envPath = path.join(dir, "codex.env");
   await writeFile(envPath, [
     "AI_PROVIDER=codex",
-    "AGENT_RUNTIME_PROVIDER=codex",
     "PROVIDER_TIMEOUT_SECONDS=60",
     "CODEX_SKILL_ROOT_DIR=skills",
     "CODEX_SKILLS=polypulse-market-agent"
@@ -58,7 +56,8 @@ test("agent config check fails when codex is expected but claude-code is selecte
   const envPath = path.join(dir, "claude.env");
   await writeFile(envPath, [
     "AI_PROVIDER=claude-code",
-    "AGENT_RUNTIME_PROVIDER=claude-code"
+    "CLAUDE_CODE_SKILL_ROOT_DIR=skills",
+    "CLAUDE_CODE_SKILLS=polypulse-market-agent"
   ].join("\n"), "utf8");
 
   const result = await runAgentCheck(["--env-file", envPath, "--expect", "codex"]);

@@ -28,10 +28,6 @@ function resolveSkillDescriptor(config, skill) {
 }
 
 export function resolveEffectiveProvider(config) {
-  const runtimeProvider = String(config.agentRuntimeProvider ?? "none").trim();
-  if (runtimeProvider && runtimeProvider !== "none") {
-    return runtimeProvider;
-  }
   return String(config.ai?.provider ?? "codex").trim() || "codex";
 }
 

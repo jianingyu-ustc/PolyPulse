@@ -884,7 +884,7 @@ export class Scheduler {
         const result = await this.evaluateAndMaybeSimulatedOrder({
           prediction,
           confirmation,
-          maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+          maxAmountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
           runId,
           orderCount: 0,
           filledUsdThisRun: 0,
@@ -968,7 +968,7 @@ export class Scheduler {
 
     const runId = monitorRunId();
     const startedAt = nowIso();
-    const amountUsd = maxAmountUsd ?? this.config.risk.minTradeUsd;
+    const amountUsd = maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd);
     const ledger = this.simulatedLedger;
     const simulated = Boolean(ledger);
     const accumulator = {
@@ -1423,7 +1423,7 @@ export class Scheduler {
         const baseRanked = rankPredictionsForExecution({
           predictions: validPredictions,
           portfolio: ledger.portfolio(),
-          amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+          amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
           decisionEngine: this.decisionEngine,
           dynamicFeeParamsMap: dynamicFeeParamsMapSim
         });
@@ -1465,7 +1465,7 @@ export class Scheduler {
           const result = await this.evaluateAndMaybeSimulatedOrder({
             prediction,
             confirmation,
-            maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+            maxAmountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
             runId,
             orderCount,
             filledUsdThisRun
@@ -1617,7 +1617,7 @@ export class Scheduler {
         const rankedPredictions = rankPredictionsForExecution({
           predictions: accumulator.predictions,
           portfolio: await this.stateStore.getPortfolio(),
-          amountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+          amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
           decisionEngine: this.decisionEngine,
           dynamicFeeParamsMap: dynamicFeeParamsMapLive
         });
@@ -1628,7 +1628,7 @@ export class Scheduler {
           const result = await this.evaluateAndMaybeOrder({
             prediction,
             confirmation,
-            maxAmountUsd: maxAmountUsd ?? this.config.risk.minTradeUsd,
+            maxAmountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
             runId,
             orderCount,
             filledUsdThisRun,

@@ -232,6 +232,8 @@ export const DEFAULTS = {
   MONITOR_BACKOFF_MS: null,
   // 关闭所有主动平仓逻辑，仓位仅在市场结算时退出。
   POSITION_HOLD_UNTIL_SETTLEMENT: null,
+  // 单笔交易最大开仓金额（美元）。留空或 0 = 使用 MIN_TRADE_USD。
+  MONITOR_MAX_AMOUNT_USD: null,
   // 逗号分隔的市场 slug。设置后只关注这些市场。
   MONITOR_WATCHLIST: null,
   // 逗号分隔的市场 slug，始终排除。
@@ -250,8 +252,6 @@ export const DEFAULTS = {
   AI_MODEL: null,
 
   // ─── Predict-Raven 兼容 Codex Provider 设置 ────────────────────────────────
-  // 预测使用的 provider 运行时。"codex" 或 "claude-code"。
-  AGENT_RUNTIME_PROVIDER: null,
   // Provider 子进程超时。0 = 无独立超时（使用 monitor 超时）。
   PROVIDER_TIMEOUT_SECONDS: null,
   // 覆盖 Codex CLI 模型。留空 = 使用 Codex CLI 默认。
@@ -337,19 +337,6 @@ function normalizeMarketSource(value) {
   return String(value ?? "polymarket").trim().toLowerCase() || "polymarket";
 }
 
-function normalizeRuntimeProvider(value) {
-  const trimmed = String(value ?? "").trim();
-  return trimmed || "none";
-}
-
-function effectiveAiProvider(config) {
-  const runtimeProvider = normalizeRuntimeProvider(config.agentRuntimeProvider);
-  if (runtimeProvider && runtimeProvider !== "none") {
-    return runtimeProvider;
-  }
-  return String(config.ai?.provider ?? "codex").trim() || "codex";
-}
-
 function trimTrailingSlash(value) {
   return String(value ?? "").replace(/\/+$/, "");
 }
@@ -397,7 +384,7 @@ export async function loadEnvConfig(options = {}) {
     liveWalletMode: normalizeWalletMode(values.POLYPULSE_LIVE_WALLET_MODE),
     simulatedWalletAddress: values.SIMULATED_WALLET_ADDRESS ?? "",
     simulatedWalletBalanceUsd: readNumber(values, "SIMULATED_WALLET_BALANCE_USD", 100),
-    simulatedMonitorLogPath: path.resolve(values.SIMULATED_MONITOR_LOG_PATH),
+    simulatedMonitorLogPath: path.resolve(values.SIMULATED_MONITOR_LOG_PATH || "logs/monitor.log"),
     privateKey: values.PRIVATE_KEY ?? "",
     funderAddress: values.FUNDER_ADDRESS ?? "",
     signatureType: values.SIGNATURE_TYPE ?? "",
@@ -405,8 +392,8 @@ export async function loadEnvConfig(options = {}) {
     polymarketHost: values.POLYMARKET_HOST ?? "",
     marketSource: normalizeMarketSource(values.POLYPULSE_MARKET_SOURCE),
     polymarketGammaHost: trimTrailingSlash(values.POLYMARKET_GAMMA_HOST),
-    stateDir: path.resolve(values.STATE_DIR),
-    artifactDir: path.resolve(values.ARTIFACT_DIR),
+    stateDir: path.resolve(values.STATE_DIR || "runtime-artifacts/state"),
+    artifactDir: path.resolve(values.ARTIFACT_DIR || "runtime-artifacts"),
     risk: {
       maxTradePct: readNumber(values, "MAX_TRADE_PCT", 0.05),
       maxTotalExposurePct: readNumber(values, "MAX_TOTAL_EXPOSURE_PCT", 0.5),
@@ -461,6 +448,7 @@ export async function loadEnvConfig(options = {}) {
       concurrency: Math.max(1, Math.floor(readNumber(values, "MONITOR_CONCURRENCY", 3))),
       runTimeoutMs: Math.max(1000, Math.floor(readNumber(values, "MONITOR_RUN_TIMEOUT_MS", 120000))),
       backoffMs: Math.max(0, Math.floor(readNumber(values, "MONITOR_BACKOFF_MS", 1000))),
+      maxAmountUsd: readNumber(values, "MONITOR_MAX_AMOUNT_USD", 0),
       holdUntilSettlement: String(values.POSITION_HOLD_UNTIL_SETTLEMENT ?? "false").toLowerCase() === "true",
       watchlist: parseList(values.MONITOR_WATCHLIST),
       blocklist: parseList(values.MONITOR_BLOCKLIST)
@@ -504,12 +492,11 @@ export async function loadEnvConfig(options = {}) {
       provider: values.AI_PROVIDER ?? "codex",
       model: values.AI_MODEL ?? ""
     },
-    agentRuntimeProvider: normalizeRuntimeProvider(values.AGENT_RUNTIME_PROVIDER),
     providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 0))),
     providers: {
       codex: {
         model: values.CODEX_MODEL || values.AI_MODEL || "",
-        skillRootDir: path.resolve(repoRoot, values.CODEX_SKILL_ROOT_DIR),
+        skillRootDir: path.resolve(repoRoot, values.CODEX_SKILL_ROOT_DIR || "skills"),
         skillLocale: ["en", "zh"].includes(values.CODEX_SKILL_LOCALE) ? values.CODEX_SKILL_LOCALE : "zh",
         skills: values.CODEX_SKILLS,
         reasoningEffort: ["low", "medium", "high", "xhigh"].includes(String(values.CODEX_REASONING_EFFORT).toLowerCase())
@@ -518,7 +505,7 @@ export async function loadEnvConfig(options = {}) {
       },
       claudeCode: {
         model: values.CLAUDE_CODE_MODEL || values.AI_MODEL || "",
-        skillRootDir: path.resolve(repoRoot, values.CLAUDE_CODE_SKILL_ROOT_DIR),
+        skillRootDir: path.resolve(repoRoot, values.CLAUDE_CODE_SKILL_ROOT_DIR || "skills"),
         skillLocale: ["en", "zh"].includes(values.CLAUDE_CODE_SKILL_LOCALE) ? values.CLAUDE_CODE_SKILL_LOCALE : "zh",
         skills: values.CLAUDE_CODE_SKILLS,
         permissionMode: values.CLAUDE_CODE_PERMISSION_MODE,
@@ -543,11 +530,10 @@ export function validateEnvConfig(config) {
     reportCandidates: config.pulse?.reportCandidates ?? 1,
     batchCapPct: config.pulse?.batchCapPct ?? 0.2
   };
-  const provider = effectiveAiProvider(config);
+  const provider = String(config.ai?.provider ?? "").trim();
   const checks = [
     check("market-source", config.marketSource === "polymarket", `marketSource=${config.marketSource}; only polymarket is supported.`),
-    check("AI_PROVIDER", ["codex", "claude-code"].includes(String(config.ai?.provider ?? "")), `AI_PROVIDER=${config.ai?.provider}; only codex or claude-code is supported.`),
-    check("AGENT_RUNTIME_PROVIDER", ["codex", "claude-code"].includes(provider), `effectiveProvider=${provider}; only codex or claude-code is supported.`),
+    check("AI_PROVIDER", ["codex", "claude-code"].includes(provider), `AI_PROVIDER=${config.ai?.provider}; only codex or claude-code is supported.`),
     check("polymarket-gamma-host", Boolean(config.polymarketGammaHost), `POLYMARKET_GAMMA_HOST=${config.polymarketGammaHost}`),
     check("state-dir", Boolean(config.stateDir), `stateDir=${config.stateDir}`),
     check("artifact-dir", Boolean(config.artifactDir), `artifactDir=${config.artifactDir}`),
