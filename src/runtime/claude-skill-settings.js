@@ -86,7 +86,7 @@ export function resolveClaudeSkillSettings(config) {
   const skillLocale = SKILL_LOCALES.has(providerConfig.skillLocale) ? providerConfig.skillLocale : "zh";
   const permissionMode = VALID_PERMISSION_MODES.has(providerConfig.permissionMode)
     ? providerConfig.permissionMode
-    : "bypassPermissions";
+    : "acceptEdits";
   const allowedTools = parseToolList(providerConfig.allowedTools ?? "Read,Glob,Grep");
   const extraArgs = parseExtraArgs(providerConfig.extraArgs);
   const maxBudgetUsd = providerConfig.maxBudgetUsd ? Number(providerConfig.maxBudgetUsd) : null;
