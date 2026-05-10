@@ -88,7 +88,7 @@ function buildClaudeArgs({ settings, repoRoot, schemaPath }) {
     args.push("--add-dir", settings.skillRootDir);
   }
 
-  if (schemaPath && existsSync(schemaPath)) {
+  if (schemaPath && existsSync(schemaPath) && !process.env.ANTHROPIC_BASE_URL) {
     args.push("--json-schema", schemaPath);
   }
 

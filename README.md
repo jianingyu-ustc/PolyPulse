@@ -561,7 +561,7 @@ Codex 提示词版本：
 ```bash
 # 使用 live monitor 同一套逻辑，顺序输出 Step 1-7 验收日志
 # 参数：
-#   --env-file <path>            读取指定 env 文件；默认 .env，验收会强制 POLYPULSE_EXECUTION_MODE=live
+#   --env-file <path>            读取指定 env 文件，默认 .env
 #   --market <market-slug|id>    手动指定单个市场；省略时按 monitor scan 自动生成候选池
 #   --max-amount <usd>           单笔交易金额上限；默认 1，最终 approvedUsd 会小于等于该值
 #   --allow-live-execution       仅 live real 使用：传入 LIVE confirmation，可能提交真实订单
