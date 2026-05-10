@@ -9,12 +9,13 @@ Last updated: 2026-05-06
 - `POLYMARKET_GAMMA_HOST` must point to a real Gamma API host.
 - Chain id must be `137`.
 - `--confirm LIVE` is required for executable orders.
-- `live real` requires `PRIVATE_KEY`, `FUNDER_ADDRESS`, `SIGNATURE_TYPE`, and
+- `live` mode requires `PRIVATE_KEY`, `FUNDER_ADDRESS`, `SIGNATURE_TYPE`, and
   `POLYMARKET_HOST`.
-- `live real` must pass `account audit` before real execution. Audit verifies
+- `live` mode must pass `account audit` before real execution. Audit verifies
   CLOB collateral, allowance, remote positions, remote trades, local
   cancellations/rejections, win rate, net return, and drawdown.
-- `live simulated` requires non-negative `SIMULATED_WALLET_BALANCE_USD`.
+- `paper` mode connects to the real wallet for balance reads and uses the real
+  balance as the starting point for its internal ledger.
 
 ## Market Gates
 
@@ -26,8 +27,8 @@ Last updated: 2026-05-06
 
 - Single trade, total exposure, event exposure, drawdown, position count, and
   minimum notional limits are enforced in `RiskEngine`.
-- `live real` buy orders require sufficient CLOB collateral and allowance.
-- `live simulated` buy orders require sufficient simulated live balance.
+- `live` mode buy orders require sufficient CLOB collateral and allowance.
+- `paper` mode buy orders require sufficient balance in the internal ledger.
 
 ## AI Boundary
 

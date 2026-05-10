@@ -5,7 +5,10 @@ Last updated: 2026-05-06
 Current repository policy:
 
 - Execution mode is live-only.
-- Supported wallet modes are `live simulated` and `live real`.
+- Supported execution modes are `paper` and `live` (`POLYPULSE_EXECUTION_MODE`).
+- `paper` mode connects to real wallet, reads real balance, runs full pipeline,
+  but does NOT submit real orders; positions/PnL tracked in internal ledger.
+- `live` mode connects to real wallet and submits real orders after risk checks.
 - Market source is always current Polymarket Gamma.
 - CLI rejects `--source`.
 - Tests that need market data read the real Gamma API.
@@ -21,6 +24,6 @@ Important files:
 - `src/core/probability-estimator.js`
 - `src/brokers/live-broker.js`
 - `src/brokers/live-polymarket-client.js`
-- `src/brokers/simulated-live-wallet-client.js`
+- `src/brokers/paper-order-client.js`
 - `src/scheduler/scheduler.js`
 - `test/live-only.test.js`

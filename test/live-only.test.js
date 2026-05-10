@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
+import { DEFAULTS, loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
 import { FileStateStore } from "../src/state/file-state-store.js";
 import { PolymarketMarketSource } from "../src/adapters/polymarket-market-source.js";
 import { RiskEngine } from "../src/core/risk-engine.js";
@@ -21,26 +21,61 @@ function execCli(args, options = {}) {
   });
 }
 
-function liveEnvLines({ stateDir, artifactDir, walletMode = "simulated" }) {
-  return [
-    `POLYPULSE_LIVE_WALLET_MODE=${walletMode}`,
-    "SIMULATED_WALLET_BALANCE_USD=100",
-    "POLYPULSE_MARKET_SOURCE=polymarket",
-    "POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com",
-    "CHAIN_ID=137",
-    "POLYMARKET_HOST=https://clob.polymarket.com",
-    "AI_PROVIDER=codex",
-    "MARKET_SCAN_LIMIT=50",
-    "MARKET_PAGE_SIZE=50",
-    "MARKET_MAX_PAGES=2",
-    "MARKET_MIN_FETCHED=20",
-    "MARKET_REQUEST_TIMEOUT_MS=5000",
-    "MARKET_REQUEST_RETRIES=0",
-    "MARKET_RATE_LIMIT_MS=0",
-    "PULSE_MIN_LIQUIDITY_USD=0",
-    `STATE_DIR=${stateDir}`,
-    `ARTIFACT_DIR=${artifactDir}`
-  ];
+function liveEnvLines({ stateDir, artifactDir, executionMode = "paper" }) {
+  const explicit = {
+    POLYPULSE_EXECUTION_MODE: executionMode,
+    POLYPULSE_MARKET_SOURCE: "polymarket",
+    POLYMARKET_GAMMA_HOST: "https://gamma-api.polymarket.com",
+    CHAIN_ID: "137",
+    POLYMARKET_HOST: "https://clob.polymarket.com",
+    PRIVATE_KEY: "0xdeadbeef",
+    FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
+    SIGNATURE_TYPE: "EOA",
+    MONITOR_LOG_PATH: "logs/test.log",
+    AI_PROVIDER: "codex",
+    MARKET_SCAN_LIMIT: "50",
+    MARKET_PAGE_SIZE: "50",
+    MARKET_MAX_PAGES: "2",
+    MARKET_MIN_FETCHED: "20",
+    MARKET_REQUEST_TIMEOUT_MS: "5000",
+    MARKET_REQUEST_RETRIES: "0",
+    MARKET_RATE_LIMIT_MS: "0",
+    PULSE_MIN_LIQUIDITY_USD: "0",
+    STATE_DIR: stateDir,
+    ARTIFACT_DIR: artifactDir,
+    MAX_TRADE_PCT: "0.05",
+    MAX_TOTAL_EXPOSURE_PCT: "0.5",
+    MAX_EVENT_EXPOSURE_PCT: "0.2",
+    MAX_POSITION_COUNT: "20",
+    MAX_POSITION_LOSS_PCT: "0.5",
+    DRAWDOWN_HALT_PCT: "0.2",
+    LIQUIDITY_TRADE_CAP_PCT: "0.01",
+    MARKET_MAX_AGE_SECONDS: "3600",
+    MIN_AI_CONFIDENCE: "high",
+    MIN_TRADE_USD: "1",
+    PULSE_STRATEGY: "pulse-direct",
+    PULSE_MAX_CANDIDATES: "5",
+    PULSE_REPORT_CANDIDATES: "3",
+    PULSE_BATCH_CAP_PCT: "0.2",
+    PULSE_AI_CANDIDATE_TRIAGE: "false",
+    PULSE_AI_TRIAGE_CAN_REJECT: "false",
+    PULSE_AI_PRESCREEN: "false",
+    PULSE_AI_EVIDENCE_RESEARCH: "false",
+    PULSE_AI_TOPIC_DISCOVERY: "false",
+    EVIDENCE_REQUEST_TIMEOUT_MS: "5000",
+    EVIDENCE_CACHE_TTL_SECONDS: "0",
+    MONITOR_INTERVAL_SECONDS: "60",
+    MONITOR_MAX_TRADES_PER_ROUND: "2",
+    MONITOR_MAX_DAILY_TRADE_USD: "10",
+    MONITOR_CONCURRENCY: "1",
+    MONITOR_RUN_TIMEOUT_MS: "60000",
+    MONITOR_BACKOFF_MS: "0"
+  };
+  const lines = [];
+  for (const key of Object.keys(DEFAULTS)) {
+    lines.push(`${key}=${explicit[key] ?? ""}`);
+  }
+  return lines;
 }
 
 async function createConfig(overrides = {}) {
@@ -51,6 +86,7 @@ async function createConfig(overrides = {}) {
   await writeFile(envPath, liveEnvLines({ stateDir, artifactDir }).join("\n"), "utf8");
   const config = await loadEnvConfig({
     envFile: envPath,
+    skipValidation: true,
     overrides
   });
   return { config, envPath, stateDir, artifactDir };
@@ -95,16 +131,17 @@ function gammaMarketRow(index) {
 
 test("live env accepts only Polymarket as the market source", async () => {
   const { config } = await createConfig();
-  const report = validateEnvConfig(config, { mode: "live" });
+  const report = validateEnvConfig(config);
   assert.equal(report.ok, true);
-  assert.equal(report.mode, "live");
+  assert.equal(report.executionMode, "paper");
   assert.equal(config.marketSource, "polymarket");
 
   const invalid = await loadEnvConfig({
     envFile: config.envFilePath,
+    skipValidation: true,
     overrides: { POLYPULSE_MARKET_SOURCE: "alternate-source" }
   });
-  const invalidReport = validateEnvConfig(invalid, { mode: "live" });
+  const invalidReport = validateEnvConfig(invalid);
   assert.equal(invalidReport.ok, false);
   assert.ok(invalidReport.checks.some((item) => item.key === "market-source" && !item.ok));
 });
@@ -171,7 +208,7 @@ test("CLI market topics returns current Polymarket topics", async (t) => {
   assert.equal(output.pulse, null);
 });
 
-test("live simulated balance uses the live broker path", async () => {
+test("paper mode balance uses the live broker path with paper wallet", async () => {
   const { envPath } = await createConfig();
   const result = await execCli(["account", "balance", "--env-file", envPath], {
     env: { ...process.env }
@@ -180,12 +217,12 @@ test("live simulated balance uses the live broker path", async () => {
   const output = JSON.parse(result.stdout);
 
   assert.equal(output.ok, true);
-  assert.equal(output.wallet.walletMode, "simulated");
-  assert.equal(output.collateral.source, "simulated-live-wallet");
-  assert.equal(output.collateralBalance, 100);
+  assert.equal(output.wallet.executionMode, "paper");
+  assert.equal(output.collateral.source, "paper-wallet");
+  assert.equal(output.collateralBalance, 0);
 });
 
-test("live simulated account audit stays on the live broker path without remote account checks", async () => {
+test("paper mode account audit runs full remote audit path", async () => {
   const { envPath } = await createConfig();
   const result = await execCli(["account", "audit", "--env-file", envPath], {
     env: { ...process.env }
@@ -193,12 +230,11 @@ test("live simulated account audit stays on the live broker path without remote 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout);
 
-  assert.equal(output.ok, true);
-  assert.equal(output.scope, "simulated-local");
-  assert.equal(output.wallet.walletMode, "simulated");
-  assert.equal(output.collateral.source, "simulated-live-wallet");
-  assert.deepEqual(output.blockingReasons, []);
-  assert.ok(output.warnings.includes("simulated_wallet_mode_no_real_account_audit"));
+  assert.equal(output.scope, "real-remote");
+  assert.equal(output.wallet.executionMode, "paper");
+  assert.equal(output.collateral.source, "paper-wallet");
+  assert.ok(Array.isArray(output.blockingReasons));
+  assert.ok(Array.isArray(output.warnings));
 });
 
 test("allowance approval requires explicit APPROVE confirmation", async () => {
@@ -215,7 +251,7 @@ test("allowance approval requires explicit APPROVE confirmation", async () => {
   assert.equal(approved.status, 0, approved.stderr || approved.stdout);
   const output = JSON.parse(approved.stdout);
   assert.equal(output.ok, true);
-  assert.equal(output.after.allowanceUsd, 100);
+  assert.equal(output.after.allowanceUsd, 0);
 });
 
 test("risk engine blocks live BUY orders when collateral allowance is insufficient", async () => {

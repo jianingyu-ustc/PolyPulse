@@ -42,7 +42,7 @@ export async function runTradeOnce({
     confirm_live: confirmation === "LIVE",
     env: summarizeEnvConfig(context.config)
   };
-  if (context.config.liveWalletMode === "simulated") {
+  if (context.config.executionMode === "paper") {
     return await new Scheduler(context).runSimulatedTradeOnce({
       confirmation,
       marketId,

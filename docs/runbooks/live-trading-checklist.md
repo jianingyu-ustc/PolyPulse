@@ -31,9 +31,9 @@ node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 Review probability, implied probability, net edge, fees, Kelly sizing, monthly
 return, confidence, and artifacts.
 
-## Real Wallet Balance
+## Wallet Balance
 
-Only for `POLYPULSE_LIVE_WALLET_MODE=real`:
+Only for `POLYPULSE_EXECUTION_MODE=live`:
 
 ```bash
 node ./bin/polypulse.js account balance --env-file .env

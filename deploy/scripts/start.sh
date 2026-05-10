@@ -5,7 +5,7 @@ POLYPULSE_HOME="${POLYPULSE_HOME:-/home/PolyPulse}"
 ENV_FILE="${POLYPULSE_ENV_FILE:-$POLYPULSE_HOME/.env}"
 SERVICE_NAME="polypulse-monitor.service"
 CONFIRM=""
-WALLET_MODE_ARG=""
+EXEC_MODE_ARG=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -13,8 +13,8 @@ while [ "$#" -gt 0 ]; do
       CONFIRM="${2:-}"
       shift 2
       ;;
-    --wallet)
-      WALLET_MODE_ARG="${2:-}"
+    --mode)
+      EXEC_MODE_ARG="${2:-}"
       shift 2
       ;;
     *)
@@ -36,22 +36,16 @@ set -a
 . "$ENV_FILE"
 set +a
 
-WALLET_MODE="${POLYPULSE_LIVE_WALLET_MODE:-real}"
-if [ -n "$WALLET_MODE_ARG" ] && [ "$WALLET_MODE_ARG" != "$WALLET_MODE" ]; then
-  fail "--wallet $WALLET_MODE_ARG does not match POLYPULSE_LIVE_WALLET_MODE=$WALLET_MODE in $ENV_FILE"
+EXEC_MODE="${POLYPULSE_EXECUTION_MODE:-live}"
+if [ -n "$EXEC_MODE_ARG" ] && [ "$EXEC_MODE_ARG" != "$EXEC_MODE" ]; then
+  fail "--mode $EXEC_MODE_ARG does not match POLYPULSE_EXECUTION_MODE=$EXEC_MODE in $ENV_FILE"
 fi
 [ "$CONFIRM" = "LIVE" ] || fail "live start requires ./deploy/scripts/start.sh --confirm LIVE"
-case "$WALLET_MODE" in
-  real)
-    [ -n "${PRIVATE_KEY:-}" ] || fail "real live wallet requires PRIVATE_KEY"
-    [ -n "${FUNDER_ADDRESS:-}" ] || fail "real live wallet requires FUNDER_ADDRESS"
-    ;;
-  simulated)
-    [ -n "${SIMULATED_WALLET_BALANCE_USD:-}" ] || fail "simulated live wallet requires SIMULATED_WALLET_BALANCE_USD"
-    ;;
-  *)
-    fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated"
-    ;;
+[ -n "${PRIVATE_KEY:-}" ] || fail "PRIVATE_KEY is required"
+[ -n "${FUNDER_ADDRESS:-}" ] || fail "FUNDER_ADDRESS is required"
+case "$EXEC_MODE" in
+  paper|live) ;;
+  *) fail "POLYPULSE_EXECUTION_MODE must be paper or live" ;;
 esac
 
 "$POLYPULSE_HOME/deploy/scripts/healthcheck.sh" --live-smoke

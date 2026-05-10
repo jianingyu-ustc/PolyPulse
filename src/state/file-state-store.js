@@ -20,13 +20,10 @@ function stateFilePath(config) {
 }
 
 function emptyPortfolio(config, now = nowIso()) {
-  const startingCash = config.liveWalletMode === "simulated"
-    ? roundUsd(config.simulatedWalletBalanceUsd)
-    : 0;
   return assertSchema("PortfolioSnapshot", {
-    accountId: config.funderAddress || config.simulatedWalletAddress || `live-${config.liveWalletMode ?? "real"}`,
-    cashUsd: startingCash,
-    totalEquityUsd: startingCash,
+    accountId: config.funderAddress || `live-${config.executionMode ?? "live"}`,
+    cashUsd: 0,
+    totalEquityUsd: 0,
     positions: [],
     updatedAt: now
   });

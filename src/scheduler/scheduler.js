@@ -274,7 +274,9 @@ export class Scheduler {
     this.stateStore = stateStore;
     this.artifactWriter = artifactWriter;
     this.evidenceCrawler = new EvidenceCrawler(config);
-    const probabilityConfig = config;
+    const probabilityConfig = config.executionMode === "paper"
+      ? { ...config, suppressProviderRuntimeArtifacts: true }
+      : config;
     this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
     this.calibrationLayer = new ProbabilityCalibrationLayer(config);
     this.candidateTriageProvider = config.pulse?.aiCandidateTriage
@@ -302,9 +304,27 @@ export class Scheduler {
     this.orderExecutor = new OrderExecutor({
       liveBroker: this.liveBroker
     });
-    this.simulatedLedger = config.liveWalletMode === "simulated"
+    this.simulatedLedger = config.executionMode === "paper"
       ? new SimulatedMonitorLedger(config)
       : null;
+    this._ledgerInitialized = false;
+  }
+
+  async _ensureLedgerCash() {
+    if (!this.simulatedLedger || this._ledgerInitialized) return;
+    try {
+      const balance = await this.liveBroker.getBalance();
+      const cashUsd = Number(balance.collateralBalance) || 0;
+      this.simulatedLedger.initialCashUsd = Number(cashUsd.toFixed(4));
+      this.simulatedLedger.cashUsd = this.simulatedLedger.initialCashUsd;
+      this.simulatedLedger.highWaterMarkUsd = this.simulatedLedger.initialCashUsd;
+      if (this.liveBroker.client?.setBalance) {
+        this.liveBroker.client.setBalance(cashUsd);
+      }
+    } catch {
+      // balance fetch failed — ledger starts with 0
+    }
+    this._ledgerInitialized = true;
   }
 
   async runOnce({ confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
@@ -833,8 +853,9 @@ export class Scheduler {
 
   async runSimulatedTradeOnce({ confirmation = null, marketId, side = null, maxAmountUsd = 1 } = {}) {
     if (!this.simulatedLedger) {
-      throw new Error("simulated_ledger_unavailable");
+      throw new Error("paper_ledger_unavailable");
     }
+    await this._ensureLedgerCash();
     const runId = monitorRunId();
     const startedAt = nowIso();
     const ledger = this.simulatedLedger;
@@ -965,6 +986,7 @@ export class Scheduler {
   }
 
   async runAcceptanceRound({ confirmation = null, limit = null, maxAmountUsd = null, marketId = null } = {}) {
+    await this._ensureLedgerCash();
 
     const runId = monitorRunId();
     const startedAt = nowIso();
@@ -1017,7 +1039,9 @@ export class Scheduler {
 
     const finishReal = async (status = "completed", error = null) => {
       accumulator.completedAt = nowIso();
-      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator);
+      const artifacts = typeof this.artifactWriter.writeMonitorRun === "function"
+        ? await this.artifactWriter.writeMonitorRun(accumulator)
+        : null;
       if (!simulated) {
         await this.stateStore.completeMonitorRun(runId, {
           status,
@@ -1310,7 +1334,7 @@ export class Scheduler {
         ok: true,
         status: "completed",
         runId,
-        walletMode: this.config.liveWalletMode,
+        executionMode: this.config.executionMode,
         markets: accumulator.scan.markets?.length ?? 0,
         candidates: accumulator.candidates.filter((item) => item.selected).length,
         predictions: accumulator.predictions.length,
@@ -1342,7 +1366,7 @@ export class Scheduler {
         ok: false,
         status: "failed",
         runId,
-        walletMode: this.config.liveWalletMode,
+        executionMode: this.config.executionMode,
         error: message,
         action: "no-trade",
         artifact: stages.execution.artifact,
@@ -1354,6 +1378,7 @@ export class Scheduler {
   }
 
   async runSimulatedMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
+    await this._ensureLedgerCash();
     const runId = monitorRunId();
     const startedAt = nowIso();
     const ledger = this.simulatedLedger;
@@ -1501,7 +1526,6 @@ export class Scheduler {
       if (this.predictionTracker.shouldEmitReport()) {
         await this.predictionTracker.emitReport(ledger);
       }
-      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator);
       await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
       return {
         ok: true,
@@ -1512,7 +1536,7 @@ export class Scheduler {
         predictions: accumulator.predictions.length,
         orders: accumulator.orders.filter((order) => order.status === "filled").length,
         action: accumulator.orders.some((order) => order.status === "filled") ? "simulated-orders" : "no-trade",
-        artifact: artifacts?.summary?.path ?? ledger.logPath,
+        artifact: ledger.logPath,
         log: ledger.logPath,
         performance: ledger.statistics()
       };
@@ -1520,14 +1544,13 @@ export class Scheduler {
       const message = error instanceof Error ? error.message : String(error);
       accumulator.errors.push(message);
       accumulator.completedAt = nowIso();
-      const artifacts = await this.artifactWriter.writeMonitorRun(accumulator).catch(() => null);
       await ledger.endRound({ runId, status: "failed", errors: accumulator.errors });
       return {
         ok: false,
         status: "failed",
         runId,
         error: message,
-        artifact: artifacts?.summary?.path ?? ledger.logPath,
+        artifact: ledger.logPath,
         log: ledger.logPath,
         performance: ledger.statistics()
       };

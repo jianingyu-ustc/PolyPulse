@@ -48,13 +48,13 @@ preflight() {
   check_node
   load_env
   mkdir -p "${STATE_DIR:-$POLYPULSE_HOME/runtime-artifacts/state}" "${ARTIFACT_DIR:-$POLYPULSE_HOME/runtime-artifacts}" "$POLYPULSE_HOME/logs"
-  case "${POLYPULSE_LIVE_WALLET_MODE:-real}" in
-    real|simulated) ;;
-    *) fail "POLYPULSE_LIVE_WALLET_MODE must be real or simulated" ;;
+  case "${POLYPULSE_EXECUTION_MODE:-live}" in
+    paper|live) ;;
+    *) fail "POLYPULSE_EXECUTION_MODE must be paper or live" ;;
   esac
   [ "${POLYPULSE_MARKET_SOURCE:-polymarket}" = "polymarket" ] || fail "POLYPULSE_MARKET_SOURCE must be polymarket"
   run_cli env check --env-file "$ENV_FILE" >/dev/null
-  info "preflight ok wallet=${POLYPULSE_LIVE_WALLET_MODE:-real}"
+  info "preflight ok mode=${POLYPULSE_EXECUTION_MODE:-live}"
 }
 
 case "${1:-}" in

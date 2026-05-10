@@ -6,18 +6,22 @@ function numberFrom(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-export class SimulatedLiveWalletClient {
+export class PaperOrderClient {
   constructor(config) {
     this.config = config;
-    this.balanceUsd = numberFrom(config.simulatedWalletBalanceUsd, 100);
-    this.address = config.simulatedWalletAddress || "0x0000000000000000000000000000000000000000";
+    this.balanceUsd = 0;
+    this.address = config.funderAddress || "0x0000000000000000000000000000000000000000";
+  }
+
+  setBalance(usd) {
+    this.balanceUsd = numberFrom(usd, 0);
   }
 
   async preflight() {
     return {
       ok: true,
-      source: "simulated-live-wallet",
-      walletMode: "simulated",
+      source: "paper-wallet",
+      executionMode: "paper",
       address: maskAddress(this.address),
       error: null
     };
@@ -28,7 +32,7 @@ export class SimulatedLiveWalletClient {
       collateralBalance: this.balanceUsd,
       allowance: this.balanceUsd,
       raw: redactSecrets({
-        walletMode: "simulated",
+        executionMode: "paper",
         address: maskAddress(this.address),
         balanceUsd: this.balanceUsd,
         allowanceUsd: this.balanceUsd
@@ -42,7 +46,7 @@ export class SimulatedLiveWalletClient {
       collateralBalance: this.balanceUsd,
       allowance: this.balanceUsd,
       raw: {
-        walletMode: "simulated",
+        executionMode: "paper",
         address: maskAddress(this.address),
         balanceUsd: this.balanceUsd,
         allowanceUsd: this.balanceUsd
@@ -57,11 +61,11 @@ export class SimulatedLiveWalletClient {
     }
     return {
       ok: filledUsd > 0,
-      orderId: `sim-live-${randomUUID()}`,
+      orderId: `paper-${randomUUID()}`,
       avgPrice: null,
       filledUsd,
       raw: {
-        walletMode: "simulated",
+        executionMode: "paper",
         originalOrderId: order.orderId,
         address: maskAddress(this.address)
       }

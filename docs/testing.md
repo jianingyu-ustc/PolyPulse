@@ -21,7 +21,7 @@ runtime-artifacts/test-runs/<timestamp>/
 `npm run smoke` uses `.env`, checks live env, balance, account audit, fetches
 current Polymarket topics with `--quick`, runs prediction on a returned
 `marketId` or `marketSlug`, and only runs live execution when `.env` is
-configured as `live simulated`.
+configured as `paper` mode.
 
 ## Test Boundary
 
@@ -29,10 +29,11 @@ configured as `live simulated`.
 - If Gamma is unreachable from the current machine, market tests are skipped
   with a network diagnostic instead of substituting another market source.
 - CLI tests verify removed overrides are rejected.
-- Balance tests use the live broker path. In `live simulated`, the broker uses
-  the configured simulated live wallet and does not connect a real wallet.
+- Balance tests use the live broker path. In `paper` mode, the broker connects
+  to the real wallet for balance reads but tracks positions in an internal ledger
+  without submitting real orders.
 - Account audit tests verify real-account checks are present while keeping
-  `live simulated` local-only; real trading must stop if audit returns blockers.
+  `paper` mode ledger-only; real trading must stop if audit returns blockers.
 - Risk tests verify BUY orders require both sufficient collateral balance and
   sufficient CLOB allowance.
 - Provider tests validate Codex or Claude Code configuration and require the

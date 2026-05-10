@@ -9,10 +9,10 @@ markets, collects evidence, asks a configured real AI provider for probability
 estimation, computes edge and sizing in code, applies risk controls, and then
 routes through the live broker path.
 
-## Supported Modes
+## Supported Execution Modes
 
-- `live simulated`
-- `live real`
+- `paper`
+- `live`
 
 ## Requirements
 
@@ -21,11 +21,12 @@ routes through the live broker path.
 - AI output may only contain probability and evidence judgment.
 - Sizing, fees, edge, Kelly, monthly return, token selection, and order creation
   are computed in code.
-- `live real` requires private key, funder address, signature type, chain id
+- `live` mode requires private key, funder address, signature type, chain id
   `137`, CLOB host, balance check, allowance check, account audit, `RiskEngine`,
   and `--confirm LIVE`.
-- `live simulated` must still use current Polymarket markets and the live broker
-  interface, but must not connect a real wallet or submit real orders.
+- `paper` mode connects to the real wallet for balance reads, uses current
+  Polymarket markets and the live broker interface, but does not submit real
+  orders. Positions and PnL are tracked in an internal ledger.
 
 ## Acceptance
 

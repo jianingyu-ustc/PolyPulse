@@ -18,18 +18,24 @@ are defined in `src/config/env.js` (`DEFAULTS` object).
 
 ## Configure
 
-Choose one wallet mode in `/home/PolyPulse/.env`.
+Choose one execution mode in `/home/PolyPulse/.env`.
 
 ```dotenv
-POLYPULSE_LIVE_WALLET_MODE=simulated
+POLYPULSE_EXECUTION_MODE=paper
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+FUNDER_ADDRESS=<0x...>
 ```
 
-For real wallet trading, set:
+Paper mode connects to the real wallet, reads real balance as starting point,
+runs the full pipeline (scan, prescreen, triage, evidence, prediction, risk),
+but does NOT submit real orders. Positions and PnL are tracked in an internal
+ledger.
+
+For live trading, set:
 
 ```dotenv
-POLYPULSE_LIVE_WALLET_MODE=real
+POLYPULSE_EXECUTION_MODE=live
 PRIVATE_KEY=<server-local-secret>
 FUNDER_ADDRESS=<0x...>
 SIGNATURE_TYPE=<signature-type>

@@ -1,7 +1,7 @@
 import { assertSchema } from "../domain/schemas.js";
 import { maskAddress, redactSecrets, validateEnvConfig } from "../config/env.js";
 import { LivePolymarketClient, summarizeLiveClientError } from "./live-polymarket-client.js";
-import { SimulatedLiveWalletClient } from "./simulated-live-wallet-client.js";
+import { PaperOrderClient } from "./paper-order-client.js";
 
 function blockedResult(order, reason) {
   return assertSchema("OrderResult", {
@@ -19,9 +19,11 @@ export class LiveBroker {
     this.kind = "live";
     this.config = config;
     this.dynamicFeeService = config.dynamicFeeService ?? null;
-    this.client = config.liveWalletMode === "simulated"
-      ? new SimulatedLiveWalletClient(config)
-      : new LivePolymarketClient(config);
+    const liveClient = new LivePolymarketClient(config);
+    this.queryClient = liveClient;
+    this.client = config.executionMode === "paper"
+      ? new PaperOrderClient(config)
+      : liveClient;
   }
 
   async preflight() {
@@ -41,8 +43,8 @@ export class LiveBroker {
       broker: this.kind,
       client,
       account: {
-        walletMode: this.config.liveWalletMode ?? "real",
-        funderAddress: maskAddress(this.config.funderAddress || this.config.simulatedWalletAddress)
+        executionMode: this.config.executionMode ?? "live",
+        funderAddress: maskAddress(this.config.funderAddress)
       }
     };
   }
@@ -53,15 +55,24 @@ export class LiveBroker {
       throw new Error(`live_preflight_failed: ${preflight.client?.error ?? "env"}`);
     }
     try {
-      const balance = await this.client.getCollateralBalance();
+      const balance = await this.queryClient.getCollateralBalance();
       return {
-        source: this.config.liveWalletMode === "simulated" ? "simulated-live-wallet" : "polymarket-clob",
+        source: "polymarket-clob",
         collateralBalance: balance.collateralBalance,
         allowance: balance.allowance,
         raw: redactSecrets(balance.raw)
       };
-    } catch (error) {
-      throw new Error(`live_balance_failed: ${summarizeLiveClientError(error)}`);
+    } catch (queryError) {
+      if (this.config.executionMode === "paper") {
+        const balance = await this.client.getCollateralBalance();
+        return {
+          source: "paper-wallet",
+          collateralBalance: balance.collateralBalance,
+          allowance: balance.allowance,
+          raw: redactSecrets(balance.raw)
+        };
+      }
+      throw new Error(`live_balance_failed: ${summarizeLiveClientError(queryError)}`);
     }
   }
 
@@ -73,7 +84,7 @@ export class LiveBroker {
     try {
       const updated = await this.client.updateCollateralAllowance();
       return {
-        source: this.config.liveWalletMode === "simulated" ? "simulated-live-wallet" : "polymarket-clob",
+        source: this.config.executionMode === "paper" ? "paper-wallet" : "polymarket-clob",
         collateralBalance: updated.collateralBalance,
         allowance: updated.allowance,
         raw: redactSecrets(updated.raw)
@@ -84,17 +95,19 @@ export class LiveBroker {
   }
 
   async getOpenOrders(params = {}) {
-    if (typeof this.client.getOpenOrders !== "function") {
+    try {
+      return await this.queryClient.getOpenOrders(params);
+    } catch {
       return [];
     }
-    return await this.client.getOpenOrders(params);
   }
 
   async getTrades(params = {}) {
-    if (typeof this.client.getTrades !== "function") {
+    try {
+      return await this.queryClient.getTrades(params);
+    } catch {
       return [];
     }
-    return await this.client.getTrades(params);
   }
 
   async submit(order, _market, confirmation = null) {
@@ -158,7 +171,7 @@ export class LiveBroker {
   async sync() {
     const balance = await this.getBalance();
     return {
-      accountId: maskAddress(this.config.funderAddress || this.config.simulatedWalletAddress),
+      accountId: maskAddress(this.config.funderAddress),
       cashUsd: balance.collateralBalance,
       totalEquityUsd: balance.collateralBalance,
       positions: [],

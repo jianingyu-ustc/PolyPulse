@@ -9,17 +9,17 @@ Tests must use the same live-only boundaries as production commands.
 ## Automated Tests
 
 - Validate `DEFAULTS` in `src/config/env.js` contains required live-only fields.
-- Validate missing real wallet secrets fail `live real` preflight.
-- Validate `live simulated` preflight passes without a private key.
+- Validate missing real wallet secrets fail `live` mode preflight.
+- Validate `paper` mode preflight passes without a private key.
 - Validate secret values are redacted from stdout and artifacts.
 - Validate Codex and Claude Code provider configuration.
 - Validate `--source` is rejected.
 - Validate current Polymarket topics can be fetched from Gamma.
 - If Gamma is unreachable, report a skipped market check instead of substituting
   another source.
-- Validate `live simulated` balance uses the live broker path.
-- Validate `account audit` reports real-account blockers and stays local-only
-  for `live simulated`.
+- Validate `paper` mode balance uses the live broker path.
+- Validate `account audit` reports real-account blockers and stays ledger-only
+  for `paper` mode.
 - Validate BUY orders are blocked when live collateral allowance is insufficient.
 
 ## Smoke
@@ -32,7 +32,7 @@ Tests must use the same live-only boundaries as production commands.
 4. current Polymarket topics using `--quick`
 5. prediction on a returned market
 6. monitor status
-7. live simulated once and monitor run when wallet mode is `simulated`
+7. paper mode once and monitor run when execution mode is `paper`
 
-`live real` order smoke is manual and requires `account audit` to pass plus
+`live` mode order smoke is manual and requires `account audit` to pass plus
 explicit operator approval.

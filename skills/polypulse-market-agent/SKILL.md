@@ -1,14 +1,14 @@
 ---
 name: polypulse-market-agent
-description: "在 PolyPulse 仓库中安全运行或设计 Polymarket 预测市场自主交易 Agent。用于扫描当前 Polymarket 市场、收集证据、调用 AI 估算概率、生成 live simulated 或 live real 交易决策、查询余额、下单、持久监控或 live 前置检查。"
+description: "在 PolyPulse 仓库中安全运行或设计 Polymarket 预测市场自主交易 Agent。用于扫描当前 Polymarket 市场、收集证据、调用 AI 估算概率、生成 paper 或 live 交易决策、查询余额、下单、持久监控或 live 前置检查。"
 ---
 
 # PolyPulse Market Agent
 
 PolyPulse 当前只保留两条路径：
 
-- `live simulated`：读取当前 Polymarket 真实市场，走 live preflight、RiskEngine、artifact 和 broker 接口，但不连接真实钱包、不提交真实订单。
-- `live real`：读取当前 Polymarket 真实市场，连接真实钱包，并在风控允许后提交真实订单。
+- `paper`：连接真实钱包读取余额，走 live preflight、RiskEngine、artifact 和 broker 接口，但不提交真实订单，仓位和盈亏在内部 ledger 中跟踪。
+- `live`：连接真实钱包，读取当前 Polymarket 真实市场，并在风控允许后提交真实订单。
 
 ## 什么时候触发
 
@@ -17,17 +17,17 @@ PolyPulse 当前只保留两条路径：
 - 扫描 Polymarket 当前市场、筛选候选市场或解释某个 market。
 - 收集新闻、规则、评论、外部数据等证据。
 - 调用 Codex 或 Claude Code 估算 Yes/No 概率、edge、Kelly 或期望收益。
-- 查询 live simulated 或 live real 钱包余额、持仓、订单簿或市场流动性。
-- 执行一次性 live simulated / live real 验收。
-- 持久监控市场并在条件满足时执行 live simulated / live real 路径。
+- 查询 paper 或 live 模式钱包余额、持仓、订单簿或市场流动性。
+- 执行一次性 paper / live 验收。
+- 持久监控市场并在条件满足时执行 paper / live 路径。
 - 排查 PolyPulse 运行失败、恢复 checkpoint 或整理归档。
 
 ## 默认安全模式
 
 - 默认读取当前 Polymarket 真实市场。
 - 默认不打印真实 env 值、私钥、session token 或 cookie。
-- `live simulated` 可以用于演练，但仍必须使用 `--confirm LIVE`。
-- `live real` 会触发真实资金路径；除非用户在本次会话明确确认真实资金风险，否则不要启动真实下单或真实 monitor。
+- `paper` 可以用于演练，但仍必须使用 `--confirm LIVE`。
+- `live` 会触发真实资金路径；除非用户在本次会话明确确认真实资金风险，否则不要启动真实下单或真实 monitor。
 - 失败时要 fail-closed：不绕过风控，不为了满足最小下单额而放大仓位。
 
 ## 命令约定
@@ -80,14 +80,15 @@ node ./bin/polypulse.js predict --env-file .env --market <market-id-or-slug>
 - confidence
 - artifact path
 
-### Live Simulated Once
+### Paper Mode Once
 
 要求 `.env`：
 
 ```bash
-POLYPULSE_LIVE_WALLET_MODE=simulated
+POLYPULSE_EXECUTION_MODE=paper
 POLYPULSE_MARKET_SOURCE=polymarket
 POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
+FUNDER_ADDRESS=<0x...>
 ```
 
 命令：
@@ -96,12 +97,12 @@ POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com
 node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> --max-amount 1 --confirm LIVE
 ```
 
-### Live Real Once
+### Live Mode Once
 
 要求 `.env`：
 
 ```bash
-POLYPULSE_LIVE_WALLET_MODE=real
+POLYPULSE_EXECUTION_MODE=live
 PRIVATE_KEY=<server-local-secret>
 FUNDER_ADDRESS=<0x...>
 SIGNATURE_TYPE=<signature-type>

@@ -201,11 +201,11 @@ export class AccountService {
     }
 
     const balance = await this.liveBroker.getBalance();
-    const address = this.config.funderAddress || this.config.simulatedWalletAddress;
+    const address = this.config.funderAddress;
     return {
       env: summarizeEnvConfig(this.config),
       wallet: {
-        walletMode: this.config.liveWalletMode ?? "real",
+        executionMode: this.config.executionMode ?? "live",
         funderAddress: maskAddress(address),
         proxyAddress: maskAddress(address)
       },
@@ -298,53 +298,6 @@ export class AccountService {
   async audit() {
     const balance = await this.getBalance();
     const localState = await this.getLocalStateSummary();
-    if (this.config.liveWalletMode !== "real") {
-      return {
-        ok: true,
-        scope: "simulated-local",
-        env: summarizeEnvConfig(this.config),
-        wallet: balance.wallet,
-        collateral: balance.collateral,
-        positions: [],
-        positionSummary: {
-          openPositions: 0,
-          currentValueUsd: 0,
-          unrealizedPnlUsd: 0,
-          realizedPnlUsd: 0
-        },
-        closedPositions: [],
-        performance: {
-          closedPositions: 0,
-          wins: 0,
-          losses: 0,
-          flat: 0,
-          winRate: null,
-          averageWin: 0,
-          averageLoss: 0,
-          totalRealizedPnl: 0,
-          totalBought: 0,
-          netReturn: null,
-          maxDrawdownUsd: 0
-        },
-        trades: [],
-        tradeSummary: {
-          trades: 0,
-          filledTrades: 0,
-          notionalUsd: 0,
-          estimatedFeesUsd: 0
-        },
-        openOrders: [],
-        openOrderSummary: {
-          openOrders: 0,
-          remainingSize: 0
-        },
-        localState,
-        warnings: ["simulated_wallet_mode_no_real_account_audit"],
-        errors: [],
-        blockingReasons: [],
-        updatedAt: new Date().toISOString()
-      };
-    }
     const user = this.config.funderAddress;
     const errors = [];
     let positions = null;

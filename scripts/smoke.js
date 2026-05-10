@@ -63,7 +63,7 @@ try {
   }
   run(["predict", "--env-file", envFile, "--market", marketId]);
   run(["monitor", "status", "--env-file", envFile]);
-  if (envCheck?.report?.liveWalletMode === "simulated") {
+  if (envCheck?.report?.executionMode === "paper") {
     run(["trade", "once", "--env-file", envFile, "--market", marketId, "--max-amount", "1", "--confirm", "LIVE"]);
     run(["monitor", "run", "--env-file", envFile, "--rounds", "1", "--limit", "1", "--max-amount", "1", "--confirm", "LIVE"]);
   } else {

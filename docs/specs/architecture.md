@@ -11,8 +11,8 @@ Polymarket Gamma
   -> RiskEngine
   -> OrderExecutor
   -> LiveBroker
-       -> SimulatedLiveWalletClient for live simulated
-       -> LivePolymarketClient for live real
+       -> PaperOrderClient for paper mode
+       -> LivePolymarketClient for live mode
 ```
 
 ## Boundaries

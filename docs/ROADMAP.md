@@ -12,7 +12,7 @@ Last updated: 2026-05-06
 
 - Add real evidence adapters for official pages, news APIs, public data APIs,
   and resolution sources.
-- Add order status reconciliation for `live real`.
+- Add order status reconciliation for `live` mode.
 - Add stronger confirmation binding for real orders: run id, market id, side,
   notional, env fingerprint, and wallet address.
 

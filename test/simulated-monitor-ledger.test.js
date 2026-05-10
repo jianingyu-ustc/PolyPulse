@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadEnvConfig } from "../src/config/env.js";
+import { DEFAULTS, loadEnvConfig } from "../src/config/env.js";
 import { SimulatedMonitorLedger } from "../src/simulated/simulated-monitor-ledger.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 
@@ -85,38 +85,67 @@ function highYesEstimate(inputMarket) {
 
 async function configForTest(dir) {
   const envPath = path.join(dir, "live.env");
-  await writeFile(envPath, [
-    "POLYPULSE_LIVE_WALLET_MODE=simulated",
-    "SIMULATED_WALLET_BALANCE_USD=100",
-    `SIMULATED_MONITOR_LOG_PATH=${path.join(dir, "simulated-monitor.log")}`,
-    "POLYPULSE_MARKET_SOURCE=polymarket",
-    "POLYMARKET_GAMMA_HOST=https://gamma-api.polymarket.com",
-    "CHAIN_ID=137",
-    "POLYMARKET_HOST=https://clob.polymarket.com",
-    "PULSE_MIN_LIQUIDITY_USD=0",
-    "PULSE_AI_PRESCREEN=false",
-    "PULSE_AI_CANDIDATE_TRIAGE=false",
-    "PULSE_AI_TOPIC_DISCOVERY=false",
-    "PULSE_AI_EVIDENCE_RESEARCH=false",
-    "MIN_AI_CONFIDENCE=high",
-    "MIN_TRADE_USD=1",
-    "MAX_TRADE_PCT=1",
-    "MAX_TOTAL_EXPOSURE_PCT=1",
-    "MAX_EVENT_EXPOSURE_PCT=1",
-    "LIQUIDITY_TRADE_CAP_PCT=1",
-    "MONITOR_MAX_TRADES_PER_ROUND=2",
-    "MONITOR_MAX_DAILY_TRADE_USD=10",
-    "MONITOR_CONCURRENCY=1",
-    "MONITOR_BACKOFF_MS=0",
-    "EVIDENCE_CACHE_TTL_SECONDS=0"
-  ].join("\n"), "utf8");
+  const explicit = {
+    POLYPULSE_EXECUTION_MODE: "paper",
+    MONITOR_LOG_PATH: path.join(dir, "monitor.log"),
+    POLYPULSE_MARKET_SOURCE: "polymarket",
+    POLYMARKET_GAMMA_HOST: "https://gamma-api.polymarket.com",
+    CHAIN_ID: "137",
+    POLYMARKET_HOST: "https://clob.polymarket.com",
+    PRIVATE_KEY: "0xdeadbeef",
+    FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
+    SIGNATURE_TYPE: "EOA",
+    PULSE_MIN_LIQUIDITY_USD: "0",
+    PULSE_AI_PRESCREEN: "false",
+    PULSE_AI_CANDIDATE_TRIAGE: "false",
+    PULSE_AI_TRIAGE_CAN_REJECT: "false",
+    PULSE_AI_TOPIC_DISCOVERY: "false",
+    PULSE_AI_EVIDENCE_RESEARCH: "false",
+    MIN_AI_CONFIDENCE: "high",
+    MIN_TRADE_USD: "1",
+    MAX_TRADE_PCT: "1",
+    MAX_TOTAL_EXPOSURE_PCT: "1",
+    MAX_EVENT_EXPOSURE_PCT: "1",
+    MAX_POSITION_COUNT: "20",
+    MAX_POSITION_LOSS_PCT: "0.5",
+    DRAWDOWN_HALT_PCT: "0.2",
+    LIQUIDITY_TRADE_CAP_PCT: "1",
+    MARKET_MAX_AGE_SECONDS: "3600",
+    MARKET_SCAN_LIMIT: "50",
+    MARKET_PAGE_SIZE: "50",
+    MARKET_MAX_PAGES: "2",
+    MARKET_MIN_FETCHED: "20",
+    MARKET_REQUEST_TIMEOUT_MS: "5000",
+    MARKET_REQUEST_RETRIES: "0",
+    MARKET_RATE_LIMIT_MS: "0",
+    PULSE_STRATEGY: "pulse-direct",
+    PULSE_MAX_CANDIDATES: "5",
+    PULSE_REPORT_CANDIDATES: "3",
+    PULSE_BATCH_CAP_PCT: "0.2",
+    EVIDENCE_CACHE_TTL_SECONDS: "0",
+    EVIDENCE_REQUEST_TIMEOUT_MS: "5000",
+    MONITOR_INTERVAL_SECONDS: "60",
+    MONITOR_MAX_TRADES_PER_ROUND: "2",
+    MONITOR_MAX_DAILY_TRADE_USD: "10",
+    MONITOR_CONCURRENCY: "1",
+    MONITOR_RUN_TIMEOUT_MS: "60000",
+    MONITOR_BACKOFF_MS: "0",
+    STATE_DIR: path.join(dir, "state"),
+    ARTIFACT_DIR: path.join(dir, "artifacts"),
+    AI_PROVIDER: "codex"
+  };
+  const lines = [];
+  for (const key of Object.keys(DEFAULTS)) {
+    lines.push(`${key}=${explicit[key] ?? ""}`);
+  }
+  await writeFile(envPath, lines.join("\n"), "utf8");
   return await loadEnvConfig({ envFile: envPath });
 }
 
 test("simulated monitor ledger records open, close, pnl, and win rate in a human log", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-ledger-"));
   const config = await configForTest(dir);
-  const ledger = new SimulatedMonitorLedger(config);
+  const ledger = new SimulatedMonitorLedger(config, { initialCashUsd: 100 });
   const inputMarket = market({ yesPrice: 0.2 });
   const risk = {
     allowed: true,
@@ -147,7 +176,7 @@ test("simulated monitor ledger records open, close, pnl, and win rate in a human
   assert.equal(ledger.statistics().wins, 1);
   assert.equal(ledger.statistics().winRate, 1);
 
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /open\.filled/);
   assert.match(log, /close\.filled/);
   assert.match(log, /realized_pnl_usd=3/);
@@ -188,6 +217,10 @@ test("simulated monitor run uses log-only in-memory state instead of persistent 
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   assert.equal(scheduler.probabilityEstimator.config.suppressProviderRuntimeArtifacts, true);
   scheduler.evidenceCrawler = {
     async collect({ noCache }) {
@@ -214,7 +247,7 @@ test("simulated monitor run uses log-only in-memory state instead of persistent 
   assert.equal(result.ok, true);
   assert.equal(result.action, "simulated-orders");
   assert.equal(result.performance.openPositions, 1);
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /topics\.fetched/);
   assert.match(log, /prediction/);
   assert.match(log, /risk/);
@@ -259,6 +292,10 @@ test("simulated monitor ranks candidates by AI-derived opportunity before execut
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   scheduler.evidenceCrawler = {
     async collect({ noCache }) {
       assert.equal(noCache, true);
@@ -287,7 +324,7 @@ test("simulated monitor ranks candidates by AI-derived opportunity before execut
   assert.equal(result.ok, true);
   assert.equal(result.performance.openPositions, 1);
   assert.equal(scheduler.simulatedLedger.positions[0].marketSlug, "higher-opportunity");
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /candidate\.ranked \| rank=1 market=higher-opportunity/);
   assert.match(log, /open\.filled \| market=higher-opportunity/);
 });
@@ -295,6 +332,7 @@ test("simulated monitor ranks candidates by AI-derived opportunity before execut
 test("simulated monitor applies AI candidate triage before probability estimation", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-triage-"));
   const config = await configForTest(dir);
+  config.pulse.aiTriageCanReject = true;
   const rejectedMarket = market({
     marketId: "sim-reject",
     eventId: "event-reject",
@@ -328,6 +366,10 @@ test("simulated monitor applies AI candidate triage before probability estimatio
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   scheduler.candidateTriageProvider = {
     async triage({ candidates }) {
       assert.equal(candidates.length, 2);
@@ -386,7 +428,7 @@ test("simulated monitor applies AI candidate triage before probability estimatio
   assert.equal(result.ok, true);
   assert.equal(result.performance.openPositions, 1);
   assert.equal(scheduler.simulatedLedger.positions[0].marketSlug, keptMarket.marketSlug);
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /candidate\.triage \| market=unresearchable-candidate action=reject/);
   assert.match(log, /candidate \| market=unresearchable-candidate selected=false reasons=ai_triage_reject/);
   assert.match(log, /candidate\.triage_summary/);
@@ -418,6 +460,10 @@ test("simulated trade once uses the same in-memory ledger and human log format a
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   scheduler.evidenceCrawler = {
     async collect({ noCache }) {
       assert.equal(noCache, true);
@@ -442,11 +488,11 @@ test("simulated trade once uses the same in-memory ledger and human log format a
 
   assert.equal(result.ok, true);
   assert.equal(result.action, "simulated-orders");
-  assert.equal(result.artifact, config.simulatedMonitorLogPath);
+  assert.equal(result.artifact, config.monitorLogPath);
   assert.equal(result.performance.cashUsd, 99);
   assert.equal(result.performance.openPositions, 1);
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
-  assert.match(log, /simulated live monitor session started/);
+  const log = await readFile(config.monitorLogPath, "utf8");
+  assert.match(log, /monitor session started/);
   assert.match(log, /round\.start/);
   assert.match(log, /topics\.fetched/);
   assert.match(log, /candidate/);
@@ -491,6 +537,10 @@ test("acceptance round uses monitor candidate ranking instead of the first scann
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   scheduler.topicDiscoveryProvider = null;
   scheduler.preScreenProvider = null;
   scheduler.candidateTriageProvider = null;
@@ -525,7 +575,7 @@ test("acceptance round uses monitor candidate ranking instead of the first scann
   assert.equal(result.stages.prediction.ranked[0].marketSlug, betterCandidate.marketSlug);
   assert.equal(result.stages.execution.filledOrders.length, 1);
   assert.equal(result.stages.execution.filledOrders[0].marketSlug, betterCandidate.marketSlug);
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /candidate\.ranked \| rank=1 market=second-scanned-high-edge/);
 });
 
@@ -557,6 +607,10 @@ test("simulated monitor closes positions by signal and records performance", asy
       }
     }
   });
+  scheduler.simulatedLedger.initialCashUsd = 100;
+  scheduler.simulatedLedger.cashUsd = 100;
+  scheduler.simulatedLedger.highWaterMarkUsd = 100;
+  scheduler._ledgerInitialized = true;
   scheduler.evidenceCrawler = {
     async collect({ noCache }) {
       assert.equal(noCache, true);
@@ -599,7 +653,7 @@ test("simulated monitor closes positions by signal and records performance", asy
   assert.equal(result.performance.closedTrades, 1);
   assert.equal(result.performance.losses, 1);
   assert.equal(result.performance.realizedPnlUsd, -0.75);
-  const log = await readFile(config.simulatedMonitorLogPath, "utf8");
+  const log = await readFile(config.monitorLogPath, "utf8");
   assert.match(log, /close\.filled/);
   assert.match(log, /reason=stop_loss/);
   assert.match(log, /losses=1/);

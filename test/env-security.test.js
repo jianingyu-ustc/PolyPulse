@@ -46,9 +46,7 @@ function execCli(args, options = {}) {
 
 test("DEFAULTS contains the required configuration fields (all null)", async () => {
   const required = [
-    "POLYPULSE_LIVE_WALLET_MODE",
-    "SIMULATED_WALLET_ADDRESS",
-    "SIMULATED_WALLET_BALANCE_USD",
+    "POLYPULSE_EXECUTION_MODE",
     "PRIVATE_KEY",
     "FUNDER_ADDRESS",
     "SIGNATURE_TYPE",
@@ -97,20 +95,20 @@ test("DEFAULTS contains the required configuration fields (all null)", async () 
 });
 
 test("live preflight fails when PRIVATE_KEY is missing", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-real-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-live-"));
   const envPath = path.join(dir, "live.env");
-  await writeFile(envPath, "POLYPULSE_LIVE_WALLET_MODE=real\n", "utf8");
+  await writeFile(envPath, "POLYPULSE_EXECUTION_MODE=live\n", "utf8");
   const config = await loadEnvConfig({
     envFile: envPath,
     skipValidation: true,
     overrides: allKeysOverride({
-      POLYPULSE_LIVE_WALLET_MODE: "real",
+      POLYPULSE_EXECUTION_MODE: "live",
       PRIVATE_KEY: "",
       FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
       SIGNATURE_TYPE: "1",
       CHAIN_ID: "137",
       POLYMARKET_HOST: "https://clob.polymarket.com",
-      SIMULATED_MONITOR_LOG_PATH: "logs/test.log",
+      MONITOR_LOG_PATH: "logs/test.log",
       STATE_DIR: dir,
       ARTIFACT_DIR: dir
     })
@@ -120,22 +118,21 @@ test("live preflight fails when PRIVATE_KEY is missing", async () => {
   assert.ok(report.checks.some((item) => item.key === "PRIVATE_KEY" && !item.ok));
 });
 
-test("live preflight allows simulated wallet without a private key", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-simulated-"));
+test("paper mode passes preflight with real wallet credentials", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "polypulse-paper-"));
   const config = await loadEnvConfig({
-    envFile: "/tmp/polypulse-simulated-live.env",
+    envFile: "/tmp/polypulse-paper.env",
     skipValidation: true,
     overrides: allKeysOverride({
-      POLYPULSE_LIVE_WALLET_MODE: "simulated",
-      PRIVATE_KEY: "",
-      FUNDER_ADDRESS: "",
-      SIGNATURE_TYPE: "",
+      POLYPULSE_EXECUTION_MODE: "paper",
+      PRIVATE_KEY: "0xdeadbeef",
+      FUNDER_ADDRESS: "0x1111111111111111111111111111111111111111",
+      SIGNATURE_TYPE: "EOA",
       CHAIN_ID: "137",
-      POLYMARKET_HOST: "",
+      POLYMARKET_HOST: "https://clob.polymarket.com",
       POLYMARKET_GAMMA_HOST: "https://gamma-api.polymarket.com",
       POLYPULSE_MARKET_SOURCE: "polymarket",
-      SIMULATED_WALLET_BALANCE_USD: "100",
-      SIMULATED_MONITOR_LOG_PATH: "logs/test.log",
+      MONITOR_LOG_PATH: "logs/test.log",
       STATE_DIR: dir,
       ARTIFACT_DIR: dir,
       AI_PROVIDER: "codex",
@@ -151,7 +148,7 @@ test("live preflight allows simulated wallet without a private key", async () =>
   });
   const report = validateEnvConfig(config, { mode: "live" });
   assert.equal(report.ok, true);
-  assert.equal(report.liveWalletMode, "simulated");
+  assert.equal(report.executionMode, "paper");
 });
 
 test("private key value is excluded from stdout, artifacts, and memory", async () => {

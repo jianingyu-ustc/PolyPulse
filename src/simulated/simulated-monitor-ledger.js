@@ -58,9 +58,9 @@ function performanceFromClosed(closed) {
 }
 
 export class SimulatedMonitorLedger {
-  constructor(config) {
+  constructor(config, { initialCashUsd = 0 } = {}) {
     this.config = config;
-    this.initialCashUsd = round(config.simulatedWalletBalanceUsd ?? 100);
+    this.initialCashUsd = round(initialCashUsd);
     this.cashUsd = this.initialCashUsd;
     this.positions = [];
     this.closedTrades = [];
@@ -68,7 +68,7 @@ export class SimulatedMonitorLedger {
     this.dailyTradeUsd = { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 };
     this.highWaterMarkUsd = this.initialCashUsd;
     this.maxDrawdownUsd = 0;
-    this.logPath = path.resolve(config.simulatedMonitorLogPath ?? "logs/polypulse-simulated-monitor.log");
+    this.logPath = path.resolve(config.monitorLogPath ?? "logs/polypulse-monitor.log");
     this.logReady = false;
   }
 
@@ -78,9 +78,9 @@ export class SimulatedMonitorLedger {
     await appendFile(this.logPath, [
       "",
       "================================================================================",
-      `[${nowIso()}] simulated live monitor session started`,
+      `[${nowIso()}] monitor session started`,
+      `execution_mode=${this.config.executionMode}`,
       `initial_cash_usd=${this.initialCashUsd}`,
-      `wallet_mode=${this.config.liveWalletMode}`,
       `market_source=${this.config.marketSource}`,
       `gamma=${this.config.polymarketGammaHost}`,
       "================================================================================",
@@ -128,7 +128,7 @@ export class SimulatedMonitorLedger {
     this.highWaterMarkUsd = Math.max(this.highWaterMarkUsd, totalEquityUsd);
     this.maxDrawdownUsd = Math.max(this.maxDrawdownUsd, round(this.highWaterMarkUsd - totalEquityUsd));
     return {
-      accountId: this.config.simulatedWalletAddress || "live-simulated-monitor",
+      accountId: this.config.funderAddress || `monitor-${this.config.executionMode ?? "paper"}`,
       cashUsd: this.cashUsd,
       totalEquityUsd,
       positions: this.positions.map((position) => ({ ...position })),
@@ -281,7 +281,7 @@ export class SimulatedMonitorLedger {
       filledUsd,
       avgPrice: price,
       reason: null,
-      walletMode: "simulated",
+      executionMode: "paper",
       paper: true
     };
     await this.log("open.filled", {

@@ -4,12 +4,14 @@ Acceptance date: 2026-05-06
 
 ## Result
 
-PolyPulse is live-only. The repository keeps two execution paths:
+PolyPulse is live-only. The repository keeps two execution modes:
 
-- `live simulated`: reads current Polymarket markets and runs live preflight,
-  `RiskEngine`, artifacts, monitor, and live broker interfaces without a real
-  wallet connection.
-- `live real`: reads current Polymarket markets, connects the real CLOB client,
+- `paper`: connects to the real wallet for balance reads, runs current
+  Polymarket markets through the full pipeline (scan, prescreen, triage,
+  evidence, prediction, risk), live preflight, `RiskEngine`, artifacts, monitor,
+  and live broker interfaces without submitting real orders. Positions and PnL
+  are tracked in an internal ledger.
+- `live`: reads current Polymarket markets, connects the real CLOB client,
   checks balance, and can submit orders only after `--confirm LIVE` and all risk
   gates pass.
 
@@ -27,7 +29,7 @@ node ./bin/polypulse.js trade once --env-file .env --market <market-id-or-slug> 
 node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --rounds 1 --limit 1 --max-amount 1
 ```
 
-For `live real`, `account audit` must return `ok=true` before any execution
+For `live` mode, `account audit` must return `ok=true` before any execution
 command, and real orders still require explicit operator approval for real funds.
 
 ## Acceptance Criteria
@@ -35,5 +37,5 @@ command, and real orders still require explicit operator approval for real funds
 - `--source` is rejected.
 - Market topics come from the current Polymarket Gamma API.
 - Prediction uses the configured real Codex or Claude Code provider.
-- Live execution uses `LiveBroker`; `live real` uses `LivePolymarketClient`.
+- Live execution uses `LiveBroker`; `live` mode uses `LivePolymarketClient`.
 - Artifacts are written under `runtime-artifacts/` with secret redaction.

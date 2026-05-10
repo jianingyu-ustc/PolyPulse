@@ -11,23 +11,16 @@ import path from "node:path";
  */
 export const DEFAULTS = {
   // ─── 执行模式 ──────────────────────────────────────────────────────────────
-  // "simulated" 使用内存模拟账本（不连接真实钱包）；
-  // "real" 连接真实钱包并通过 Polymarket CLOB 提交订单。
-  POLYPULSE_LIVE_WALLET_MODE: null,
+  // "paper" 连接真实钱包，走完整链路，最后一步不提交真实订单（内存账本追踪）；
+  // "live" 连接真实钱包，走完整链路，风控允许后提交真实订单。
+  POLYPULSE_EXECUTION_MODE: null,
 
-  // ─── 模拟钱包 ──────────────────────────────────────────────────────────────
-  // 当 POLYPULSE_LIVE_WALLET_MODE=simulated 时使用。
-  // 仍然读取真实市场数据，但不连接真实钱包、不提交真实订单。
-
-  // 可选，模拟钱包的 0x 地址标识。可留空。
-  SIMULATED_WALLET_ADDRESS: null,
-  // 内存模拟账本的初始资金（美元）。
-  SIMULATED_WALLET_BALANCE_USD: null,
-  // 人类可读模拟 monitor 日志的追加路径。
-  SIMULATED_MONITOR_LOG_PATH: null,
+  // ─── Monitor 日志 ──────────────────────────────────────────────────────────
+  // 人类可读 monitor 日志的追加路径。
+  MONITOR_LOG_PATH: null,
 
   // ─── 真实钱包凭证 ──────────────────────────────────────────────────────────
-  // 仅当 POLYPULSE_LIVE_WALLET_MODE=real 时需要。
+  // paper 和 live 模式均需要。
 
   // Polygon 钱包私钥，用于签署 CLOB 订单。仅限服务器本地保存。
   PRIVATE_KEY: null,
@@ -332,8 +325,8 @@ function readNumber(values, key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function normalizeWalletMode(value) {
-  return value === "simulated" ? "simulated" : "real";
+function normalizeExecutionMode(value) {
+  return value === "paper" ? "paper" : "live";
 }
 
 function normalizeMarketSource(value) {
@@ -397,10 +390,8 @@ export async function loadEnvConfig(options = {}) {
   return {
     repoRoot,
     envFilePath,
-    liveWalletMode: normalizeWalletMode(values.POLYPULSE_LIVE_WALLET_MODE),
-    simulatedWalletAddress: values.SIMULATED_WALLET_ADDRESS ?? "",
-    simulatedWalletBalanceUsd: readNumber(values, "SIMULATED_WALLET_BALANCE_USD", 100),
-    simulatedMonitorLogPath: path.resolve(values.SIMULATED_MONITOR_LOG_PATH || "logs/monitor.log"),
+    executionMode: normalizeExecutionMode(values.POLYPULSE_EXECUTION_MODE),
+    monitorLogPath: path.resolve(values.MONITOR_LOG_PATH || "logs/polypulse-monitor.log"),
     privateKey: values.PRIVATE_KEY ?? "",
     funderAddress: values.FUNDER_ADDRESS ?? "",
     signatureType: values.SIGNATURE_TYPE ?? "",
@@ -538,7 +529,7 @@ function check(key, ok, summary, blocking = true) {
 }
 
 export function validateEnvConfig(config) {
-  const walletMode = normalizeWalletMode(config.liveWalletMode);
+  const executionMode = normalizeExecutionMode(config.executionMode);
   const pulse = {
     strategy: config.pulse?.strategy ?? "pulse-direct",
     minLiquidityUsd: config.pulse?.minLiquidityUsd ?? 0,
@@ -584,30 +575,23 @@ export function validateEnvConfig(config) {
 
   checks.push(
     check("env-file", Boolean(config.envFilePath), "requires an explicit env file or .env."),
-    check("POLYPULSE_LIVE_WALLET_MODE", ["real", "simulated"].includes(walletMode), "POLYPULSE_LIVE_WALLET_MODE must be real or simulated."),
+    check("POLYPULSE_EXECUTION_MODE", ["live", "paper"].includes(executionMode), "POLYPULSE_EXECUTION_MODE must be live or paper."),
     check("CHAIN_ID", config.chainId === 137, "CHAIN_ID must be 137 for Polygon mainnet.")
   );
-  if (walletMode === "real") {
-    checks.push(
-      check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required with a real wallet."),
-      check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required with a real wallet."),
-      check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
-      check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required with a real wallet."),
-      check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required with a real wallet.")
-    );
-  } else {
-    checks.push(
-      check("SIMULATED_WALLET_BALANCE_USD", Number(config.simulatedWalletBalanceUsd) >= 0, "SIMULATED_WALLET_BALANCE_USD must be >= 0."),
-      check("SIMULATED_WALLET_ADDRESS_FORMAT", !config.simulatedWalletAddress || /^0x[a-fA-F0-9]{40}$/.test(config.simulatedWalletAddress), "SIMULATED_WALLET_ADDRESS must be blank or a 20-byte hex address.")
-    );
-  }
+  checks.push(
+    check("PRIVATE_KEY", Boolean(config.privateKey), "PRIVATE_KEY is required."),
+    check("FUNDER_ADDRESS", Boolean(config.funderAddress), "FUNDER_ADDRESS is required."),
+    check("FUNDER_ADDRESS_FORMAT", /^0x[a-fA-F0-9]{40}$/.test(config.funderAddress), "FUNDER_ADDRESS must be a 20-byte hex address."),
+    check("SIGNATURE_TYPE", Boolean(config.signatureType), "SIGNATURE_TYPE is required."),
+    check("POLYMARKET_HOST", Boolean(config.polymarketHost), "POLYMARKET_HOST is required.")
+  );
 
   return {
     ok: checks.every((item) => item.ok || !item.blocking),
     envFilePath: config.envFilePath,
     chainId: config.chainId,
-    liveWalletMode: walletMode,
-    funderAddress: maskAddress(config.funderAddress || config.simulatedWalletAddress),
+    executionMode,
+    funderAddress: maskAddress(config.funderAddress),
     polymarketHost: config.polymarketHost || "-",
     checks
   };
@@ -617,8 +601,8 @@ export function summarizeEnvConfig(config) {
   return {
     envFilePath: config.envFilePath,
     chainId: config.chainId,
-    liveWalletMode: normalizeWalletMode(config.liveWalletMode),
-    funderAddress: maskAddress(config.funderAddress || config.simulatedWalletAddress),
+    executionMode: normalizeExecutionMode(config.executionMode),
+    funderAddress: maskAddress(config.funderAddress),
     polymarketHost: config.polymarketHost || "-",
     marketSource: config.marketSource,
     pulseStrategy: config.pulse?.strategy ?? "pulse-direct"

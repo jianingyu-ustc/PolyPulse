@@ -5,12 +5,11 @@
  * 用法：
  *   node scripts/acceptance.js --env-file .env
  *   node scripts/acceptance.js --env-file .env --market <slug>
- *   node scripts/acceptance.js --env-file .env --max-amount <n>
  *
  * 说明：
  *   - Step 2-7 复用 Scheduler 的 live monitor scan/candidate/predict/risk/order 流程。
- *   - live simulated 会带 --confirm LIVE 走模拟订单路径，不连接真实钱包。
- *   - live real 默认不传 LIVE confirmation，因此会跑到风控/订单执行器但不会自动提交真实订单。
+ *   - paper 模式会带 --confirm LIVE 走内存账本路径，连接真实钱包读余额但不提交真实订单。
+ *   - live 模式默认不传 LIVE confirmation，因此会跑到风控/订单执行器但不会自动提交真实订单。
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -34,12 +33,6 @@ function option(args, name, fallback = null) {
 
 function hasFlag(args, name) {
   return args.includes(name);
-}
-
-function parseNumber(value, fallback = null) {
-  if (value == null) return fallback;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
 }
 
 function writeStep(artifactDir, results, step, name, payload, ok = true) {
@@ -98,7 +91,7 @@ function summarizePrediction(stage) {
 const argv = process.argv.slice(2);
 const envFile = option(argv, "--env-file", ".env");
 const manualMarket = option(argv, "--market", null);
-const maxAmount = parseNumber(option(argv, "--max-amount", "10"), 10);
+const maxAmount = null;
 const allowLiveExecution = hasFlag(argv, "--allow-live-execution");
 
 const runId = timestamp();
@@ -134,7 +127,7 @@ try {
     throw new Error("acceptance_env_check_failed");
   }
 
-  const confirmation = config.liveWalletMode === "simulated" || allowLiveExecution ? "LIVE" : null;
+  const confirmation = config.executionMode === "paper" || allowLiveExecution ? "LIVE" : null;
   acceptance = await scheduler.runAcceptanceRound({
     confirmation,
     maxAmountUsd: maxAmount,
@@ -170,8 +163,8 @@ try {
 
   writeStep(artifactDir, results, 7, "monitor-execution", {
     ok: acceptance.stages.execution?.ok === true,
-    walletMode: config.liveWalletMode,
-    liveRealExecutionEnabled: config.liveWalletMode === "real" && allowLiveExecution,
+    executionMode: config.executionMode,
+    liveExecutionEnabled: config.executionMode === "live" && allowLiveExecution,
     confirmationPassed: confirmation === "LIVE",
     orders: acceptance.stages.execution?.orders ?? [],
     filledOrders: acceptance.stages.execution?.filledOrders ?? [],
@@ -197,7 +190,7 @@ const summary = {
   pass: results.filter((item) => item.ok).length,
   fail: results.filter((item) => !item.ok).length,
   liveMonitorAligned: true,
-  walletMode: acceptance?.walletMode ?? null,
+  executionMode: acceptance?.executionMode ?? null,
   runId: acceptance?.runId ?? null,
   market: acceptance?.stages?.prediction?.ranked?.[0]?.marketId
     ?? acceptance?.stages?.scan?.markets?.[0]?.marketId
@@ -220,7 +213,7 @@ console.log(JSON.stringify(redactSecrets({
   pass: summary.pass,
   fail: summary.fail,
   liveMonitorAligned: summary.liveMonitorAligned,
-  walletMode: summary.walletMode,
+  executionMode: summary.executionMode,
   runId: summary.runId,
   market: summary.market,
   action: summary.action,
