@@ -167,10 +167,10 @@ export class PreScreenProvider {
 
       let output;
       if (provider === "claude-code") {
-        output = await this.runWithTimeout(
+        await this.runWithTimeout(
           () => runClaude({
             prompt,
-            outputPath: null,
+            outputPath,
             repoRoot: this.config.repoRoot,
             settings,
             schemaPath: null,
@@ -178,6 +178,7 @@ export class PreScreenProvider {
           }),
           this.timeoutMs
         );
+        output = await readFile(outputPath, "utf8");
       } else {
         await this.runWithTimeout(
           () => runCodex({
