@@ -296,9 +296,12 @@ const SECRET_KEYS = new Set([
 ]);
 
 function parseEnvLine(line) {
-  const trimmed = line.trim();
+  let trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("#")) {
     return null;
+  }
+  if (trimmed.startsWith("export ")) {
+    trimmed = trimmed.slice(7);
   }
   const index = trimmed.indexOf("=");
   if (index < 0) {
@@ -377,6 +380,16 @@ export async function loadEnvConfig(options = {}) {
     ...process.env,
     ...(options.overrides ?? {})
   };
+
+  const PASSTHROUGH_KEYS = [
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL"
+  ];
+  for (const key of PASSTHROUGH_KEYS) {
+    if (fileValues[key] && !process.env[key]) {
+      process.env[key] = fileValues[key];
+    }
+  }
 
   return {
     repoRoot,
