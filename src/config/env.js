@@ -508,7 +508,7 @@ export async function loadEnvConfig(options = {}) {
       provider: values.AI_PROVIDER ?? "codex",
       model: values.AI_MODEL ?? ""
     },
-    providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 0))),
+    providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 120))),
     providers: {
       codex: {
         model: values.CODEX_MODEL || values.AI_MODEL || "",
