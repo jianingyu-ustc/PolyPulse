@@ -390,6 +390,9 @@ export async function loadEnvConfig(options = {}) {
       process.env[key] = fileValues[key];
     }
   }
+  if (process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
+    process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
+  }
 
   return {
     repoRoot,
