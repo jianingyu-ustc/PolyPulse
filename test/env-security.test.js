@@ -78,7 +78,6 @@ test("DEFAULTS contains the required configuration fields (all null)", async () 
     "ARTIFACT_RETENTION_DAYS",
     "ARTIFACT_MAX_RUNS",
     "AI_PROVIDER",
-    "AI_MODEL",
     "PROVIDER_TIMEOUT_SECONDS",
     "CODEX_MODEL",
     "CODEX_SKILL_ROOT_DIR",

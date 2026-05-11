@@ -253,26 +253,28 @@ export class RiskEngine {
       blockedReasons.push("adjusted_notional_below_min_trade_usd");
     }
 
-    if (confirmation !== "LIVE") {
-      blockedReasons.push("live_requires_confirm_live");
-    }
-    const preflight = validateEnvConfig(this.config);
-    if (!preflight.ok) {
-      blockedReasons.push("live_preflight_failed");
-    }
-    if (liveBalanceError) {
-      blockedReasons.push("live_balance_check_failed");
-      warnings.push(`live_balance_error:${liveBalanceError}`);
-    } else if (liveCollateral == null) {
-      blockedReasons.push("live_balance_check_missing");
-    } else if (decision.side === "BUY" && liveCollateral < adjusted) {
-      blockedReasons.push("insufficient_live_collateral");
-    }
-    if (decision.side === "BUY") {
-      if (liveAllowance == null) {
-        blockedReasons.push("live_allowance_check_missing");
-      } else if (liveAllowance < adjusted) {
-        blockedReasons.push("insufficient_live_allowance");
+    if (this.config.executionMode === "live") {
+      if (confirmation !== "LIVE") {
+        blockedReasons.push("live_requires_confirm_live");
+      }
+      const preflight = validateEnvConfig(this.config);
+      if (!preflight.ok) {
+        blockedReasons.push("live_preflight_failed");
+      }
+      if (liveBalanceError) {
+        blockedReasons.push("live_balance_check_failed");
+        warnings.push(`live_balance_error:${liveBalanceError}`);
+      } else if (liveCollateral == null) {
+        blockedReasons.push("live_balance_check_missing");
+      } else if (decision.side === "BUY" && liveCollateral < adjusted) {
+        blockedReasons.push("insufficient_live_collateral");
+      }
+      if (decision.side === "BUY") {
+        if (liveAllowance == null) {
+          blockedReasons.push("live_allowance_check_missing");
+        } else if (liveAllowance < adjusted) {
+          blockedReasons.push("insufficient_live_allowance");
+        }
       }
     }
 

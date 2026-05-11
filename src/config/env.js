@@ -245,8 +245,6 @@ export const DEFAULTS = {
   // ─── AI Provider ──────────────────────────────────────────────────────────
   // 概率估算的主 AI 提供方。"codex" 或 "claude-code"。
   AI_PROVIDER: null,
-  // 覆盖 AI 提供方模型。留空 = 使用提供方默认模型。
-  AI_MODEL: null,
 
   // ─── Predict-Raven 兼容 Codex Provider 设置 ────────────────────────────────
   // Provider 子进程超时。0 = 无独立超时（使用 monitor 超时）。
@@ -265,7 +263,7 @@ export const DEFAULTS = {
   // ─── Claude Code Provider 设置 ────────────────────────────────────────────
   // 与上面 Codex 块对称，但通过 `claude --print` 路由 ProbabilityEstimate。
 
-  // 覆盖 Claude Code 模型。留空 = 使用 Claude Code 默认。
+  // 覆盖 Claude Code 模型。留空 = 使用 Claude Code 默认。可用项：claude-sonnet-4-6, claude-opus-4-7
   CLAUDE_CODE_MODEL: null,
   // Claude Code 读取的 skill 文件根目录。
   CLAUDE_CODE_SKILL_ROOT_DIR: null,
@@ -277,7 +275,11 @@ export const DEFAULTS = {
   CLAUDE_CODE_PERMISSION_MODE: null,
   // Claude Code 允许的工具（逗号分隔，如 Read,Glob,Grep）。
   CLAUDE_CODE_ALLOWED_TOOLS: null,
-  // 传给 claude 命令的额外 CLI 参数。
+  // 传给 claude 命令的额外 CLI 参数。常见选项：
+  //   --reasoning-effort low|medium|high  推理深度
+  //   --max-turns N                      最大对话轮数
+  //   --verbose                           详细输出
+  //   --allowedTools Read,Glob,Grep       允许的工具（等价于 CLAUDE_CODE_ALLOWED_TOOLS）
   CLAUDE_CODE_EXTRA_ARGS: null,
   // 单次 Claude Code 调用的最大预算（美元）。留空 = 无限制。
   CLAUDE_CODE_MAX_BUDGET_USD: null
@@ -503,12 +505,12 @@ export async function loadEnvConfig(options = {}) {
     },
     ai: {
       provider: values.AI_PROVIDER ?? "codex",
-      model: values.AI_MODEL ?? ""
+      model: ""
     },
     providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 120))),
     providers: {
       codex: {
-        model: values.CODEX_MODEL || values.AI_MODEL || "",
+        model: values.CODEX_MODEL || "",
         skillRootDir: path.resolve(repoRoot, values.CODEX_SKILL_ROOT_DIR || "skills"),
         skillLocale: ["en", "zh"].includes(values.CODEX_SKILL_LOCALE) ? values.CODEX_SKILL_LOCALE : "zh",
         skills: values.CODEX_SKILLS,
@@ -517,7 +519,7 @@ export async function loadEnvConfig(options = {}) {
           : ""
       },
       claudeCode: {
-        model: values.CLAUDE_CODE_MODEL || values.AI_MODEL || "",
+        model: values.CLAUDE_CODE_MODEL || "",
         skillRootDir: path.resolve(repoRoot, values.CLAUDE_CODE_SKILL_ROOT_DIR || "skills"),
         skillLocale: ["en", "zh"].includes(values.CLAUDE_CODE_SKILL_LOCALE) ? values.CLAUDE_CODE_SKILL_LOCALE : "zh",
         skills: values.CLAUDE_CODE_SKILLS,
