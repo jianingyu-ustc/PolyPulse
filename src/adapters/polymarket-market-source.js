@@ -75,8 +75,11 @@ export class PolymarketMarketSource {
     const fetchLimit = clampLimit(fetchTarget, this.config.scan.marketScanLimit);
     const pageSize = Math.min(this.config.scan.pageSize, fetchLimit);
     const startOffset = parseOffset(request.cursor ?? request.offset);
+    const maxDays = this.config.scan?.maxDaysToResolution;
+    const endsBefore = maxDays > 0 ? Date.now() + maxDays * 86_400_000 : undefined;
     const filters = describeMarketFilters({
       ...request,
+      endsBefore: request.endsBefore ?? endsBefore,
       minLiquidityUsd: request.minLiquidityUsd ?? request.minLiquidity ?? (pulseCompatible ? this.config.pulse?.minLiquidityUsd : null),
       activeOnly: request.activeOnly ?? request.active ?? true,
       closedOnly: request.closedOnly ?? request.closed ?? false,

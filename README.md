@@ -23,6 +23,23 @@ PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Pre
 
 部署相关文件：`src/config/env.js` 的 `DEFAULTS` 对象是所有环境变量的唯一定义（含注释说明），`deploy/systemd/polypulse-monitor.service` 是 systemd 常驻 monitor 服务，`deploy/scripts/*.sh` 覆盖安装、启动、停止、状态和健康检查。
 
+### 完整链路示例
+
+以真实 paper 模式运行记录为例（市场：`will-the-democratic-party-win-the-ok-02-house-seat`，"民主党会赢得 Oklahoma 第 2 选区众议院席位吗？"）：
+
+| Step | 阶段 | 实际执行 |
+|------|------|---------|
+| 1 | **Scan** | 从 Polymarket Gamma 拉取 200 个市场，按流动性/volume/规则过滤为 20 个候选 |
+| 2 | **Pre-screen** | 轻量 AI 判定 `TRADE`："可通过选区基本面和历史共和党优势验证 7% 定价合理性" |
+| 3 | **Triage** | AI 语义 triage：score=0.2, researchability=medium, information_advantage=low；识别证据缺口（partisan lean, incumbency, polling, wave indicators, order book depth） |
+| 4 | **Evidence** | 收集证据：Polymarket 页面结算规则/评论、CLOB order book 深度、resolution source 验证、领域适配器、AI Evidence Research 定向搜索 |
+| 5 | **Prediction** | AI 估算 `ai_probability=0.05`（民主党仅 5% 概率赢），confidence=low；代码计算 No 侧 market_probability=0.935, grossEdge=0.015, 扣 fee 后 netEdge=0.015, quarterKellyPct=5.8%, monthlyReturn=0.26% |
+| 6 | **Risk** | RiskEngine 批准：allowed=true, approvedUsd=$10（warning: ai_confidence_below_minimum）；daily limit/exposure/slippage 均未触发阻断 |
+| 7 | **Execution** | 买入 No @ $0.935, size=10.695 shares, cost=$10；paper 模式写入内存账本，不提交真实订单 |
+
+后续每轮 position-review 重新评估 edge，确认仍为正（netEdge=0.015）→ `hold_until_settlement`。
+
+
 ### 与 Predict-Raven 的关系和当前差距
 
 PolyPulse 当前和 Predict-Raven 相同或接近的部分：
@@ -720,6 +737,17 @@ node ./bin/polypulse.js monitor status --env-file .env
 
 # 查看系统级风控状态。
 node ./bin/polypulse.js risk status --env-file .env
+
+# 终止 monitor 进程（前台运行时直接 Ctrl+C；后台运行时用以下方式）。
+# 如果是 pm2 托管：
+pm2 stop polypulse-monitor
+pm2 delete polypulse-monitor
+
+# 如果是 nohup/& 后台运行：
+pkill -f "polypulse.js monitor run"
+
+# 如果是 systemd 服务：
+systemctl stop polypulse-monitor
 ```
 
 Codex 提示词版本：

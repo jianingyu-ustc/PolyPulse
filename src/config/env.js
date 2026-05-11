@@ -84,6 +84,8 @@ export const DEFAULTS = {
   MARKET_RATE_LIMIT_MS: null,
   // 扫描有效所需的最低市场获取数量。
   MARKET_MIN_FETCHED: null,
+  // 最大结算天数，排除结算日超出此天数的远期市场。0 = 不限制。
+  SCAN_MAX_DAYS_TO_RESOLUTION: null,
 
   // ─── Pulse 策略设置 ────────────────────────────────────────────────────────
   // 策略模式。仅支持 "pulse-direct"（兼容 Predict-Raven）。
@@ -153,6 +155,8 @@ export const DEFAULTS = {
   RISK_MAX_PRICE_IMPACT_PCT: null,
   // 启用交易所最小下单金额检查（true/false）。
   RISK_EXCHANGE_MIN_ORDER_CHECK: null,
+  // 开仓最低 netEdge 要求 (0-1)。低于此值的机会跳过。0 = 不限制。
+  PULSE_MIN_NET_EDGE: null,
 
   // ─── 证据收集设置 ──────────────────────────────────────────────────────────
   // 证据缓存 TTL（秒）。1800 = 30 分钟。
@@ -423,7 +427,8 @@ export async function loadEnvConfig(options = {}) {
       requestTimeoutMs: Math.max(1000, Math.floor(readNumber(values, "MARKET_REQUEST_TIMEOUT_MS", 10000))),
       requestRetries: Math.max(0, Math.floor(readNumber(values, "MARKET_REQUEST_RETRIES", 2))),
       rateLimitMs: Math.max(0, Math.floor(readNumber(values, "MARKET_RATE_LIMIT_MS", 250))),
-      minFetchedMarkets: Math.max(0, Math.floor(readNumber(values, "MARKET_MIN_FETCHED", 20)))
+      minFetchedMarkets: Math.max(0, Math.floor(readNumber(values, "MARKET_MIN_FETCHED", 20))),
+      maxDaysToResolution: Math.max(0, Math.floor(readNumber(values, "SCAN_MAX_DAYS_TO_RESOLUTION", 0)))
     },
     pulse: {
       strategy: values.PULSE_STRATEGY === "pulse-direct" ? "pulse-direct" : String(values.PULSE_STRATEGY ?? "pulse-direct").trim(),
@@ -446,10 +451,11 @@ export async function loadEnvConfig(options = {}) {
       downsideRiskRanking: String(values.PULSE_DOWNSIDE_RISK_RANKING ?? "true").toLowerCase() !== "false",
       performanceReportInterval: Math.max(1, Math.floor(readNumber(values, "PULSE_PERFORMANCE_REPORT_INTERVAL", 5))),
       fetchDimensions: parseList(values.PULSE_FETCH_DIMENSIONS),
-      requireEvidenceGuard: String(values.PULSE_REQUIRE_EVIDENCE_GUARD ?? "false").toLowerCase() === "true"
+      requireEvidenceGuard: String(values.PULSE_REQUIRE_EVIDENCE_GUARD ?? "false").toLowerCase() === "true",
+      minNetEdge: Math.max(0, readNumber(values, "PULSE_MIN_NET_EDGE", 0))
     },
     monitor: {
-      intervalSeconds: Math.max(1, Math.floor(readNumber(values, "MONITOR_INTERVAL_SECONDS", 300))),
+      intervalSeconds: Math.max(1, Math.floor(readNumber(values, "MONITOR_INTERVAL_SECONDS", 7200))),
       maxTradesPerRound: Math.max(0, Math.floor(readNumber(values, "MONITOR_MAX_TRADES_PER_ROUND", 3))),
       maxDailyTradeUsd: Math.max(0, readNumber(values, "MONITOR_MAX_DAILY_TRADE_USD", 25)),
       concurrency: Math.max(1, Math.floor(readNumber(values, "MONITOR_CONCURRENCY", 3))),

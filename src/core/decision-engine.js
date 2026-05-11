@@ -99,7 +99,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   });
 }
 
-export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now(), dynamicFeeParams = null }) {
+export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0 }) {
   const wantedSide = normalizeSide(side);
   const outcome = outcomeForSide(market, wantedSide);
   const outcomeEstimate = estimateForSide(estimate, wantedSide);
@@ -117,11 +117,12 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     marketProb: implied,
     bankrollUsd,
     nowMs,
-    dynamicFeeParams
+    dynamicFeeParams,
+    minNetEdge
   });
   const notional = plan.suggestedNotionalUsd;
   const expectedValue = round(plan.netEdge * notional, 4);
-  const noTradeReason = plan.action === "open" ? null : "quarter_kelly_not_positive";
+  const noTradeReason = plan.action === "open" ? null : (plan.skipReason ?? "quarter_kelly_not_positive");
 
   return assertSchema("TradeCandidate", {
     marketId: market.marketId,
@@ -168,10 +169,11 @@ export class DecisionEngine {
   }
 
   analyze({ market, estimate, portfolio = null, amountUsd = 1, dynamicFeeParams = null }) {
+    const minNetEdge = this.config.pulse?.minNetEdge ?? 0;
     const buildCandidate = this.pulseDirect ? buildPulseTradeCandidate : buildTradeCandidate;
     const candidates = [
-      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd, dynamicFeeParams }),
-      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd, dynamicFeeParams })
+      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd, dynamicFeeParams, minNetEdge }),
+      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd, dynamicFeeParams, minNetEdge })
     ];
     const candidate = this.pulseDirect
       ? candidates.filter(Boolean).sort((a, b) => (b.monthlyReturn ?? -Infinity) - (a.monthlyReturn ?? -Infinity))[0] ?? null
@@ -204,8 +206,9 @@ export class DecisionEngine {
   }
 
   decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null, dynamicFeeParams = null }) {
+    const minNetEdge = this.config.pulse?.minNetEdge ?? 0;
     const candidate = this.pulseDirect
-      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams })
+      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams, minNetEdge })
       : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
     const common = {
       marketId: market.marketId,

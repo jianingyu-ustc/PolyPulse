@@ -308,6 +308,7 @@ export class Scheduler {
       ? new SimulatedMonitorLedger(config)
       : null;
     this._ledgerInitialized = false;
+    this._monitorRoundCount = 0;
   }
 
   async _ensureLedgerCash() {
@@ -325,6 +326,18 @@ export class Scheduler {
       // balance fetch failed — ledger starts with 0
     }
     this._ledgerInitialized = true;
+  }
+
+  _positionReviewInterval(position) {
+    const endDate = position.endDate;
+    if (!endDate) return 1;
+    const msLeft = new Date(endDate).getTime() - Date.now();
+    const daysLeft = Math.max(0, msLeft / 86_400_000);
+    if (daysLeft <= 3) return 1;
+    if (daysLeft <= 7) return 3;
+    if (daysLeft <= 30) return 6;
+    if (daysLeft <= 60) return 12;
+    return 24;
   }
 
   async runOnce({ confirmation = null, marketId = null, side = "yes", amountUsd = 1 } = {}) {
@@ -712,6 +725,16 @@ export class Scheduler {
     }
 
     for (const position of [...ledger.positions]) {
+      const reviewInterval = this._positionReviewInterval(position);
+      if (this._monitorRoundCount % reviewInterval !== 0) {
+        await ledger.log("position.review_deferred", {
+          market: position.marketSlug,
+          round: this._monitorRoundCount,
+          interval: reviewInterval,
+          next_review_round: Math.ceil(this._monitorRoundCount / reviewInterval) * reviewInterval
+        });
+        continue;
+      }
       const market = await this.marketSource.getMarket(position.marketId || position.marketSlug, { noCache: true });
       if (!market) {
         await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
@@ -1379,6 +1402,7 @@ export class Scheduler {
 
   async runSimulatedMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     await this._ensureLedgerCash();
+    this._monitorRoundCount += 1;
     const runId = monitorRunId();
     const startedAt = nowIso();
     const ledger = this.simulatedLedger;

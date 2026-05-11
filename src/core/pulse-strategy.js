@@ -251,7 +251,7 @@ export function calculateMonthlyReturn({ edge, endDate, nowMs = Date.now() }) {
   };
 }
 
-export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now(), dynamicFeeParams = null }) {
+export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0 }) {
   const categorySlug = inferCategorySlug(market);
   const staticFeeParams = lookupCategoryFeeParams(categorySlug, {
     negRisk: Boolean(market?.negRisk),
@@ -266,6 +266,8 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
   const netEdge = round(calculateNetEdge(grossEdge, marketProb, feeParams));
   const kelly = calculateQuarterKelly({ aiProb, marketProb, bankrollUsd });
   const monthly = calculateMonthlyReturn({ edge: netEdge, endDate: market?.endDate, nowMs });
+  const effectiveMinEdge = minNetEdge || 0;
+  const action = kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip";
   return {
     side,
     categorySlug,
@@ -280,7 +282,10 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
     monthlyReturn: round(monthly.monthlyReturn),
     daysToResolution: monthly.daysToResolution,
     resolutionSource: monthly.resolutionSource,
-    action: kelly.quarterKellyUsd > 0 && netEdge > 0 ? "open" : "skip"
+    action,
+    skipReason: action === "skip"
+      ? (netEdge > 0 && netEdge < effectiveMinEdge ? "below_min_net_edge" : "quarter_kelly_not_positive")
+      : null
   };
 }
 
