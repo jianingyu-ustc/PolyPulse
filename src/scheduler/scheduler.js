@@ -724,74 +724,83 @@ export class Scheduler {
       });
     }
 
-    for (const position of [...ledger.positions]) {
-      const reviewInterval = this._positionReviewInterval(position);
-      if (this._monitorRoundCount % reviewInterval !== 0) {
-        await ledger.log("position.review_deferred", {
+    if (this.config.monitor?.holdUntilSettlement) {
+      for (const position of [...ledger.positions]) {
+        await ledger.log("position.review_skipped", {
           market: position.marketSlug,
-          round: this._monitorRoundCount,
-          interval: reviewInterval,
-          next_review_round: Math.ceil(this._monitorRoundCount / reviewInterval) * reviewInterval
+          reason: "hold_until_settlement"
         });
-        continue;
       }
-      const market = await this.marketSource.getMarket(position.marketId || position.marketSlug, { noCache: true });
-      if (!market) {
-        await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
-        continue;
-      }
-      const prediction = await this.predictCandidateNoCache({ market });
-      const portfolio = ledger.portfolio();
-      const dynamicFeeParamsReview = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
-      const analysis = this.decisionEngine.analyze({
-        market: prediction.market,
-        estimate: prediction.estimate,
-        portfolio,
-        amountUsd: this.config.risk.minTradeUsd,
-        dynamicFeeParams: dynamicFeeParamsReview
-      });
-      const chosenSide = analysis.suggested_side ?? position.side ?? "yes";
-      const decision = this.decisionEngine.decide({
-        market: prediction.market,
-        estimate: prediction.estimate,
-        side: chosenSide,
-        amountUsd: this.config.risk.minTradeUsd,
-        portfolio,
-        dynamicFeeParams: dynamicFeeParamsReview
-      });
-      prediction.decision = decision;
-      prediction.phase = "position-review";
-      accumulator.predictions.push(prediction);
-      accumulator.decisions.push({
-        marketId: prediction.market.marketId,
-        marketSlug: prediction.market.marketSlug,
-        question: prediction.market.question,
-        phase: "position-review",
-        ...decision
-      });
-      await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "position-review" });
-      const closed = await ledger.closeOnDecision({ position, decision });
-      if (closed) {
-        accumulator.orders.push({
-          marketId: closed.marketId,
-          marketSlug: closed.marketSlug,
-          orderId: `sim-close-${closed.positionId}`,
-          status: "filled",
-          requestedUsd: 0,
-          filledUsd: closed.proceedsUsd,
-          avgPrice: closed.currentPrice,
-          reason: closed.closeReason,
-          paper: true,
-          type: "close"
+    } else {
+      for (const position of [...ledger.positions]) {
+        const reviewInterval = this._positionReviewInterval(position);
+        if (this._monitorRoundCount % reviewInterval !== 0) {
+          await ledger.log("position.review_deferred", {
+            market: position.marketSlug,
+            round: this._monitorRoundCount,
+            interval: reviewInterval,
+            next_review_round: Math.ceil(this._monitorRoundCount / reviewInterval) * reviewInterval
+          });
+          continue;
+        }
+        const market = await this.marketSource.getMarket(position.marketId || position.marketSlug, { noCache: true });
+        if (!market) {
+          await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
+          continue;
+        }
+        const prediction = await this.predictCandidateNoCache({ market });
+        const portfolio = ledger.portfolio();
+        const dynamicFeeParamsReview = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
+        const analysis = this.decisionEngine.analyze({
+          market: prediction.market,
+          estimate: prediction.estimate,
+          portfolio,
+          amountUsd: this.config.risk.minTradeUsd,
+          dynamicFeeParams: dynamicFeeParamsReview
         });
-        this.predictionTracker.recordOutcome({
-          marketId: closed.marketId,
-          marketSlug: closed.marketSlug,
-          outcome: closed.realizedPnlUsd > 0,
-          realizedPnlUsd: closed.realizedPnlUsd,
-          returnPct: closed.returnPct ?? 0,
-          closeReason: closed.closeReason
+        const chosenSide = analysis.suggested_side ?? position.side ?? "yes";
+        const decision = this.decisionEngine.decide({
+          market: prediction.market,
+          estimate: prediction.estimate,
+          side: chosenSide,
+          amountUsd: this.config.risk.minTradeUsd,
+          portfolio,
+          dynamicFeeParams: dynamicFeeParamsReview
         });
+        prediction.decision = decision;
+        prediction.phase = "position-review";
+        accumulator.predictions.push(prediction);
+        accumulator.decisions.push({
+          marketId: prediction.market.marketId,
+          marketSlug: prediction.market.marketSlug,
+          question: prediction.market.question,
+          phase: "position-review",
+          ...decision
+        });
+        await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "position-review" });
+        const closed = await ledger.closeOnDecision({ position, decision });
+        if (closed) {
+          accumulator.orders.push({
+            marketId: closed.marketId,
+            marketSlug: closed.marketSlug,
+            orderId: `sim-close-${closed.positionId}`,
+            status: "filled",
+            requestedUsd: 0,
+            filledUsd: closed.proceedsUsd,
+            avgPrice: closed.currentPrice,
+            reason: closed.closeReason,
+            paper: true,
+            type: "close"
+          });
+          this.predictionTracker.recordOutcome({
+            marketId: closed.marketId,
+            marketSlug: closed.marketSlug,
+            outcome: closed.realizedPnlUsd > 0,
+            realizedPnlUsd: closed.realizedPnlUsd,
+            returnPct: closed.returnPct ?? 0,
+            closeReason: closed.closeReason
+          });
+        }
       }
     }
     await ledger.log("positions.reviewed", {

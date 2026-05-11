@@ -106,6 +106,88 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
 
+### 开仓金额计算和风控逻辑
+
+开仓金额由 **DecisionEngine**（收益计算）和 **RiskEngine**（风控约束）两阶段确定，AI 不参与金额决策。
+
+#### 第一阶段：DecisionEngine 计算建议金额
+
+1. **双侧评估**：对 Yes 和 No 两侧各自独立执行 steps 2-7 的完整计算。
+2. **计算 grossEdge**：`grossEdge = aiProbability - marketImpliedProbability`。
+3. **计算 fee**：根据市场类别查找费率参数（动态费率优先，静态费率回退），`entryFeePct = feeRate × (price × (1 - price))^exponent`。
+4. **计算 netEdge**：`netEdge = grossEdge - entryFeePct`。
+5. **Quarter Kelly sizing**：
+   ```
+   fullKellyPct = max(0, (aiProb - marketProb) / (1 - marketProb))
+   quarterKellyPct = fullKellyPct / 4
+   suggestedNotionalUsd = bankrollUsd × quarterKellyPct
+   ```
+   其中 `bankrollUsd` = 组合总权益（`portfolio.totalEquityUsd`）。
+6. **Monthly return**：`monthlyReturn = netEdge / (daysToResolution / 30)`，其中 `daysToResolution` 取 `market.endDate` 距当前的天数（无 endDate 时回退 180 天）。同样的 net edge，短期市场月化收益更高。
+7. **开仓条件**：`quarterKellyUsd > 0 && netEdge > 0 && netEdge >= PULSE_MIN_NET_EDGE` 时 `action=open`，否则 `skip`。
+8. **选择方向**：两侧均计算完毕后，选 `monthlyReturn` 最高且 `action=open` 的方向作为最终候选。
+
+DecisionEngine 输出的 `suggestedNotionalUsd` 是风控前的建议金额上限。
+
+#### 第二阶段：RiskEngine 逐层约束
+
+RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT_USD` 或 `MIN_TRADE_USD`）取较小值后，按以下顺序逐层缩减：
+
+| 约束层 | 环境变量 | 计算方式 | 作用 |
+| --- | --- | --- | --- |
+| 单笔上限 | `MAX_TRADE_PCT` | `portfolioEquity × maxTradePct` | 单笔不超过总资金的 N% |
+| 总敞口上限 | `MAX_TOTAL_EXPOSURE_PCT` | `portfolioEquity × maxTotalExposurePct - currentExposure` | 所有持仓不超过总资金的 N% |
+| 事件敞口上限 | `MAX_EVENT_EXPOSURE_PCT` | `portfolioEquity × maxEventExposurePct - eventExposure` | 同一事件不超过总资金的 N% |
+| 流动性上限 | `LIQUIDITY_TRADE_CAP_PCT` | `market.liquidityUsd × liquidityTradeCapPct` | 单笔不超过市场流动性的 N% |
+| 滑点上限 | `RISK_MAX_PRICE_IMPACT_PCT` | `walkAskBook` 遍历 ask book，计算 4% price impact 内的最大 notional | 防止滑点吃掉 edge |
+| 交易所最小单 | `RISK_EXCHANGE_MIN_ORDER_CHECK` | `shares = amountUsd / bestAsk >= minOrderSize` | 不满足则阻断 |
+| 最小交易金额 | `MIN_TRADE_USD` | 约束后金额 < `MIN_TRADE_USD` 则阻断 | 避免过小订单 |
+
+#### 阻断检查（任一触发则 `approvedUsd = 0`）
+
+| 阻断条件 | 说明 |
+| --- | --- |
+| `system_paused` / `system_halted` | 系统级暂停或回撤触发停机 |
+| `drawdown_halt_threshold_exceeded` | 组合回撤超 `DRAWDOWN_HALT_PCT` |
+| `decision_action_*_not_executable` | DecisionEngine 输出非 `open`（如 `skip`） |
+| `market_closed` / `market_inactive` / `market_not_tradable` | 市场已关闭或不可交易 |
+| `above_max_position_count` | 持仓数已达 `MAX_POSITION_COUNT` |
+| `liquidity_unavailable` | 市场无流动性数据 |
+| `below_exchange_minimum_order_size` | 低于交易所最小下单量 |
+| `below_min_trade_usd` / `adjusted_notional_below_min_trade_usd` | 金额低于最小交易门槛 |
+| `no_risk_budget_available` | 所有约束层缩减后金额 ≤ 0 |
+| `live_requires_confirm_live` | live 模式缺少 `--confirm LIVE` |
+| `live_preflight_failed` | env 配置校验未通过 |
+| `insufficient_live_collateral` | 真实余额不足 |
+| `insufficient_live_allowance` | 真实 allowance 不足 |
+
+#### 非阻断警告（记录但不阻止下单）
+
+| 警告 | 触发条件 |
+| --- | --- |
+| `ai_confidence_below_minimum` | AI 置信度低于 `MIN_AI_CONFIDENCE`（pulse-direct 模式下为 warning） |
+| `insufficient_evidence` | 证据不足（pulse-direct 模式下为 warning） |
+| `market_data_stale` | 市场数据超 `MARKET_MAX_AGE_SECONDS`（pulse-direct 模式下为 warning） |
+| `position_loss_limit_triggered` | 某已有仓位亏损超 `MAX_POSITION_LOSS_PCT` |
+
+#### 最终金额
+
+```
+approvedUsd = min(
+  MONITOR_MAX_AMOUNT_USD,                    ← 环境变量配置的单笔硬上限
+  suggestedNotionalUsd,                      ← Quarter Kelly 建议仓位 = bankroll × quarterKellyPct
+  portfolioEquity × MAX_TRADE_PCT,           ← 单笔不超过总资金的固定比例
+  totalExposureRoom,                         ← 总敞口上限 - 当前所有持仓总价值
+  eventExposureRoom,                         ← 事件敞口上限 - 同一事件已有持仓价值
+  liquidityCapUsd,                           ← 市场流动性 × LIQUIDITY_TRADE_CAP_PCT，防市场冲击
+  orderbookSlippageCapUsd,                   ← ask book 在 4% price impact 内可买入的最大金额
+  liveCollateral,                            ← 真实钱包 CLOB 可用保证金余额
+  liveAllowance                              ← 真实钱包对 CLOB 合约的授权额度
+)
+```
+
+`approvedUsd` 即为实际提交的订单金额。阻断检查任一不通过时为 0。
+
 ### Monitor 候选去重（已持仓市场处理）
 
 `buildCandidates()` 对每个扫描到的市场执行两项去重检查，确保不会对同一话题重复开仓：
