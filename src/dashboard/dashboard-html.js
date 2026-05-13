@@ -33,12 +33,12 @@ tr:hover td{background:#161b22}
 
 <h2>Open Positions</h2>
 <div style="overflow-x:auto"><table id="open-table"><thead><tr>
-<th>Topic ID</th><th>Content</th><th>Open Time</th><th>Expiry</th><th>Amount</th><th>AI Prob</th><th>Mkt Prob</th><th>PnL</th>
+<th>Topic ID</th><th>Content</th><th>Side</th><th>Open Time</th><th>Expiry</th><th>Amount</th><th>AI Prob</th><th>Mkt Prob</th><th>PnL</th>
 </tr></thead><tbody id="open-body"></tbody></table></div>
 
 <h2>Closed Positions</h2>
 <div style="overflow-x:auto"><table id="closed-table"><thead><tr>
-<th>Topic ID</th><th>Content</th><th>Open Time</th><th>Close Time</th><th>Amount</th><th>PnL</th><th>AI Prob</th><th>Mkt Prob</th><th>Return</th>
+<th>Topic ID</th><th>Content</th><th>Side</th><th>Open Time</th><th>Close Time</th><th>Amount</th><th>PnL</th><th>AI Prob</th><th>Mkt Prob</th><th>Return</th>
 </tr></thead><tbody id="closed-body"></tbody></table></div>
 
 <div class="refresh" id="refresh"></div>
@@ -71,10 +71,11 @@ function renderSummary(s){
 
 function renderOpen(positions){
   const tbody=document.getElementById('open-body');
-  if(!positions.length){tbody.innerHTML='<tr><td colspan="8" style="color:#8b949e">No open positions</td></tr>';return}
+  if(!positions.length){tbody.innerHTML='<tr><td colspan="9" style="color:#8b949e">No open positions</td></tr>';return}
   tbody.innerHTML=positions.map(p=>'<tr>'+
     '<td>'+((p.marketId||'').slice(0,8))+'</td>'+
     '<td title="'+(p.question||'').replace(/"/g,'&quot;')+'">'+(p.question||'-')+'</td>'+
+    '<td>'+(p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.endDate)+'</td>'+
     '<td>$'+fmt(p.costUsd)+'</td>'+
@@ -86,10 +87,11 @@ function renderOpen(positions){
 
 function renderClosed(trades){
   const tbody=document.getElementById('closed-body');
-  if(!trades.length){tbody.innerHTML='<tr><td colspan="9" style="color:#8b949e">No closed positions</td></tr>';return}
+  if(!trades.length){tbody.innerHTML='<tr><td colspan="10" style="color:#8b949e">No closed positions</td></tr>';return}
   tbody.innerHTML=trades.map(t=>'<tr>'+
     '<td>'+((t.marketId||'').slice(0,8))+'</td>'+
     '<td title="'+(t.question||'').replace(/"/g,'&quot;')+'">'+(t.question||'-')+'</td>'+
+    '<td>'+(t.outcome||'-')+'</td>'+
     '<td>'+ts(t.openedAt)+'</td>'+
     '<td>'+ts(t.closedAt)+'</td>'+
     '<td>$'+fmt(t.costUsd)+'</td>'+
