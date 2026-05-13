@@ -12,7 +12,12 @@ export class DashboardServer {
   start() {
     this.server = createServer((req, res) => this._handle(req, res));
     this.server.on("error", (err) => {
-      console.error(`[dashboard] server error: ${err.message}`);
+      if (err.code === "EADDRINUSE") {
+        console.error(`[dashboard] port ${this.port} already in use — dashboard disabled (monitor continues normally)`);
+        this.server = null;
+      } else {
+        console.error(`[dashboard] server error: ${err.message}`);
+      }
     });
     this.server.listen(this.port, "0.0.0.0", () => {
       console.error(`[dashboard] http://0.0.0.0:${this.port}`);
