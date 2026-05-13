@@ -90,9 +90,10 @@ export class ProbabilityEstimator {
     const reasoning = providerResult.reasoning_summary ?? providerResult.reasoningSummary ?? "No reasoning summary returned.";
     const generatedAt = new Date().toISOString();
 
-    const estimates = market.outcomes.map((outcome) => {
+    const estimates = market.outcomes.map((outcome, index) => {
       const label = outcome.label.toLowerCase();
-      const outcomeAiProbability = label === "no" ? clampProbability(1 - aiProbability) : aiProbability;
+      const isNoSide = label === "no" || (index === 1 && label !== "yes");
+      const outcomeAiProbability = isNoSide ? clampProbability(1 - aiProbability) : aiProbability;
       const implied = marketProbability(outcome);
       return {
         tokenId: outcome.tokenId,
