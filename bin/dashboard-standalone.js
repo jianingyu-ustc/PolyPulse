@@ -46,6 +46,7 @@ function parseLog(content) {
   let realizedPnl = 0;
   let maxDrawdown = 0;
   let highWaterMark = 0;
+  const predictionCache = new Map();
 
   for (const line of lines) {
     const parsed = parseLogLine(line);
@@ -64,10 +65,25 @@ function parseLog(content) {
       sessionStart = timestamp;
     }
 
+    if (event === "prediction" && fields.phase === "open-scan") {
+      const slug = fields.market;
+      predictionCache.set(slug, {
+        aiProbability: Number(fields.ai_probability) || null,
+        marketProbability: Number(fields.market_probability) || null
+      });
+      if (openPositions.has(slug)) {
+        const pos = openPositions.get(slug);
+        pos.aiProbability = Number(fields.ai_probability) || null;
+        pos.marketProbability = Number(fields.market_probability) || null;
+      }
+    }
+
     if (event === "open.filled") {
+      const slug = fields.market;
+      const cached = predictionCache.get(slug);
       const pos = {
-        marketId: fields.market || "",
-        question: fields.market || "",
+        marketId: slug,
+        question: slug,
         outcome: fields.outcome || "",
         openedAt: timestamp,
         endDate: null,
@@ -77,21 +93,12 @@ function parseLog(content) {
         currentPrice: Number(fields.price) || 0,
         currentValueUsd: Number(fields.cost_usd) || 0,
         unrealizedPnlUsd: 0,
-        aiProbability: null,
-        marketProbability: null,
+        aiProbability: cached?.aiProbability ?? null,
+        marketProbability: cached?.marketProbability ?? null,
         orderId: fields.order_id || ""
       };
-      openPositions.set(fields.market, pos);
+      openPositions.set(slug, pos);
       currentCash = Number(fields.cash_usd) || currentCash;
-    }
-
-    if (event === "prediction" && fields.phase === "open-scan") {
-      const slug = fields.market;
-      if (openPositions.has(slug)) {
-        const pos = openPositions.get(slug);
-        pos.aiProbability = Number(fields.ai_probability) || null;
-        pos.marketProbability = Number(fields.market_probability) || null;
-      }
     }
 
     if (event === "close.filled") {
