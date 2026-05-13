@@ -408,6 +408,8 @@ header 字段含义：
 | `open.filled` | `cost_usd` | 本次模拟开仓消耗现金。 |
 | `open.filled` | `cash_usd` | 开仓后的模拟现金余额。 |
 | `open.filled` | `order_id` | 本地模拟订单 ID，以 `sim-log-` 开头；不是 Polymarket 真实订单 ID。 |
+| `open.filled` | `end_date` | 市场到期时间（ISO 8601）；用于 dashboard 展示到期日。 |
+| `open.filled` | `market_url` | Polymarket 市场页面 URL；用于 dashboard 生成可点击链接。 |
 | `order.blocked` | `market` | 被阻断的 market slug。 |
 | `order.blocked` | `status` | 阻断后的订单状态，通常是 `blocked`。 |
 | `order.blocked` | `reason` | 订单未执行原因。 |
@@ -903,8 +905,9 @@ Codex 提示词版本：
 Monitor 运行时内嵌一个轻量 HTTP 服务器，提供实时 Web 仪表板，展示：
 
 - **摘要面板**：程序开始时间、运行天数、初始资金、当前现金/权益、已实现/未实现收益、月化/年化收益率、胜率、最大回撤
-- **持仓表格**：话题 ID、内容、开仓时间、到期时间、开仓金额、AI 预测胜率、市场预测胜率、未实现盈亏
-- **已关仓表格**：话题 ID、内容、开仓时间、关仓时间、开仓金额、收益、AI 预测胜率、市场预测胜率、收益率
+- **持仓表格**：市场（可点击跳转 Polymarket 原始页面）、方向、开仓时间、到期时间、开仓金额、AI 预测胜率、市场预测胜率、Edge、手续费、Net Edge、未实现盈亏
+- **已关仓表格**：市场（可点击跳转 Polymarket）、方向、开仓时间、关仓时间、开仓金额、Edge、手续费、Net Edge、盈亏、收益率
+- **中英文切换**：右上角按钮一键切换语言，选择持久化到 localStorage
 
 **配置（.env）：**
 
@@ -923,7 +926,14 @@ http://43.165.166.171:3847
 curl http://43.165.166.171:3847/api/data | jq .
 ```
 
-页面每 30 秒自动刷新数据。Dashboard 作为 monitor 进程的一部分运行，无需额外部署。
+页面每 30 秒自动刷新数据。Dashboard 作为 monitor 进程的一部分运行，无需额外部署。如果端口已被占用（如 standalone dashboard 进程），monitor 会打印 warning 并继续运行，dashboard 功能自动禁用。
+
+**Standalone Dashboard（不重启 monitor 时临时查看）：**
+
+```bash
+# 独立进程，读取 monitor log 文件解析仓位数据
+node bin/dashboard-standalone.js --port 3847 --log logs/polypulse-monitor.log
+```
 
 **服务器部署：**
 
@@ -935,7 +945,7 @@ cd /home/PolyPulse
 echo 'DASHBOARD_ENABLED=true' >> .env
 echo 'DASHBOARD_PORT=3847' >> .env
 
-# 开放防火墙端口
+# 开放防火墙端口（云厂商控制台开放 + OS 级别）
 ufw allow 3847/tcp
 
 # 重启服务
