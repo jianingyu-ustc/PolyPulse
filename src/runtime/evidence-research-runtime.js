@@ -425,7 +425,7 @@ export class EvidenceResearchProvider {
       if (provider === "claude-code") {
         await runClaude({ prompt, settings, repoRoot, tempDir, outputPath, schemaPath, timeoutMs });
       } else if (provider === "codex") {
-        await runCodex({ prompt, settings, repoRoot, tempDir, outputPath, schemaPath, timeoutMs });
+        await runCodex({ prompt, settings, repoRoot, tempDir, outputPath, schemaPath, timeoutMs, maxRetries: this.config.providerMaxRetries });
       } else {
         throw new Error(`unsupported_evidence_research_provider: ${provider}`);
       }

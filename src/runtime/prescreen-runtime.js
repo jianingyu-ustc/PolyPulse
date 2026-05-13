@@ -188,7 +188,8 @@ export class PreScreenProvider {
             settings,
             schemaPath: null,
             timeoutMs: this.timeoutMs,
-            configOverrides: ['model_reasoning_effort="low"']
+            configOverrides: ['model_reasoning_effort="low"'],
+            maxRetries: this.config.providerMaxRetries
           }),
           this.timeoutMs
         );

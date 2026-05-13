@@ -423,9 +423,39 @@ async function runCodex({
   outputPath,
   schemaPath,
   timeoutMs,
-  configOverrides
+  configOverrides,
+  maxRetries
 }) {
   const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
+  const retries = maxRetries != null ? maxRetries : 2;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await runCodexOnce({
+        prompt, settings, repoRoot, tempDir, outputPath, schemaPath,
+        effectiveTimeoutMs, configOverrides
+      });
+      return;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isRetryable = /capacity|overloaded|rate.?limit|503|529|too many requests/i.test(msg);
+      if (!isRetryable || attempt >= retries) throw error;
+      const delayMs = Math.min(30000, 5000 * 2 ** attempt);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+async function runCodexOnce({
+  prompt,
+  settings,
+  repoRoot,
+  tempDir,
+  outputPath,
+  schemaPath,
+  effectiveTimeoutMs,
+  configOverrides
+}) {
   const args = [
     "exec",
     "--skip-git-repo-check",
@@ -612,7 +642,8 @@ export class CodexProbabilityProvider {
         tempDir,
         outputPath,
         schemaPath,
-        timeoutMs
+        timeoutMs,
+        maxRetries: this.config.providerMaxRetries
       });
 
       const rawOutput = await readFile(outputPath, "utf8");

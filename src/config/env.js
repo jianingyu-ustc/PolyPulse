@@ -249,6 +249,8 @@ export const DEFAULTS = {
   // ─── Predict-Raven 兼容 Codex Provider 设置 ────────────────────────────────
   // Provider 子进程超时。0 = 无独立超时（使用 monitor 超时）。
   PROVIDER_TIMEOUT_SECONDS: null,
+  // Provider 满载/瞬时错误最大重试次数。默认 2。
+  PROVIDER_MAX_RETRIES: null,
   // 覆盖 Codex CLI 模型。留空 = 使用 Codex CLI 默认。
   CODEX_MODEL: null,
   // Codex 读取的 skill 文件根目录。
@@ -508,6 +510,7 @@ export async function loadEnvConfig(options = {}) {
       model: ""
     },
     providerTimeoutSeconds: Math.max(0, Math.floor(readNumber(values, "PROVIDER_TIMEOUT_SECONDS", 120))),
+    providerMaxRetries: Math.max(0, Math.floor(readNumber(values, "PROVIDER_MAX_RETRIES", 2))),
     providers: {
       codex: {
         model: values.CODEX_MODEL || "",
@@ -577,6 +580,11 @@ export function validateEnvConfig(config) {
     check("monitor.maxDailyTradeUsd", (config.monitor?.maxDailyTradeUsd ?? 0) >= 0, "MONITOR_MAX_DAILY_TRADE_USD must be >= 0."),
     check("monitor.concurrency", (config.monitor?.concurrency ?? 1) > 0, "MONITOR_CONCURRENCY must be > 0."),
     check("monitor.runTimeoutMs", (config.monitor?.runTimeoutMs ?? 1000) >= 1000, "MONITOR_RUN_TIMEOUT_MS must be >= 1000."),
+    check(
+      "monitor.runTimeoutMs_vs_provider",
+      (config.monitor?.runTimeoutMs ?? 1000) >= (config.providerTimeoutSeconds ?? 120) * ((config.providerMaxRetries ?? 2) + 1) * 1000,
+      `MONITOR_RUN_TIMEOUT_MS (${config.monitor?.runTimeoutMs}) must be >= PROVIDER_TIMEOUT_SECONDS * (PROVIDER_MAX_RETRIES + 1) * 1000 = ${(config.providerTimeoutSeconds ?? 120) * ((config.providerMaxRetries ?? 2) + 1) * 1000}.`
+    ),
     check("artifacts.retentionDays", (config.artifacts?.retentionDays ?? 0) >= 0, "ARTIFACT_RETENTION_DAYS must be >= 0."),
     check("artifacts.maxRuns", (config.artifacts?.maxRuns ?? 0) >= 0, "ARTIFACT_MAX_RUNS must be >= 0.")
   ];
