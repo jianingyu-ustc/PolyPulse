@@ -26,7 +26,7 @@ function parseLogLine(line) {
   if (!match) return null;
   const [, timestamp, event, rest] = match;
   const fields = {};
-  for (const pair of rest.matchAll(/(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)/g)) {
+  for (const pair of rest.matchAll(/(\w+)=("(?:[^"\\]|\\.)*"|(?:[^\s](?:(?!\s\w+=).)*)?\S)/g)) {
     let val = pair[2];
     if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
     fields[pair[1]] = val;
@@ -69,12 +69,22 @@ function parseLog(content) {
       const slug = fields.market;
       predictionCache.set(slug, {
         aiProbability: Number(fields.ai_probability) || null,
-        marketProbability: Number(fields.market_probability) || null
+        marketProbability: Number(fields.market_probability) || null,
+        side: fields.side || null,
+        edge: Number(fields.edge) || null,
+        netEdge: Number(fields.net_edge) || null,
+        quarterKellyPct: Number(fields.quarter_kelly_pct) || null,
+        monthlyReturn: Number(fields.monthly_return) || null
       });
       if (openPositions.has(slug)) {
         const pos = openPositions.get(slug);
         pos.aiProbability = Number(fields.ai_probability) || null;
         pos.marketProbability = Number(fields.market_probability) || null;
+        pos.side = fields.side || pos.side;
+        pos.edge = Number(fields.edge) || null;
+        pos.netEdge = Number(fields.net_edge) || null;
+        pos.quarterKellyPct = Number(fields.quarter_kelly_pct) || null;
+        pos.monthlyReturn = Number(fields.monthly_return) || null;
       }
     }
 
@@ -85,6 +95,7 @@ function parseLog(content) {
         marketId: slug,
         question: slug,
         outcome: fields.outcome || "",
+        side: cached?.side || "",
         openedAt: timestamp,
         endDate: null,
         costUsd: Number(fields.cost_usd) || 0,
@@ -95,6 +106,10 @@ function parseLog(content) {
         unrealizedPnlUsd: 0,
         aiProbability: cached?.aiProbability ?? null,
         marketProbability: cached?.marketProbability ?? null,
+        edge: cached?.edge ?? null,
+        netEdge: cached?.netEdge ?? null,
+        quarterKellyPct: cached?.quarterKellyPct ?? null,
+        monthlyReturn: cached?.monthlyReturn ?? null,
         orderId: fields.order_id || ""
       };
       openPositions.set(slug, pos);
@@ -109,6 +124,7 @@ function parseLog(content) {
         marketId: slug,
         question: slug,
         outcome: pos?.outcome ?? fields.outcome ?? "",
+        side: pos?.side ?? "",
         openedAt: pos?.openedAt ?? null,
         closedAt: timestamp,
         costUsd: pos?.costUsd ?? 0,
@@ -116,7 +132,9 @@ function parseLog(content) {
         returnPct: pos?.costUsd > 0 ? pnl / pos.costUsd : null,
         closeReason: fields.reason || "",
         aiProbability: pos?.aiProbability ?? null,
-        marketProbability: pos?.marketProbability ?? null
+        marketProbability: pos?.marketProbability ?? null,
+        edge: pos?.edge ?? null,
+        netEdge: pos?.netEdge ?? null
       };
       closedTrades.push(closed);
       openPositions.delete(slug);
@@ -211,19 +229,26 @@ async function getData() {
       marketId: p.marketId,
       question: p.question,
       outcome: p.outcome,
+      side: p.side || "",
       openedAt: p.openedAt,
       endDate: p.endDate,
       costUsd: p.costUsd,
       currentValueUsd: p.currentValueUsd,
       unrealizedPnlUsd: p.unrealizedPnlUsd,
       aiProbability: p.aiProbability,
-      marketProbability: p.marketProbability
+      marketProbability: p.marketProbability,
+      edge: p.edge,
+      netEdge: p.netEdge,
+      feeImpact: p.edge != null && p.netEdge != null ? p.edge - p.netEdge : null,
+      quarterKellyPct: p.quarterKellyPct,
+      monthlyReturn: p.monthlyReturn
     })),
     closedPositions: log.closedTrades.slice(-100).reverse().map(t => ({
       positionId: t.marketId,
       marketId: t.marketId,
       question: t.question,
       outcome: t.outcome,
+      side: t.side || "",
       openedAt: t.openedAt,
       closedAt: t.closedAt,
       costUsd: t.costUsd,
@@ -231,7 +256,10 @@ async function getData() {
       returnPct: t.returnPct,
       closeReason: t.closeReason,
       aiProbability: t.aiProbability,
-      marketProbability: t.marketProbability
+      marketProbability: t.marketProbability,
+      edge: t.edge,
+      netEdge: t.netEdge,
+      feeImpact: t.edge != null && t.netEdge != null ? t.edge - t.netEdge : null
     }))
   };
 }
