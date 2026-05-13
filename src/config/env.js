@@ -236,6 +236,12 @@ export const DEFAULTS = {
   // 逗号分隔的市场 slug，始终排除。
   MONITOR_BLOCKLIST: null,
 
+  // ─── Dashboard 设置 ────────────────────────────────────────────────────────
+  // 是否在 monitor 运行时启动内嵌 Web 仪表板。"true" 或 "false"。
+  DASHBOARD_ENABLED: null,
+  // 仪表板 HTTP 服务器监听端口。
+  DASHBOARD_PORT: null,
+
   // ─── 产物保留 ──────────────────────────────────────────────────────────────
   // 运行时产物保留天数，超过后清理。
   ARTIFACT_RETENTION_DAYS: null,
@@ -494,6 +500,10 @@ export async function loadEnvConfig(options = {}) {
       gapTotalBudgetMs: Math.max(1000, Math.floor(readNumber(values, "EVIDENCE_GAP_TOTAL_BUDGET_MS", 30000))),
       gapMaxPerMarket: Math.max(1, Math.floor(readNumber(values, "EVIDENCE_GAP_MAX_PER_MARKET", 3))),
       minEvidenceItems: Math.max(0, Math.floor(readNumber(values, "MIN_EVIDENCE_ITEMS", 2)))
+    },
+    dashboard: {
+      enabled: String(values.DASHBOARD_ENABLED ?? "false").toLowerCase() === "true",
+      port: Math.max(1, Math.floor(readNumber(values, "DASHBOARD_PORT", 3847)))
     },
     calibration: {
       enabled: String(values.PULSE_CALIBRATION_ENABLED ?? "true").toLowerCase() !== "false",

@@ -365,6 +365,9 @@ async function commandMonitorRun(args) {
     reason: result.reason,
     error: result.error
   });
+  const cleanup = () => { scheduler.dashboardServer?.stop(); };
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
   const result = await scheduler.monitorLoop({
     confirmation: option(args, "--confirm"),
     rounds,

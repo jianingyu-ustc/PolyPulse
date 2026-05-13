@@ -897,3 +897,50 @@ Codex 提示词版本：
 4. 请把 /home/PolyPulse/.env 权限设置为 600，启动 systemd monitor 服务，并执行 status 和 healthcheck。
 5. 请查看 systemd journal、/home/PolyPulse/logs/polypulse-monitor.log、account audit 和 market topics --quick 输出，确认部署后仍读取当前 Polymarket 真实市场且真实账户检查通过。
 ```
+
+### Web Dashboard（监控仪表板）
+
+Monitor 运行时内嵌一个轻量 HTTP 服务器，提供实时 Web 仪表板，展示：
+
+- **摘要面板**：程序开始时间、运行天数、初始资金、当前现金/权益、已实现/未实现收益、月化/年化收益率、胜率、最大回撤
+- **持仓表格**：话题 ID、内容、开仓时间、到期时间、开仓金额、AI 预测胜率、市场预测胜率、未实现盈亏
+- **已关仓表格**：话题 ID、内容、开仓时间、关仓时间、开仓金额、收益、AI 预测胜率、市场预测胜率、收益率
+
+**配置（.env）：**
+
+```bash
+DASHBOARD_ENABLED=true
+DASHBOARD_PORT=3847
+```
+
+**访问方式：**
+
+```bash
+# 浏览器
+http://43.165.166.171:3847
+
+# 终端浏览器
+curl http://43.165.166.171:3847/api/data | jq .
+```
+
+页面每 30 秒自动刷新数据。Dashboard 作为 monitor 进程的一部分运行，无需额外部署。
+
+**服务器部署：**
+
+```bash
+ssh root@43.165.166.171
+cd /home/PolyPulse
+
+# 在 .env 中添加
+echo 'DASHBOARD_ENABLED=true' >> .env
+echo 'DASHBOARD_PORT=3847' >> .env
+
+# 开放防火墙端口
+ufw allow 3847/tcp
+
+# 重启服务
+systemctl restart polypulse-monitor.service
+
+# 验证
+curl http://localhost:3847/api/data
+```

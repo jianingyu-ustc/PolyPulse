@@ -19,6 +19,8 @@ import { DynamicFeeService } from "../core/dynamic-fee-service.js";
 import { LiveBroker } from "../brokers/live-broker.js";
 import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
+import { DashboardServer } from "../dashboard/dashboard-server.js";
+import { createPaperDataProvider, createLiveDataProvider } from "../dashboard/data-provider.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -309,6 +311,15 @@ export class Scheduler {
       : null;
     this._ledgerInitialized = false;
     this._monitorRoundCount = 0;
+    this._startedAt = new Date().toISOString();
+    this.dashboardServer = null;
+    if (config.dashboard?.enabled) {
+      const dataProvider = this.simulatedLedger
+        ? createPaperDataProvider(this)
+        : createLiveDataProvider(this.stateStore, this);
+      this.dashboardServer = new DashboardServer({ config, dataProvider });
+      this.dashboardServer.start();
+    }
   }
 
   async _ensureLedgerCash() {
