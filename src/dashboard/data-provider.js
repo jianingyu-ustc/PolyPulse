@@ -21,15 +21,21 @@ function formatPosition(pos) {
   return {
     positionId: pos.positionId ?? pos.marketId,
     marketId: pos.marketId,
+    marketUrl: pos.marketUrl ?? null,
     question: pos.question ?? pos.marketSlug ?? "",
     outcome: pos.outcome ?? "",
+    side: pos.side ?? "",
     openedAt: pos.openedAt ?? null,
     endDate: pos.endDate ?? null,
     costUsd: pos.costUsd ?? 0,
     currentValueUsd: pos.currentValueUsd ?? 0,
     unrealizedPnlUsd: pos.unrealizedPnlUsd ?? 0,
     aiProbability: pos.lastDecision?.aiProbability ?? null,
-    marketProbability: pos.lastDecision?.marketProbability ?? null
+    marketProbability: pos.lastDecision?.marketProbability ?? null,
+    edge: pos.lastDecision?.edge ?? pos.lastDecision?.grossEdge ?? null,
+    netEdge: pos.lastDecision?.netEdge ?? null,
+    feeImpact: pos.lastDecision?.edge != null && pos.lastDecision?.netEdge != null
+      ? pos.lastDecision.edge - pos.lastDecision.netEdge : null
   };
 }
 
@@ -37,8 +43,10 @@ function formatClosedTrade(trade) {
   return {
     positionId: trade.positionId ?? trade.marketId,
     marketId: trade.marketId,
+    marketUrl: trade.marketUrl ?? null,
     question: trade.question ?? trade.marketSlug ?? "",
     outcome: trade.outcome ?? "",
+    side: trade.side ?? "",
     openedAt: trade.openedAt ?? null,
     closedAt: trade.closedAt ?? null,
     costUsd: trade.costUsd ?? 0,
@@ -46,7 +54,11 @@ function formatClosedTrade(trade) {
     returnPct: trade.returnPct ?? null,
     closeReason: trade.closeReason ?? "",
     aiProbability: trade.lastDecision?.aiProbability ?? null,
-    marketProbability: trade.lastDecision?.marketProbability ?? null
+    marketProbability: trade.lastDecision?.marketProbability ?? null,
+    edge: trade.lastDecision?.edge ?? trade.lastDecision?.grossEdge ?? null,
+    netEdge: trade.lastDecision?.netEdge ?? null,
+    feeImpact: trade.lastDecision?.edge != null && trade.lastDecision?.netEdge != null
+      ? trade.lastDecision.edge - trade.lastDecision.netEdge : null
   };
 }
 

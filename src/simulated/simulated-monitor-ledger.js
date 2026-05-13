@@ -250,6 +250,7 @@ export class SimulatedMonitorLedger {
       eventId: market.eventId,
       eventSlug: market.eventSlug,
       question: market.question,
+      marketUrl: market.marketUrl ?? null,
       tokenId: decision.tokenId,
       outcome: outcome?.label ?? decision.suggested_side ?? "unknown",
       side: normalizeSide(decision.suggested_side),
@@ -264,6 +265,7 @@ export class SimulatedMonitorLedger {
       lastDecision: {
         aiProbability: decision.aiProbability,
         marketProbability: decision.marketProbability,
+        edge: decision.edge ?? decision.grossEdge ?? null,
         netEdge: decision.netEdge,
         monthlyReturn: decision.monthlyReturn
       }
@@ -291,7 +293,9 @@ export class SimulatedMonitorLedger {
       size: position.size,
       cost_usd: position.costUsd,
       cash_usd: this.cashUsd,
-      order_id: order.orderId
+      order_id: order.orderId,
+      end_date: market.endDate ?? "",
+      market_url: market.marketUrl ?? ""
     });
     return order;
   }

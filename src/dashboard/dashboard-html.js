@@ -10,6 +10,9 @@ export function renderDashboardHtml() {
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace;background:#0d1117;color:#c9d1d9;padding:16px;line-height:1.5}
 h1{font-size:1.4em;color:#58a6ff;margin-bottom:8px}
 h2{font-size:1.1em;color:#8b949e;margin:20px 0 8px;border-bottom:1px solid #21262d;padding-bottom:4px}
+.header{display:flex;justify-content:space-between;align-items:center}
+.lang-btn{background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8em}
+.lang-btn:hover{color:#c9d1d9;border-color:#58a6ff}
 .meta{color:#8b949e;font-size:0.85em;margin-bottom:16px}
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 .card{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:12px}
@@ -21,61 +24,183 @@ table{width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:16px}
 th{background:#161b22;color:#8b949e;text-align:left;padding:8px 6px;border-bottom:1px solid #21262d;white-space:nowrap}
 td{padding:8px 6px;border-bottom:1px solid #21262d;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 tr:hover td{background:#161b22}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
 .refresh{color:#8b949e;font-size:0.75em;margin-top:8px}
 @media(max-width:600px){.summary{grid-template-columns:1fr 1fr}td,th{padding:4px 3px;font-size:0.78em}}
 </style>
 </head>
 <body>
-<h1>PolyPulse Monitor</h1>
+<div class="header">
+  <h1>PolyPulse Monitor</h1>
+  <button class="lang-btn" id="lang-btn" onclick="toggleLang()">EN</button>
+</div>
 <div class="meta" id="meta">Loading...</div>
 
 <div class="summary" id="summary"></div>
 
-<h2>Open Positions</h2>
-<div style="overflow-x:auto"><table id="open-table"><thead><tr>
-<th>Topic ID</th><th>Content</th><th>Side</th><th>Open Time</th><th>Expiry</th><th>Amount</th><th>AI Prob</th><th>Mkt Prob</th><th>Edge</th><th>Fee</th><th>Net Edge</th><th>PnL</th>
+<h2 id="h-open">Open Positions</h2>
+<div style="overflow-x:auto"><table id="open-table"><thead><tr id="open-head">
 </tr></thead><tbody id="open-body"></tbody></table></div>
 
-<h2>Closed Positions</h2>
-<div style="overflow-x:auto"><table id="closed-table"><thead><tr>
-<th>Topic ID</th><th>Content</th><th>Side</th><th>Open Time</th><th>Close Time</th><th>Amount</th><th>Edge</th><th>Fee</th><th>Net Edge</th><th>PnL</th><th>Return</th>
+<h2 id="h-closed">Closed Positions</h2>
+<div style="overflow-x:auto"><table id="closed-table"><thead><tr id="closed-head">
 </tr></thead><tbody id="closed-body"></tbody></table></div>
 
 <div class="refresh" id="refresh"></div>
 
 <script>
+var lang = localStorage.getItem('pp_lang') || 'zh';
+
+var i18n = {
+  zh: {
+    title: 'PolyPulse Monitor',
+    toggleBtn: 'EN',
+    loading: '加载中...',
+    hOpen: '持仓中',
+    hClosed: '已关仓',
+    noOpen: '暂无持仓',
+    noClosed: '暂无已关仓',
+    mode: '模式',
+    started: '启动',
+    startTime: '启动时间',
+    runDays: '运行天数',
+    initFund: '初始资金',
+    cash: '现金',
+    equity: '总权益',
+    unrealPnl: '未实现盈亏',
+    realPnl: '已实现盈亏',
+    monthRet: '月化收益',
+    annRet: '年化收益',
+    winRate: '胜率',
+    wl: '胜/负',
+    maxDd: '最大回撤',
+    thMarket: '市场',
+    thSide: '方向',
+    thOpenTime: '开仓时间',
+    thExpiry: '到期时间',
+    thAmount: '金额',
+    thAiProb: 'AI概率',
+    thMktProb: '市场概率',
+    thEdge: 'Edge',
+    thFee: '手续费',
+    thNetEdge: 'Net Edge',
+    thPnl: '盈亏',
+    thCloseTime: '关仓时间',
+    thReturn: '收益率',
+    lastRefresh: '上次刷新',
+    refreshFail: '刷新失败',
+    days: '天'
+  },
+  en: {
+    title: 'PolyPulse Monitor',
+    toggleBtn: '中文',
+    loading: 'Loading...',
+    hOpen: 'Open Positions',
+    hClosed: 'Closed Positions',
+    noOpen: 'No open positions',
+    noClosed: 'No closed positions',
+    mode: 'Mode',
+    started: 'Started',
+    startTime: 'Start Time',
+    runDays: 'Running Days',
+    initFund: 'Initial Fund',
+    cash: 'Cash',
+    equity: 'Equity',
+    unrealPnl: 'Unrealized PnL',
+    realPnl: 'Realized PnL',
+    monthRet: 'Monthly Return',
+    annRet: 'Annual Return',
+    winRate: 'Win Rate',
+    wl: 'W/L',
+    maxDd: 'Max Drawdown',
+    thMarket: 'Market',
+    thSide: 'Side',
+    thOpenTime: 'Open Time',
+    thExpiry: 'Expiry',
+    thAmount: 'Amount',
+    thAiProb: 'AI Prob',
+    thMktProb: 'Mkt Prob',
+    thEdge: 'Edge',
+    thFee: 'Fee',
+    thNetEdge: 'Net Edge',
+    thPnl: 'PnL',
+    thCloseTime: 'Close Time',
+    thReturn: 'Return',
+    lastRefresh: 'Last refresh',
+    refreshFail: 'Refresh failed',
+    days: ' days'
+  }
+};
+
+function t(key){ return i18n[lang][key] || key; }
+
+function toggleLang(){
+  lang = lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('pp_lang', lang);
+  document.getElementById('lang-btn').textContent = t('toggleBtn');
+  renderAll();
+}
+
 function fmt(n,d){return n==null?'-':Number(n).toFixed(d??2)}
 function pct(n){return n==null?'-':(Number(n)*100).toFixed(2)+'%'}
 function ts(s){if(!s)return'-';const d=new Date(s);return d.toLocaleDateString('zh-CN')+' '+d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}
 function cls(n){return n>0?'positive':n<0?'negative':''}
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function marketLink(p){
+  var url = p.marketUrl;
+  if(!url && p.marketId){
+    url = 'https://polymarket.com/event/' + encodeURIComponent(p.marketId);
+  }
+  var label = (p.question || p.marketId || '-');
+  if(label.length > 40) label = label.slice(0,38) + '..';
+  if(url) return '<a href="'+esc(url)+'" target="_blank" title="'+esc(p.question||p.marketId)+'">'+esc(label)+'</a>';
+  return '<span title="'+esc(p.question||p.marketId)+'">'+esc(label)+'</span>';
+}
+
+var _data = null;
+
+function renderAll(){
+  document.getElementById('h-open').textContent = t('hOpen');
+  document.getElementById('h-closed').textContent = t('hClosed');
+  document.getElementById('open-head').innerHTML =
+    '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thExpiry'),t('thAmount'),t('thAiProb'),t('thMktProb'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl')].join('</th><th>')+'</th>';
+  document.getElementById('closed-head').innerHTML =
+    '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thCloseTime'),t('thAmount'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl'),t('thReturn')].join('</th><th>')+'</th>';
+  if(_data){
+    document.getElementById('meta').textContent = t('mode')+': '+_data.executionMode+' | '+t('started')+': '+ts(_data.startedAt);
+    renderSummary(_data.summary||{});
+    renderOpen(_data.openPositions||[]);
+    renderClosed(_data.closedPositions||[]);
+  }
+}
 
 function renderSummary(s){
-  const items=[
-    ['Start Time',ts(window._data?.startedAt)],
-    ['Running Days',fmt(s.elapsedDays,1)+' days'],
-    ['Initial Fund','$'+fmt(s.initialCashUsd)],
-    ['Cash','$'+fmt(s.cashUsd)],
-    ['Equity','$'+fmt(s.totalEquityUsd)],
-    ['Unrealized PnL','$'+fmt(s.unrealizedPnlUsd),cls(s.unrealizedPnlUsd)],
-    ['Realized PnL','$'+fmt(s.realizedPnlUsd),cls(s.realizedPnlUsd)],
-    ['Monthly Return',pct(s.monthlyReturnPct),cls(s.monthlyReturnPct)],
-    ['Annual Return',pct(s.annualReturnPct),cls(s.annualReturnPct)],
-    ['Win Rate',s.winRate!=null?pct(s.winRate):'-'],
-    ['W/L',s.wins+'/'+s.losses],
-    ['Max Drawdown','$'+fmt(s.maxDrawdownUsd),'negative']
+  var items=[
+    [t('startTime'),ts(window._data?.startedAt)],
+    [t('runDays'),fmt(s.elapsedDays,1)+t('days')],
+    [t('initFund'),'$'+fmt(s.initialCashUsd)],
+    [t('cash'),'$'+fmt(s.cashUsd)],
+    [t('equity'),'$'+fmt(s.totalEquityUsd)],
+    [t('unrealPnl'),'$'+fmt(s.unrealizedPnlUsd),cls(s.unrealizedPnlUsd)],
+    [t('realPnl'),'$'+fmt(s.realizedPnlUsd),cls(s.realizedPnlUsd)],
+    [t('monthRet'),pct(s.monthlyReturnPct),cls(s.monthlyReturnPct)],
+    [t('annRet'),pct(s.annualReturnPct),cls(s.annualReturnPct)],
+    [t('winRate'),s.winRate!=null?pct(s.winRate):'-'],
+    [t('wl'),s.wins+'/'+s.losses],
+    [t('maxDd'),'$'+fmt(s.maxDrawdownUsd),'negative']
   ];
-  document.getElementById('summary').innerHTML=items.map(([l,v,c])=>
-    '<div class="card"><div class="label">'+l+'</div><div class="value '+(c||'')+'">'+v+'</div></div>'
-  ).join('');
+  document.getElementById('summary').innerHTML=items.map(function(a){
+    return '<div class="card"><div class="label">'+a[0]+'</div><div class="value '+(a[2]||'')+'">'+a[1]+'</div></div>';
+  }).join('');
 }
 
 function renderOpen(positions){
-  const tbody=document.getElementById('open-body');
-  if(!positions.length){tbody.innerHTML='<tr><td colspan="12" style="color:#8b949e">No open positions</td></tr>';return}
-  tbody.innerHTML=positions.map(p=>'<tr>'+
-    '<td>'+((p.marketId||'').slice(0,8))+'</td>'+
-    '<td title="'+(p.question||'').replace(/"/g,'&quot;')+'">'+(p.question||'-')+'</td>'+
-    '<td>'+(p.outcome||'-')+'</td>'+
+  var tbody=document.getElementById('open-body');
+  if(!positions.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">'+t('noOpen')+'</td></tr>';return}
+  tbody.innerHTML=positions.map(function(p){return '<tr>'+
+    '<td>'+marketLink(p)+'</td>'+
+    '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.endDate)+'</td>'+
     '<td>$'+fmt(p.costUsd)+'</td>'+
@@ -85,42 +210,41 @@ function renderOpen(positions){
     '<td class="negative">'+(p.feeImpact!=null?pct(p.feeImpact):'-')+'</td>'+
     '<td class="positive">'+(p.netEdge!=null?pct(p.netEdge):'-')+'</td>'+
     '<td class="'+cls(p.unrealizedPnlUsd)+'">$'+fmt(p.unrealizedPnlUsd)+'</td>'+
-  '</tr>').join('');
+  '</tr>'}).join('');
 }
 
 function renderClosed(trades){
-  const tbody=document.getElementById('closed-body');
-  if(!trades.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">No closed positions</td></tr>';return}
-  tbody.innerHTML=trades.map(t=>'<tr>'+
-    '<td>'+((t.marketId||'').slice(0,8))+'</td>'+
-    '<td title="'+(t.question||'').replace(/"/g,'&quot;')+'">'+(t.question||'-')+'</td>'+
-    '<td>'+(t.outcome||'-')+'</td>'+
-    '<td>'+ts(t.openedAt)+'</td>'+
-    '<td>'+ts(t.closedAt)+'</td>'+
-    '<td>$'+fmt(t.costUsd)+'</td>'+
-    '<td class="positive">'+(t.edge!=null?pct(t.edge):'-')+'</td>'+
-    '<td class="negative">'+(t.feeImpact!=null?pct(t.feeImpact):'-')+'</td>'+
-    '<td class="positive">'+(t.netEdge!=null?pct(t.netEdge):'-')+'</td>'+
-    '<td class="'+cls(t.realizedPnlUsd)+'">$'+fmt(t.realizedPnlUsd)+'</td>'+
-    '<td class="'+cls(t.returnPct)+'">'+(t.returnPct!=null?pct(t.returnPct):'-')+'</td>'+
-  '</tr>').join('');
+  var tbody=document.getElementById('closed-body');
+  if(!trades.length){tbody.innerHTML='<tr><td colspan="10" style="color:#8b949e">'+t('noClosed')+'</td></tr>';return}
+  tbody.innerHTML=trades.map(function(p){return '<tr>'+
+    '<td>'+marketLink(p)+'</td>'+
+    '<td>'+(p.side||p.outcome||'-')+'</td>'+
+    '<td>'+ts(p.openedAt)+'</td>'+
+    '<td>'+ts(p.closedAt)+'</td>'+
+    '<td>$'+fmt(p.costUsd)+'</td>'+
+    '<td class="positive">'+(p.edge!=null?pct(p.edge):'-')+'</td>'+
+    '<td class="negative">'+(p.feeImpact!=null?pct(p.feeImpact):'-')+'</td>'+
+    '<td class="positive">'+(p.netEdge!=null?pct(p.netEdge):'-')+'</td>'+
+    '<td class="'+cls(p.realizedPnlUsd)+'">$'+fmt(p.realizedPnlUsd)+'</td>'+
+    '<td class="'+cls(p.returnPct)+'">'+(p.returnPct!=null?pct(p.returnPct):'-')+'</td>'+
+  '</tr>'}).join('');
 }
 
 async function refresh(){
   try{
-    const res=await fetch('/api/data');
-    const data=await res.json();
+    var res=await fetch('/api/data');
+    var data=await res.json();
+    _data=data;
     window._data=data;
-    document.getElementById('meta').textContent=
-      'Mode: '+data.executionMode+' | Started: '+ts(data.startedAt);
-    renderSummary(data.summary||{});
-    renderOpen(data.openPositions||[]);
-    renderClosed(data.closedPositions||[]);
-    document.getElementById('refresh').textContent='Last refresh: '+new Date().toLocaleTimeString();
+    renderAll();
+    document.getElementById('refresh').textContent=t('lastRefresh')+': '+new Date().toLocaleTimeString();
   }catch(e){
-    document.getElementById('refresh').textContent='Refresh failed: '+e.message;
+    document.getElementById('refresh').textContent=t('refreshFail')+': '+e.message;
   }
 }
+
+document.getElementById('lang-btn').textContent = t('toggleBtn');
+renderAll();
 refresh();
 setInterval(refresh,30000);
 </script>
