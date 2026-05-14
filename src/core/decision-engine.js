@@ -62,7 +62,9 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
     return null;
   }
 
-  const aiProbability = round(outcomeEstimate.aiProbability);
+  const aiProbability = outcomeEstimate.calibratedProbability != null
+    ? round(outcomeEstimate.calibratedProbability)
+    : round(outcomeEstimate.aiProbability);
   const grossEdge = round(aiProbability - implied);
   const netEdge = round(grossEdge - FEE_ALLOWANCE - SLIPPAGE_ALLOWANCE);
   const notional = suggestedNotional({ portfolio, netEdge, amountUsd });
@@ -99,7 +101,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   });
 }
 
-export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0 }) {
+export function buildPulseTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0, lowConfidenceMinEdge = 0 }) {
   const wantedSide = normalizeSide(side);
   const outcome = outcomeForSide(market, wantedSide);
   const outcomeEstimate = estimateForSide(estimate, wantedSide);
@@ -108,7 +110,10 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     return null;
   }
 
-  const aiProbability = round(outcomeEstimate.aiProbability);
+  const aiProbability = outcomeEstimate.calibratedProbability != null
+    ? round(outcomeEstimate.calibratedProbability)
+    : round(outcomeEstimate.aiProbability);
+  const confidence = outcomeEstimate.confidence ?? estimate.confidence;
   const bankrollUsd = Number(portfolio?.totalEquityUsd ?? amountUsd ?? 0);
   const plan = buildPulseTradePlan({
     market,
@@ -118,7 +123,9 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     bankrollUsd,
     nowMs,
     dynamicFeeParams,
-    minNetEdge
+    minNetEdge,
+    confidence,
+    lowConfidenceMinEdge
   });
   const notional = plan.suggestedNotionalUsd;
   const expectedValue = round(plan.netEdge * notional, 4);
@@ -170,10 +177,11 @@ export class DecisionEngine {
 
   analyze({ market, estimate, portfolio = null, amountUsd = 1, dynamicFeeParams = null }) {
     const minNetEdge = this.config.pulse?.minNetEdge ?? 0;
+    const lowConfidenceMinEdge = this.config.pulse?.lowConfidenceMinEdge ?? 0;
     const buildCandidate = this.pulseDirect ? buildPulseTradeCandidate : buildTradeCandidate;
     const candidates = [
-      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd, dynamicFeeParams, minNetEdge }),
-      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd, dynamicFeeParams, minNetEdge })
+      buildCandidate({ market, estimate, side: "yes", portfolio, amountUsd, dynamicFeeParams, minNetEdge, lowConfidenceMinEdge }),
+      buildCandidate({ market, estimate, side: "no", portfolio, amountUsd, dynamicFeeParams, minNetEdge, lowConfidenceMinEdge })
     ];
     const candidate = this.pulseDirect
       ? candidates.filter(Boolean).sort((a, b) => (b.monthlyReturn ?? -Infinity) - (a.monthlyReturn ?? -Infinity))[0] ?? null
@@ -207,8 +215,9 @@ export class DecisionEngine {
 
   decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null, dynamicFeeParams = null }) {
     const minNetEdge = this.config.pulse?.minNetEdge ?? 0;
+    const lowConfidenceMinEdge = this.config.pulse?.lowConfidenceMinEdge ?? 0;
     const candidate = this.pulseDirect
-      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams, minNetEdge })
+      ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams, minNetEdge, lowConfidenceMinEdge })
       : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
     const common = {
       marketId: market.marketId,

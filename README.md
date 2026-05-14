@@ -57,7 +57,7 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - 证据收集阶段在规则适配器完成后，调用 AI Evidence Research runtime（EvidenceResearchProvider，60 秒超时）：AI 接收已收集的全部证据和市场上下文，评估证据充分性（sufficient/needs_more/critical_gap），识别具体信息缺口，输出最多 5 个定向搜索查询（含 category、rationale、priority），由代码执行搜索后将结果合并到证据池传给概率估算。失败时回退到 legacy gap-fill。这对齐了 Predict-Raven 的 AI-in-the-loop 证据研究流水线，AI 主动指导研究方向而非被动接收适配器输出。
 - `monitor run` 开始时会调用 AI Topic Discovery runtime（60 秒超时），让 provider 基于当前新闻、体育、宏观、加密等外部信号主动发现可能被规则预筛遗漏的新话题，并输出 Polymarket 搜索关键词映射。这对齐了 Predict-Raven 的 AI 外部信号话题发现能力。
 - Topic Discovery 完成后，SemanticDiscoveryRuntime 会自动将发现的话题 search_terms 在 Polymarket 全市场列表中做 token-based 匹配、语义聚类和重复事件合并，新发现的市场加入候选池参与后续 pre-screen 和 triage。这对齐了 Predict-Raven 的全市场语义发现和机会地图能力。
-- 概率校准层（ProbabilityCalibrationLayer）在 AI 概率估算之后、决策引擎之前运行，根据 confidence、researchability、information_advantage、evidence freshness、evidence count、liquidity、days-to-resolution 和 pre-screen 分类对原始概率做 shrinkage 校准（向 0.5 先验收缩），输出 rawProbability、calibratedProbability 和 calibrationReasons。这对齐了 Predict-Raven 的概率校准系统基础。
+- 概率校准层（ProbabilityCalibrationLayer）在 AI 概率估算之后、决策引擎之前运行，根据 confidence、researchability、information_advantage、evidence freshness、evidence count、liquidity、days-to-resolution 和 pre-screen 分类对原始概率做 shrinkage 校准（向 0.5 先验收缩），输出 rawProbability、calibratedProbability 和 calibrationReasons。**DecisionEngine 使用 calibratedProbability 作为交易决策的概率输入**，防止 LLM 概率下限倾向（如无法区分 0.2% 和 5%）导致在极端低概率市场上错误开仓。校准后概率 clamp 范围为 [0.01, 0.99]。
 - 动态校准存储（DynamicCalibrationStore）记录每次预测结果和实际结算，按概率桶计算 Brier score，生成动态校准曲线（isotonic regression 近似）；支持按 category、confidence 维度的分维度校准，数据不足时回退到静态校准。这对齐了 Predict-Raven 的 Brier score 反馈环动态校准机制。
 - 收益归因引擎（ReturnAttributionEngine）将每笔平仓的最终 P&L 分解为 7 个独立因子：prediction_error、market_price_change、fee_impact、slippage_impact、position_size_impact、holding_period_impact 和 exit_decision_impact，每个因子以 USD 贡献量化，支持跨仓位聚合统计。这对齐了 Predict-Raven 的收益归因系统。
 - 候选排序增加了 Downside Risk Ranking（DownsideRiskRanker）：在原有 monthly return / net edge / Kelly 排序基础上，计算每个机会的下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本比例、边际递减），输出 risk-adjusted score 用于最终排序。这对齐了 Predict-Raven 的 downside risk ranking 和 cross-round capital allocation。
@@ -124,8 +124,10 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
    ```
    其中 `bankrollUsd` = 组合总权益（`portfolio.totalEquityUsd`）。
 6. **Monthly return**：`monthlyReturn = netEdge / (daysToResolution / 30)`，其中 `daysToResolution` 取 `market.endDate` 距当前的天数（无 endDate 时回退 180 天）。同样的 net edge，短期市场月化收益更高。
-7. **开仓条件**：`quarterKellyUsd > 0 && netEdge > 0 && netEdge >= PULSE_MIN_NET_EDGE` 时 `action=open`，否则 `skip`。
+7. **开仓条件**：`quarterKellyUsd > 0 && netEdge > 0 && netEdge >= PULSE_MIN_NET_EDGE` 时 `action=open`，否则 `skip`。低置信度时 `effectiveMinEdge = max(PULSE_MIN_NET_EDGE, PULSE_LOW_CONFIDENCE_MIN_EDGE)`。
 8. **选择方向**：两侧均计算完毕后，选 `monthlyReturn` 最高且 `action=open` 的方向作为最终候选。
+
+**概率校准**：DecisionEngine 优先使用 `calibratedProbability`（经 ProbabilityCalibrationLayer 向 0.5 shrinkage 后的值），仅在校准未启用时回退到 raw `aiProbability`。校准后概率被 clamp 到 `[PULSE_PROBABILITY_CLAMP_MIN, PULSE_PROBABILITY_CLAMP_MAX]`（默认 [0.01, 0.99]）。
 
 DecisionEngine 输出的 `suggestedNotionalUsd` 是风控前的建议金额上限。
 
@@ -140,6 +142,7 @@ RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT
 | 事件敞口上限 | `MAX_EVENT_EXPOSURE_PCT` | `portfolioEquity × maxEventExposurePct - eventExposure` | 同一事件不超过总资金的 N% |
 | 流动性上限 | `LIQUIDITY_TRADE_CAP_PCT` | `market.liquidityUsd × liquidityTradeCapPct` | 单笔不超过市场流动性的 N% |
 | 滑点上限 | `RISK_MAX_PRICE_IMPACT_PCT` | `walkAskBook` 遍历 ask book，计算 4% price impact 内的最大 notional | 防止滑点吃掉 edge |
+| 置信度缩放 | `RISK_LOW_CONFIDENCE_SIZE_FACTOR` / `RISK_MEDIUM_CONFIDENCE_SIZE_FACTOR` | `suggestedUsd × factor`（low=0.25, medium=0.6, high=1.0） | 低置信度限制仓位规模 |
 | 交易所最小单 | `RISK_EXCHANGE_MIN_ORDER_CHECK` | `shares = amountUsd / bestAsk >= minOrderSize` | 不满足则阻断 |
 | 最小交易金额 | `MIN_TRADE_USD` | 约束后金额 < `MIN_TRADE_USD` 则阻断 | 避免过小订单 |
 
@@ -152,6 +155,7 @@ RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT
 | `decision_action_*_not_executable` | DecisionEngine 输出非 `open`（如 `skip`） |
 | `market_closed` / `market_inactive` / `market_not_tradable` | 市场已关闭或不可交易 |
 | `above_max_position_count` | 持仓数已达 `MAX_POSITION_COUNT` |
+| `edge_skepticism_extreme_ratio` | 市场价 < `RISK_MIN_MARKET_PRICE` 且 AI/市场概率比 > `RISK_EDGE_SKEPTICISM_MAX_RATIO` |
 | `liquidity_unavailable` | 市场无流动性数据 |
 | `below_exchange_minimum_order_size` | 低于交易所最小下单量 |
 | `below_min_trade_usd` / `adjusted_notional_below_min_trade_usd` | 金额低于最小交易门槛 |

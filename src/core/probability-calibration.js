@@ -37,11 +37,14 @@ const DEFAULT_CALIBRATION_CONFIG = {
   lowLiquidityThresholdUsd: 10000,
   sparseEvidenceThreshold: 2,
   staleEvidenceAgeDays: 7,
-  shortTermDaysThreshold: 2
+  shortTermDaysThreshold: 2,
+  // Probability clamp bounds
+  probabilityClampMin: 0.01,
+  probabilityClampMax: 0.99
 };
 
-function clampProbability(value) {
-  return Math.min(0.95, Math.max(0.05, value));
+function clampProbability(value, min = 0.01, max = 0.99) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function shrinkToward(probability, target, factor) {
@@ -144,7 +147,7 @@ export class ProbabilityCalibrationLayer {
       reasons.push(`prescreen_skip: shrink ${this.params.prescreenSkipShrinkage}`);
     }
 
-    calibrated = clampProbability(calibrated);
+    calibrated = clampProbability(calibrated, this.params.probabilityClampMin, this.params.probabilityClampMax);
 
     return {
       rawProbability,

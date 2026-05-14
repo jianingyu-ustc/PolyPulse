@@ -255,7 +255,7 @@ test("allowance approval requires explicit APPROVE confirmation", async () => {
 });
 
 test("risk engine blocks live BUY orders when collateral allowance is insufficient", async () => {
-  const { config } = await createConfig();
+  const { config } = await createConfig({ POLYPULSE_EXECUTION_MODE: "live" });
   const risk = await new RiskEngine(config).evaluate({
     decision: {
       action: "open",

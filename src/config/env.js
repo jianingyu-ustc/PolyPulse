@@ -157,6 +157,20 @@ export const DEFAULTS = {
   RISK_EXCHANGE_MIN_ORDER_CHECK: null,
   // 开仓最低 netEdge 要求 (0-1)。低于此值的机会跳过。0 = 不限制。
   PULSE_MIN_NET_EDGE: null,
+  // 低置信度时的最低 netEdge 要求 (0-1)。confidence=low 时取 max(minNetEdge, 此值)。
+  PULSE_LOW_CONFIDENCE_MIN_EDGE: null,
+  // 校准后概率下限 (0-0.5)。防止极端概率被 clamp 到不合理的值。
+  PULSE_PROBABILITY_CLAMP_MIN: null,
+  // 校准后概率上限 (0.5-1)。
+  PULSE_PROBABILITY_CLAMP_MAX: null,
+  // 极端低市场价阈值 (0-1)。低于此值触发 edge skepticism 检查。
+  RISK_MIN_MARKET_PRICE: null,
+  // Edge skepticism: AI/市场概率比值上限。超过此值则阻止交易。
+  RISK_EDGE_SKEPTICISM_MAX_RATIO: null,
+  // 低置信度仓位缩放因子 (0-1)。confidence=low 时仓位乘此系数。
+  RISK_LOW_CONFIDENCE_SIZE_FACTOR: null,
+  // 中置信度仓位缩放因子 (0-1)。confidence=medium 时仓位乘此系数。
+  RISK_MEDIUM_CONFIDENCE_SIZE_FACTOR: null,
 
   // ─── 证据收集设置 ──────────────────────────────────────────────────────────
   // 证据缓存 TTL（秒）。1800 = 30 分钟。
@@ -427,7 +441,11 @@ export async function loadEnvConfig(options = {}) {
       minAiConfidence: String(values.MIN_AI_CONFIDENCE || "medium").toLowerCase(),
       minTradeUsd: readNumber(values, "MIN_TRADE_USD", 1),
       maxPriceImpactPct: readNumber(values, "RISK_MAX_PRICE_IMPACT_PCT", 0.04),
-      exchangeMinOrderCheck: String(values.RISK_EXCHANGE_MIN_ORDER_CHECK ?? "true").toLowerCase() !== "false"
+      exchangeMinOrderCheck: String(values.RISK_EXCHANGE_MIN_ORDER_CHECK ?? "true").toLowerCase() !== "false",
+      minMarketPrice: readNumber(values, "RISK_MIN_MARKET_PRICE", 0.03),
+      edgeSkepticismMaxRatio: readNumber(values, "RISK_EDGE_SKEPTICISM_MAX_RATIO", 5),
+      lowConfidenceSizeFactor: readNumber(values, "RISK_LOW_CONFIDENCE_SIZE_FACTOR", 0.25),
+      mediumConfidenceSizeFactor: readNumber(values, "RISK_MEDIUM_CONFIDENCE_SIZE_FACTOR", 0.6)
     },
     scan: {
       marketScanLimit: Math.max(1, Math.floor(readNumber(values, "MARKET_SCAN_LIMIT", 5000))),
@@ -462,7 +480,8 @@ export async function loadEnvConfig(options = {}) {
       performanceReportInterval: Math.max(1, Math.floor(readNumber(values, "PULSE_PERFORMANCE_REPORT_INTERVAL", 5))),
       fetchDimensions: parseList(values.PULSE_FETCH_DIMENSIONS),
       requireEvidenceGuard: String(values.PULSE_REQUIRE_EVIDENCE_GUARD ?? "false").toLowerCase() === "true",
-      minNetEdge: Math.max(0, readNumber(values, "PULSE_MIN_NET_EDGE", 0))
+      minNetEdge: Math.max(0, readNumber(values, "PULSE_MIN_NET_EDGE", 0.02)),
+      lowConfidenceMinEdge: Math.max(0, readNumber(values, "PULSE_LOW_CONFIDENCE_MIN_EDGE", 0.05))
     },
     monitor: {
       intervalSeconds: Math.max(1, Math.floor(readNumber(values, "MONITOR_INTERVAL_SECONDS", 7200))),
@@ -507,7 +526,9 @@ export async function loadEnvConfig(options = {}) {
     },
     calibration: {
       enabled: String(values.PULSE_CALIBRATION_ENABLED ?? "true").toLowerCase() !== "false",
-      dynamicEnabled: String(values.PULSE_DYNAMIC_CALIBRATION ?? "true").toLowerCase() !== "false"
+      dynamicEnabled: String(values.PULSE_DYNAMIC_CALIBRATION ?? "true").toLowerCase() !== "false",
+      probabilityClampMin: Math.max(0, Math.min(0.5, readNumber(values, "PULSE_PROBABILITY_CLAMP_MIN", 0.01))),
+      probabilityClampMax: Math.max(0.5, Math.min(1, readNumber(values, "PULSE_PROBABILITY_CLAMP_MAX", 0.99)))
     },
     dynamicFee: {
       enabled: String(values.PULSE_DYNAMIC_FEE_ENABLED ?? "true").toLowerCase() !== "false",

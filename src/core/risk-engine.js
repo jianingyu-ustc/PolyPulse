@@ -184,6 +184,14 @@ export class RiskEngine {
       }
     }
 
+    const marketProb = Number(decision.marketProbability ?? decision.market_implied_probability ?? 0);
+    const aiProb = Number(decision.aiProbability ?? 0);
+    const minMarketPrice = this.config.risk.minMarketPrice ?? 0.03;
+    const maxEdgeRatio = this.config.risk.edgeSkepticismMaxRatio ?? 5;
+    if (marketProb > 0 && marketProb < minMarketPrice && aiProb > 0 && aiProb / marketProb > maxEdgeRatio) {
+      blockedReasons.push("edge_skepticism_extreme_ratio");
+    }
+
     const existingPosition = (portfolio.positions ?? []).find((position) => position.tokenId === decision.tokenId);
     if (!existingPosition && (portfolio.positions ?? []).length >= this.config.risk.maxPositionCount) {
       blockedReasons.push("above_max_position_count");
@@ -227,6 +235,20 @@ export class RiskEngine {
       if (Number.isFinite(walk.maxNotionalUsd) && walk.maxNotionalUsd < adjusted) {
         adjusted = walk.maxNotionalUsd;
         addLimit(appliedLimits, "orderbookSlippageCapUsd", walk.maxNotionalUsd);
+      }
+    }
+
+    const confidenceSizeFactors = {
+      low: this.config.risk.lowConfidenceSizeFactor ?? 0.25,
+      medium: this.config.risk.mediumConfidenceSizeFactor ?? 0.6,
+      high: 1.0
+    };
+    const capFactor = confidenceSizeFactors[String(aiConfidence ?? "medium").toLowerCase()] ?? confidenceSizeFactors.medium;
+    if (capFactor < 1.0) {
+      const cappedByConfidence = roundUsd(suggestedUsd * capFactor);
+      if (adjusted > cappedByConfidence && cappedByConfidence > 0) {
+        adjusted = cappedByConfidence;
+        addLimit(appliedLimits, "confidenceSizeCap", capFactor);
       }
     }
 

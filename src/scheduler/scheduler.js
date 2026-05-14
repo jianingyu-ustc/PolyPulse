@@ -388,6 +388,7 @@ export class Scheduler {
     const allEvidence = [...evidence, ...additionalEvidence];
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
+    this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
   }
 
@@ -398,7 +399,24 @@ export class Scheduler {
     const allEvidence = [...evidence, ...additionalEvidence];
     const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
+    this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
+  }
+
+  _injectCalibratedProbabilities(estimate, market, evidence, candidate) {
+    for (const oe of estimate.outcomeEstimates ?? []) {
+      if (oe.aiProbability != null) {
+        const cal = this.calibrationLayer.calibrate({
+          rawProbability: oe.aiProbability,
+          confidence: estimate.confidence,
+          market,
+          evidence,
+          triageAssessment: candidate?.summary?.ai_triage ?? null,
+          prescreenResult: candidate?.summary?.ai_prescreen ?? null
+        });
+        oe.calibratedProbability = cal.calibratedProbability;
+      }
+    }
   }
 
   async runEvidenceResearch({ market, evidence, candidate }) {

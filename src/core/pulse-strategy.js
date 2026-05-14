@@ -251,7 +251,7 @@ export function calculateMonthlyReturn({ edge, endDate, nowMs = Date.now() }) {
   };
 }
 
-export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0 }) {
+export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankrollUsd, nowMs = Date.now(), dynamicFeeParams = null, minNetEdge = 0, confidence = null, lowConfidenceMinEdge = 0 }) {
   const categorySlug = inferCategorySlug(market);
   const staticFeeParams = lookupCategoryFeeParams(categorySlug, {
     negRisk: Boolean(market?.negRisk),
@@ -266,7 +266,10 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
   const netEdge = round(calculateNetEdge(grossEdge, marketProb, feeParams));
   const kelly = calculateQuarterKelly({ aiProb, marketProb, bankrollUsd });
   const monthly = calculateMonthlyReturn({ edge: netEdge, endDate: market?.endDate, nowMs });
-  const effectiveMinEdge = minNetEdge || 0;
+  const baseMinEdge = minNetEdge || 0;
+  const effectiveMinEdge = String(confidence).toLowerCase() === "low"
+    ? Math.max(baseMinEdge, lowConfidenceMinEdge)
+    : baseMinEdge;
   const action = kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip";
   return {
     side,
