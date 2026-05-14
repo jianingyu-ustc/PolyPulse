@@ -267,10 +267,14 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
   const kelly = calculateQuarterKelly({ aiProb, marketProb, bankrollUsd });
   const monthly = calculateMonthlyReturn({ edge: netEdge, endDate: market?.endDate, nowMs });
   const baseMinEdge = minNetEdge || 0;
-  const effectiveMinEdge = String(confidence).toLowerCase() === "low"
+  const isLowConfidence = String(confidence).toLowerCase() === "low";
+  const effectiveMinEdge = isLowConfidence
     ? Math.max(baseMinEdge, lowConfidenceMinEdge)
     : baseMinEdge;
-  const action = kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip";
+  const isUninformedPrior = isLowConfidence && Math.abs(aiProb - 0.5) <= 0.02;
+  const action = isUninformedPrior
+    ? "skip"
+    : (kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip");
   return {
     side,
     categorySlug,
@@ -287,7 +291,7 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
     resolutionSource: monthly.resolutionSource,
     action,
     skipReason: action === "skip"
-      ? (netEdge > 0 && netEdge < effectiveMinEdge ? "below_min_net_edge" : "quarter_kelly_not_positive")
+      ? (isUninformedPrior ? "uninformed_prior" : netEdge > 0 && netEdge < effectiveMinEdge ? "below_min_net_edge" : "quarter_kelly_not_positive")
       : null
   };
 }

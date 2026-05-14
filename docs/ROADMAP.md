@@ -1,6 +1,6 @@
 # PolyPulse Roadmap
 
-Last updated: 2026-05-06
+Last updated: 2026-05-14
 
 ## P0
 
@@ -10,8 +10,8 @@ Last updated: 2026-05-06
 
 ## P1
 
-- Add real evidence adapters for official pages, news APIs, public data APIs,
-  and resolution sources.
+- ~~Add real evidence adapters for official pages, news APIs, public data APIs,
+  and resolution sources.~~ Done: 5 domain adapters, resolution source adapter, page evidence adapter, AI evidence research runtime.
 - Add order status reconciliation for `live` mode.
 - Add stronger confirmation binding for real orders: run id, market id, side,
   notional, env fingerprint, and wallet address.

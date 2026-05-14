@@ -95,7 +95,8 @@ export function createPaperDataProvider(scheduler) {
         ...returns
       },
       openPositions: ledger.positions.map(formatPosition),
-      closedPositions: ledger.closedTrades.slice(-100).reverse().map(formatClosedTrade)
+      closedPositions: ledger.closedTrades.slice(-100).reverse().map(formatClosedTrade),
+      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-30).reverse()
     };
   };
 }
@@ -127,7 +128,8 @@ export function createLiveDataProvider(stateStore, scheduler) {
         ...returns
       },
       openPositions: positions.map(formatPosition),
-      closedPositions: []
+      closedPositions: [],
+      skippedCandidates: []
     };
   };
 }

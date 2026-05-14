@@ -60,6 +60,10 @@ a:hover{text-decoration:underline}
 <div style="overflow-x:auto"><table id="closed-table"><thead><tr id="closed-head">
 </tr></thead><tbody id="closed-body"></tbody></table></div>
 
+<h2 id="h-skipped">已跳过</h2>
+<div style="overflow-x:auto"><table id="skipped-table"><thead><tr id="skipped-head">
+</tr></thead><tbody id="skipped-body"></tbody></table></div>
+
 <div class="refresh" id="refresh"></div>
 
 <script>
@@ -107,7 +111,14 @@ var i18n = {
     reasoning: 'AI推理',
     confidence: '置信度',
     evidence: '关键证据',
-    noReasoning: '暂无推理信息'
+    noReasoning: '暂无推理信息',
+    hSkipped: '本轮已跳过',
+    noSkipped: '暂无跳过记录',
+    thPhase: '阶段',
+    thReason: '原因',
+    thLiquidity: '流动性',
+    thCategory: '分类',
+    thTime: '时间'
   },
   en: {
     title: 'PolyPulse Monitor',
@@ -150,7 +161,14 @@ var i18n = {
     reasoning: 'AI Reasoning',
     confidence: 'Confidence',
     evidence: 'Key Evidence',
-    noReasoning: 'No reasoning available'
+    noReasoning: 'No reasoning available',
+    hSkipped: 'Skipped This Round',
+    noSkipped: 'No skipped candidates',
+    thPhase: 'Phase',
+    thReason: 'Reason',
+    thLiquidity: 'Liquidity',
+    thCategory: 'Category',
+    thTime: 'Time'
   }
 };
 
@@ -173,10 +191,11 @@ function marketLink(p){
   if(!url && p.marketId){
     url = 'https://polymarket.com/event/' + encodeURIComponent(p.marketId);
   }
-  var label = (p.question || p.marketId || '-');
+  var label = (p.question || p.marketSlug || p.marketId || '-');
   if(label.length > 40) label = label.slice(0,38) + '..';
-  if(url) return '<a href="'+esc(url)+'" target="_blank" title="'+esc(p.question||p.marketId)+'">'+esc(label)+'</a>';
-  return '<span title="'+esc(p.question||p.marketId)+'">'+esc(label)+'</span>';
+  var title = p.question || p.marketSlug || p.marketId || '';
+  if(url) return '<a href="'+esc(url)+'" target="_blank" title="'+esc(title)+'">'+esc(label)+'</a>';
+  return '<span title="'+esc(title)+'">'+esc(label)+'</span>';
 }
 
 var _data = null;
@@ -184,15 +203,19 @@ var _data = null;
 function renderAll(){
   document.getElementById('h-open').textContent = t('hOpen');
   document.getElementById('h-closed').textContent = t('hClosed');
+  document.getElementById('h-skipped').textContent = t('hSkipped');
   document.getElementById('open-head').innerHTML =
     '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thExpiry'),t('thAmount'),t('thAiProb'),t('thMktProb'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl')].join('</th><th>')+'</th>';
   document.getElementById('closed-head').innerHTML =
     '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thCloseTime'),t('thAmount'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl'),t('thReturn')].join('</th><th>')+'</th>';
+  document.getElementById('skipped-head').innerHTML =
+    '<th>'+[t('thMarket'),t('thCategory'),t('thLiquidity'),t('thPhase'),t('thReason'),t('thTime')].join('</th><th>')+'</th>';
   if(_data){
     document.getElementById('meta').textContent = t('mode')+': '+_data.executionMode+' | '+t('started')+': '+ts(_data.startedAt);
     renderSummary(_data.summary||{});
     renderOpen(_data.openPositions||[]);
     renderClosed(_data.closedPositions||[]);
+    renderSkipped(_data.skippedCandidates||[]);
   }
 }
 
@@ -278,6 +301,19 @@ function toggleReasoning(id){
   row.style.display=isHidden?'table-row':'none';
   var icon=document.getElementById('icon-'+id);
   if(icon)icon.style.transform=isHidden?'rotate(90deg)':'';
+}
+
+function renderSkipped(items){
+  var tbody=document.getElementById('skipped-body');
+  if(!items||!items.length){tbody.innerHTML='<tr><td colspan="6" style="color:#8b949e">'+t('noSkipped')+'</td></tr>';return}
+  tbody.innerHTML=items.map(function(c){return '<tr>'+
+    '<td>'+marketLink(c)+'</td>'+
+    '<td>'+(c.category||'-')+'</td>'+
+    '<td>$'+fmt(c.liquidityUsd,0)+'</td>'+
+    '<td>'+(c.phase||'-')+'</td>'+
+    '<td style="white-space:normal;max-width:400px">'+esc(c.reason||'-')+'</td>'+
+    '<td>'+ts(c.skippedAt)+'</td>'+
+  '</tr>'}).join('');
 }
 
 async function refresh(){

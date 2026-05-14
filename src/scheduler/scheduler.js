@@ -519,6 +519,9 @@ export class Scheduler {
             cluster: JSON.stringify(assessment.cluster),
             gaps: assessment.evidence_gaps.join(",") || "none"
           });
+          if (triageShouldReject(assessment, this.config) && ledger.recordSkippedCandidate) {
+            ledger.recordSkippedCandidate({ market: entry.market, reason: assessment.rationale ?? `triage score ${assessment.priority_score}`, phase: "triage" });
+          }
         }
       }
 
@@ -583,6 +586,9 @@ export class Scheduler {
           action: result.suitable ? "TRADE" : "SKIP",
           reason: result.reason || "none"
         });
+        if (!result.suitable && ledger.recordSkippedCandidate) {
+          ledger.recordSkippedCandidate({ market: entry.market, reason: result.reason, phase: "prescreen" });
+        }
       }
     }
 

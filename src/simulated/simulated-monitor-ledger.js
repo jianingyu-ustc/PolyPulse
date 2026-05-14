@@ -68,6 +68,7 @@ export class SimulatedMonitorLedger {
     this.dailyTradeUsd = { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 };
     this.highWaterMarkUsd = this.initialCashUsd;
     this.maxDrawdownUsd = 0;
+    this.skippedCandidates = [];
     this.logPath = path.resolve(config.monitorLogPath ?? "logs/polypulse-monitor.log");
     this.logReady = false;
   }
@@ -95,6 +96,22 @@ export class SimulatedMonitorLedger {
       ? ` | ${Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(" ")}`
       : "";
     await appendFile(this.logPath, `[${nowIso()}] ${message}${suffix}\n`, "utf8");
+  }
+
+  recordSkippedCandidate({ market, reason, phase }) {
+    this.skippedCandidates.push({
+      marketSlug: market.marketSlug ?? market.marketId,
+      question: market.question ?? "",
+      category: market.category ?? "",
+      liquidityUsd: market.liquidityUsd ?? 0,
+      marketUrl: market.marketUrl ?? null,
+      reason,
+      phase,
+      skippedAt: nowIso()
+    });
+    if (this.skippedCandidates.length > 50) {
+      this.skippedCandidates = this.skippedCandidates.slice(-50);
+    }
   }
 
   monitorState() {

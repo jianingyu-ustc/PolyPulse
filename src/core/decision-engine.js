@@ -76,11 +76,14 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   const insufficientEvidence = estimate.confidence === "low"
     || (estimate.uncertainty_factors ?? []).includes("insufficient_evidence")
     || (estimate.freshness_score ?? 0) < 0.4;
-  const noTradeReason = insufficientEvidence
-    ? "insufficient_evidence"
-    : netEdge < MIN_NET_EDGE
-      ? "edge_below_threshold"
-      : null;
+  const isUninformedPrior = estimate.confidence === "low" && Math.abs(aiProbability - 0.5) <= 0.02;
+  const noTradeReason = isUninformedPrior
+    ? "uninformed_prior"
+    : insufficientEvidence
+      ? "insufficient_evidence"
+      : netEdge < MIN_NET_EDGE
+        ? "edge_below_threshold"
+        : null;
 
   return assertSchema("TradeCandidate", {
     marketId: market.marketId,

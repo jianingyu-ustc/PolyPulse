@@ -13,7 +13,7 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-概率和下单金额口径：AI provider 输出的 `ai_probability` 表示 Yes outcome 的独立概率估计；代码会为每个 outcome 生成可执行比较口径，Yes 使用 `ai_probability`，No 使用 `1 - ai_probability`。`DecisionEngine` 会同时评估 Yes 和 No，分别比较 `outcome_ai_probability` 和该 outcome 的 `market_implied_probability`，计算 `grossEdge = outcome_ai_probability - market_implied_probability`，再扣除 fee 得到 `netEdge`。因此当 Yes 的 `ai_probability < Yes market_implied_probability` 时，不是必然跳过；如果 No outcome 的 `1 - ai_probability` 高于 No 盘口且扣费后 `netEdge > 0`，系统会考虑买入 No，否则跳过。`pulse-direct` 下仓位先按 quarter Kelly 计算：`fullKellyPct = max(0, (outcome_ai_probability - market_implied_probability) / (1 - market_implied_probability))`，`quarterKellyPct = fullKellyPct / 4`，`suggestedNotionalUsd = bankrollUsd * quarterKellyPct`。最终可下单金额不是 AI 决定，也不等于 `MONITOR_MAX_AMOUNT_USD`，而是由代码取 `MONITOR_MAX_AMOUNT_USD`（或默认 `MIN_TRADE_USD`）、daily 剩余额度、`suggestedNotionalUsd`、单笔/总敞口/event 敞口/流动性上限、真实余额和 allowance 等约束后的 `approvedUsd`；实际提交的 `risk.order.amountUsd` 小于等于 `MONITOR_MAX_AMOUNT_USD`，风控不通过时为 0。
+概率和下单金额口径：AI provider 输出的 `ai_probability` 表示 Yes outcome 的独立概率估计；代码会为每个 outcome 生成可执行比较口径，Yes 使用 `ai_probability`，No 使用 `1 - ai_probability`。`DecisionEngine` 会同时评估 Yes 和 No，分别比较 `outcome_ai_probability` 和该 outcome 的 `market_implied_probability`，计算 `grossEdge = outcome_ai_probability - market_implied_probability`，再扣除 fee 得到 `netEdge`。因此当 Yes 的 `ai_probability < Yes market_implied_probability` 时，不是必然跳过；如果 No outcome 的 `1 - ai_probability` 高于 No 盘口且扣费后 `netEdge > 0`，系统会考虑买入 No，否则跳过。`pulse-direct` 下仓位先按 quarter Kelly 计算：`fullKellyPct = max(0, (outcome_ai_probability - market_implied_probability) / (1 - market_implied_probability))`，`quarterKellyPct = fullKellyPct / 4`，`suggestedNotionalUsd = bankrollUsd * quarterKellyPct`。最终可下单金额不是 AI 决定，也不等于 `MONITOR_MAX_AMOUNT_USD`，而是由代码取 `MONITOR_MAX_AMOUNT_USD`（或默认 `MIN_TRADE_USD`）、`suggestedNotionalUsd`、单笔/总敞口/event 敞口/流动性上限、真实余额和 allowance 等约束后的 `approvedUsd`；Scheduler 在调用 RiskEngine 之前还会检查 `MONITOR_MAX_DAILY_TRADE_USD` 日限额，超限时直接阻断不进入风控。实际提交的 `risk.order.amountUsd` 小于等于 `MONITOR_MAX_AMOUNT_USD`，风控不通过时为 0。
 
 PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
@@ -150,6 +150,7 @@ RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT
 
 | 阻断条件 | 说明 |
 | --- | --- |
+| `monitor_daily_trade_limit_reached` | Scheduler 层：当日累计交易金额已达 `MONITOR_MAX_DAILY_TRADE_USD`（在 RiskEngine 之前检查） |
 | `system_paused` / `system_halted` | 系统级暂停或回撤触发停机 |
 | `drawdown_halt_threshold_exceeded` | 组合回撤超 `DRAWDOWN_HALT_PCT` |
 | `decision_action_*_not_executable` | DecisionEngine 输出非 `open`（如 `skip`） |
@@ -815,7 +816,7 @@ Codex 提示词版本：
 
 ```bash
 # 终止服务器上本项目的所有进程
-ssh root@<SERVER_IP> "systemctl stop polypulse-monitor.service; pkill -9 -f '/home/PolyPulse'"
+systemctl stop polypulse-monitor.service; pkill -9 -f 'polypulse.js'
 ```
 
 ```bash
@@ -913,9 +914,10 @@ Codex 提示词版本：
 
 Monitor 运行时内嵌一个轻量 HTTP 服务器，提供实时 Web 仪表板，展示：
 
-- **摘要面板**：程序开始时间、运行天数、初始资金、当前现金/权益、已实现/未实现收益、月化/年化收益率、胜率、最大回撤
-- **持仓表格**：市场（可点击跳转 Polymarket 原始页面）、方向、开仓时间、到期时间、开仓金额、AI 预测胜率、市场预测胜率、Edge、手续费、Net Edge、未实现盈亏
-- **已关仓表格**：市场（可点击跳转 Polymarket）、方向、开仓时间、关仓时间、开仓金额、Edge、手续费、Net Edge、盈亏、收益率
+- **摘要面板**：程序开始时间、运行天数、初始资金、当前现金/权益、已实现/未实现收益、月化/年化收益率、胜率（胜/负）、最大回撤
+- **持仓表格**：市场（可点击跳转 Polymarket 原始页面）、方向、开仓时间、到期时间、开仓金额、AI 预测胜率、市场预测胜率、Edge、手续费、Net Edge、未实现盈亏；每行可点击展开查看 AI 推理摘要、置信度标签和关键证据列表
+- **已关仓表格**：市场（可点击跳转 Polymarket）、方向、开仓时间、关仓时间、开仓金额、Edge、手续费、Net Edge、盈亏、收益率、关仓原因；每行可点击展开查看 AI 推理摘要、置信度标签和关键证据列表
+- **本轮已跳过表格**：市场、分类、流动性、阶段、跳过原因、时间
 - **中英文切换**：右上角按钮一键切换语言，选择持久化到 localStorage
 
 **配置（.env）：**
