@@ -35,7 +35,10 @@ function formatPosition(pos) {
     edge: pos.lastDecision?.edge ?? pos.lastDecision?.grossEdge ?? null,
     netEdge: pos.lastDecision?.netEdge ?? null,
     feeImpact: pos.lastDecision?.edge != null && pos.lastDecision?.netEdge != null
-      ? pos.lastDecision.edge - pos.lastDecision.netEdge : null
+      ? pos.lastDecision.edge - pos.lastDecision.netEdge : null,
+    reasoningSummary: pos.lastDecision?.reasoningSummary ?? null,
+    confidence: pos.lastDecision?.confidence ?? null,
+    keyEvidence: pos.lastDecision?.keyEvidence ?? []
   };
 }
 
@@ -58,7 +61,10 @@ function formatClosedTrade(trade) {
     edge: trade.lastDecision?.edge ?? trade.lastDecision?.grossEdge ?? null,
     netEdge: trade.lastDecision?.netEdge ?? null,
     feeImpact: trade.lastDecision?.edge != null && trade.lastDecision?.netEdge != null
-      ? trade.lastDecision.edge - trade.lastDecision.netEdge : null
+      ? trade.lastDecision.edge - trade.lastDecision.netEdge : null,
+    reasoningSummary: trade.lastDecision?.reasoningSummary ?? null,
+    confidence: trade.lastDecision?.confidence ?? null,
+    keyEvidence: trade.lastDecision?.keyEvidence ?? []
   };
 }
 

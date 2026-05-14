@@ -901,7 +901,7 @@ export class Scheduler {
     });
     await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision: boundedDecision, phase: "open-scan" });
     await ledger.logRisk({ market: prediction.market, risk });
-    const order = await ledger.openPosition({ market: prediction.market, decision: boundedDecision, risk });
+    const order = await ledger.openPosition({ market: prediction.market, decision: boundedDecision, risk, estimate: prediction.estimate });
     if (order.status !== "filled") {
       await ledger.log("order.blocked", {
         market: prediction.market.marketSlug,

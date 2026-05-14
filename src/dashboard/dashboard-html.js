@@ -24,6 +24,19 @@ table{width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:16px}
 th{background:#161b22;color:#8b949e;text-align:left;padding:8px 6px;border-bottom:1px solid #21262d;white-space:nowrap}
 td{padding:8px 6px;border-bottom:1px solid #21262d;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 tr:hover td{background:#161b22}
+.reasoning-row td{background:#0d1117;padding:8px 12px;border-bottom:1px solid #21262d;white-space:normal;font-size:0.82em;color:#c9d1d9}
+.reasoning-row .reasoning-content{max-width:800px}
+.reasoning-row .reasoning-label{color:#58a6ff;font-weight:600;font-size:0.75em;text-transform:uppercase;margin-bottom:4px}
+.reasoning-row .reasoning-text{color:#c9d1d9;line-height:1.6;margin-top:4px}
+.reasoning-row .evidence-list{margin-top:6px;color:#8b949e;font-size:0.9em}
+.reasoning-row .evidence-list li{margin-left:16px;list-style:disc}
+.confidence-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;margin-left:8px}
+.confidence-high{background:#1a3828;color:#3fb950}
+.confidence-medium{background:#2d2a11;color:#d29922}
+.confidence-low{background:#3d1d20;color:#f85149}
+tr.expandable{cursor:pointer}
+tr.expandable:hover td{background:#161b22}
+.expand-icon{color:#8b949e;font-size:0.7em;margin-right:4px;display:inline-block;transition:transform 0.2s}
 a{color:#58a6ff;text-decoration:none}
 a:hover{text-decoration:underline}
 .refresh{color:#8b949e;font-size:0.75em;margin-top:8px}
@@ -90,7 +103,11 @@ var i18n = {
     thReturn: '收益率',
     lastRefresh: '上次刷新',
     refreshFail: '刷新失败',
-    days: '天'
+    days: '天',
+    reasoning: 'AI推理',
+    confidence: '置信度',
+    evidence: '关键证据',
+    noReasoning: '暂无推理信息'
   },
   en: {
     title: 'PolyPulse Monitor',
@@ -129,7 +146,11 @@ var i18n = {
     thReturn: 'Return',
     lastRefresh: 'Last refresh',
     refreshFail: 'Refresh failed',
-    days: ' days'
+    days: ' days',
+    reasoning: 'AI Reasoning',
+    confidence: 'Confidence',
+    evidence: 'Key Evidence',
+    noReasoning: 'No reasoning available'
   }
 };
 
@@ -198,8 +219,9 @@ function renderSummary(s){
 function renderOpen(positions){
   var tbody=document.getElementById('open-body');
   if(!positions.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">'+t('noOpen')+'</td></tr>';return}
-  tbody.innerHTML=positions.map(function(p){return '<tr>'+
-    '<td>'+marketLink(p)+'</td>'+
+  tbody.innerHTML=positions.map(function(p,idx){
+    var mainRow='<tr class="expandable" onclick="toggleReasoning(\'open-'+idx+'\')">'+
+    '<td><span class="expand-icon" id="icon-open-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.endDate)+'</td>'+
@@ -210,14 +232,24 @@ function renderOpen(positions){
     '<td class="negative">'+(p.feeImpact!=null?pct(p.feeImpact):'-')+'</td>'+
     '<td class="positive">'+(p.netEdge!=null?pct(p.netEdge):'-')+'</td>'+
     '<td class="'+cls(p.unrealizedPnlUsd)+'">$'+fmt(p.unrealizedPnlUsd)+'</td>'+
-  '</tr>'}).join('');
+    '</tr>';
+    var reasoningRow='<tr class="reasoning-row" id="open-'+idx+'" style="display:none"><td colspan="11">'+
+    '<div class="reasoning-content">'+
+    '<span class="reasoning-label">'+t('reasoning')+'</span>'+
+    (p.confidence?'<span class="confidence-badge confidence-'+p.confidence+'">'+esc(p.confidence)+'</span>':'')+
+    '<div class="reasoning-text">'+(p.reasoningSummary?esc(p.reasoningSummary):'<em>'+t('noReasoning')+'</em>')+'</div>'+
+    (p.keyEvidence&&p.keyEvidence.length?'<div class="evidence-list"><strong>'+t('evidence')+':</strong><ul>'+p.keyEvidence.map(function(e){return '<li>'+esc(e)+'</li>'}).join('')+'</ul></div>':'')+
+    '</div></td></tr>';
+    return mainRow+reasoningRow;
+  }).join('');
 }
 
 function renderClosed(trades){
   var tbody=document.getElementById('closed-body');
   if(!trades.length){tbody.innerHTML='<tr><td colspan="10" style="color:#8b949e">'+t('noClosed')+'</td></tr>';return}
-  tbody.innerHTML=trades.map(function(p){return '<tr>'+
-    '<td>'+marketLink(p)+'</td>'+
+  tbody.innerHTML=trades.map(function(p,idx){
+    var mainRow='<tr class="expandable" onclick="toggleReasoning(\'closed-'+idx+'\')">'+
+    '<td><span class="expand-icon" id="icon-closed-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.closedAt)+'</td>'+
@@ -227,7 +259,25 @@ function renderClosed(trades){
     '<td class="positive">'+(p.netEdge!=null?pct(p.netEdge):'-')+'</td>'+
     '<td class="'+cls(p.realizedPnlUsd)+'">$'+fmt(p.realizedPnlUsd)+'</td>'+
     '<td class="'+cls(p.returnPct)+'">'+(p.returnPct!=null?pct(p.returnPct):'-')+'</td>'+
-  '</tr>'}).join('');
+    '</tr>';
+    var reasoningRow='<tr class="reasoning-row" id="closed-'+idx+'" style="display:none"><td colspan="10">'+
+    '<div class="reasoning-content">'+
+    '<span class="reasoning-label">'+t('reasoning')+'</span>'+
+    (p.confidence?'<span class="confidence-badge confidence-'+p.confidence+'">'+esc(p.confidence)+'</span>':'')+
+    '<div class="reasoning-text">'+(p.reasoningSummary?esc(p.reasoningSummary):'<em>'+t('noReasoning')+'</em>')+'</div>'+
+    (p.keyEvidence&&p.keyEvidence.length?'<div class="evidence-list"><strong>'+t('evidence')+':</strong><ul>'+p.keyEvidence.map(function(e){return '<li>'+esc(e)+'</li>'}).join('')+'</ul></div>':'')+
+    '</div></td></tr>';
+    return mainRow+reasoningRow;
+  }).join('');
+}
+
+function toggleReasoning(id){
+  var row=document.getElementById(id);
+  if(!row)return;
+  var isHidden=row.style.display==='none';
+  row.style.display=isHidden?'table-row':'none';
+  var icon=document.getElementById('icon-'+id);
+  if(icon)icon.style.transform=isHidden?'rotate(90deg)':'';
 }
 
 async function refresh(){

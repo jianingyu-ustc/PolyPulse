@@ -205,7 +205,7 @@ export class SimulatedMonitorLedger {
     });
   }
 
-  async openPosition({ market, decision, risk }) {
+  async openPosition({ market, decision, risk, estimate = null }) {
     if (!risk.allowed || !risk.order || risk.approvedUsd <= 0) {
       return {
         orderId: "blocked-before-order",
@@ -267,7 +267,10 @@ export class SimulatedMonitorLedger {
         marketProbability: decision.marketProbability,
         edge: decision.edge ?? decision.grossEdge ?? null,
         netEdge: decision.netEdge,
-        monthlyReturn: decision.monthlyReturn
+        monthlyReturn: decision.monthlyReturn,
+        reasoningSummary: estimate?.reasoning_summary ?? estimate?.reasoningSummary ?? null,
+        confidence: estimate?.confidence ?? decision.confidence ?? null,
+        keyEvidence: (estimate?.key_evidence ?? []).slice(0, 3).map(e => e.title || e.summary || String(e)).filter(Boolean)
       }
     };
     this.cashUsd = round(this.cashUsd - filledUsd);

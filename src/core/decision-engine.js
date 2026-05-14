@@ -62,9 +62,13 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
     return null;
   }
 
-  const aiProbability = outcomeEstimate.calibratedProbability != null
+  const rawAiProbability = round(outcomeEstimate.aiProbability);
+  const calibrated = outcomeEstimate.calibratedProbability != null
     ? round(outcomeEstimate.calibratedProbability)
-    : round(outcomeEstimate.aiProbability);
+    : rawAiProbability;
+  const aiProbability = Math.abs(calibrated - implied) <= Math.abs(rawAiProbability - implied)
+    ? calibrated
+    : rawAiProbability;
   const grossEdge = round(aiProbability - implied);
   const netEdge = round(grossEdge - FEE_ALLOWANCE - SLIPPAGE_ALLOWANCE);
   const notional = suggestedNotional({ portfolio, netEdge, amountUsd });
@@ -110,9 +114,13 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
     return null;
   }
 
-  const aiProbability = outcomeEstimate.calibratedProbability != null
+  const rawAiProbability = round(outcomeEstimate.aiProbability);
+  const calibrated = outcomeEstimate.calibratedProbability != null
     ? round(outcomeEstimate.calibratedProbability)
-    : round(outcomeEstimate.aiProbability);
+    : rawAiProbability;
+  const aiProbability = Math.abs(calibrated - implied) <= Math.abs(rawAiProbability - implied)
+    ? calibrated
+    : rawAiProbability;
   const confidence = outcomeEstimate.confidence ?? estimate.confidence;
   const bankrollUsd = Number(portfolio?.totalEquityUsd ?? amountUsd ?? 0);
   const plan = buildPulseTradePlan({
