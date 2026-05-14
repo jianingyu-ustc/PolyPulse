@@ -220,7 +220,7 @@ function renderOpen(positions){
   var tbody=document.getElementById('open-body');
   if(!positions.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">'+t('noOpen')+'</td></tr>';return}
   tbody.innerHTML=positions.map(function(p,idx){
-    var mainRow='<tr class="expandable" onclick="toggleReasoning(\'open-'+idx+'\')">'+
+    var mainRow='<tr class="expandable" onclick="toggleReasoning(\\\'open-'+idx+'\\\')">'+
     '<td><span class="expand-icon" id="icon-open-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
@@ -248,7 +248,7 @@ function renderClosed(trades){
   var tbody=document.getElementById('closed-body');
   if(!trades.length){tbody.innerHTML='<tr><td colspan="10" style="color:#8b949e">'+t('noClosed')+'</td></tr>';return}
   tbody.innerHTML=trades.map(function(p,idx){
-    var mainRow='<tr class="expandable" onclick="toggleReasoning(\'closed-'+idx+'\')">'+
+    var mainRow='<tr class="expandable" onclick="toggleReasoning(\\\'closed-'+idx+'\\\')">'+
     '<td><span class="expand-icon" id="icon-closed-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+

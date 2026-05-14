@@ -814,19 +814,8 @@ Codex 提示词版本：
 ### Monitor 管理
 
 ```bash
-# 终止 monitor 进程（推荐顺序）
-
-# 方法 1：当前终端发送 SIGQUIT（Ctrl+C 无效时使用）
-# Ctrl+\
-
-# 方法 2：另一个终端强制杀掉
-kill -9 $(pgrep -f "polypulse.*monitor")
-
-# 方法 3：如果是 systemd 服务
-systemctl stop polypulse-monitor.service
-
-# 方法 4：pkill
-pkill -9 -f "node.*polypulse.js monitor"
+# 终止服务器上本项目的所有进程
+ssh root@<SERVER_IP> "systemctl stop polypulse-monitor.service; pkill -9 -f '/home/PolyPulse'"
 ```
 
 ```bash
