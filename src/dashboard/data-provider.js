@@ -23,6 +23,7 @@ function formatPosition(pos) {
     marketId: pos.marketId,
     marketUrl: pos.marketUrl ?? null,
     question: pos.question ?? pos.marketSlug ?? "",
+    category: pos.category ?? "",
     outcome: pos.outcome ?? "",
     side: pos.side ?? "",
     openedAt: pos.openedAt ?? null,
@@ -48,6 +49,7 @@ function formatClosedTrade(trade) {
     marketId: trade.marketId,
     marketUrl: trade.marketUrl ?? null,
     question: trade.question ?? trade.marketSlug ?? "",
+    category: trade.category ?? "",
     outcome: trade.outcome ?? "",
     side: trade.side ?? "",
     openedAt: trade.openedAt ?? null,
@@ -96,7 +98,7 @@ export function createPaperDataProvider(scheduler) {
       },
       openPositions: ledger.positions.map(formatPosition),
       closedPositions: ledger.closedTrades.slice(-100).reverse().map(formatClosedTrade),
-      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-30).reverse()
+      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-200).reverse()
     };
   };
 }

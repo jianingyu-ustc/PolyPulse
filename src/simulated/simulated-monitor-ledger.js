@@ -1,6 +1,7 @@
 import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { inferCategorySlug } from "../core/pulse-strategy.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -102,15 +103,15 @@ export class SimulatedMonitorLedger {
     this.skippedCandidates.push({
       marketSlug: market.marketSlug ?? market.marketId,
       question: market.question ?? "",
-      category: market.category ?? "",
+      category: inferCategorySlug(market) || market.category || "",
       liquidityUsd: market.liquidityUsd ?? 0,
       marketUrl: market.marketUrl ?? null,
       reason,
       phase,
       skippedAt: nowIso()
     });
-    if (this.skippedCandidates.length > 50) {
-      this.skippedCandidates = this.skippedCandidates.slice(-50);
+    if (this.skippedCandidates.length > 200) {
+      this.skippedCandidates = this.skippedCandidates.slice(-200);
     }
   }
 
@@ -267,6 +268,7 @@ export class SimulatedMonitorLedger {
       eventId: market.eventId,
       eventSlug: market.eventSlug,
       question: market.question,
+      category: inferCategorySlug(market) || market.category || "",
       marketUrl: market.marketUrl ?? null,
       tokenId: decision.tokenId,
       outcome: outcome?.label ?? decision.suggested_side ?? "unknown",

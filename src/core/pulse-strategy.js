@@ -26,27 +26,78 @@ const CATEGORY_ALIASES = [
   { pattern: "politic", canonical: "politics" },
   { pattern: "trump", canonical: "politics" },
   { pattern: "election", canonical: "politics" },
+  { pattern: "democrat", canonical: "politics" },
+  { pattern: "republican", canonical: "politics" },
+  { pattern: "nominee", canonical: "politics" },
+  { pattern: "senate", canonical: "politics" },
+  { pattern: "parliament", canonical: "politics" },
+  { pattern: "government", canonical: "politics" },
+  { pattern: "president", canonical: "politics" },
+  { pattern: "prime minister", canonical: "politics" },
+  { pattern: "party", canonical: "politics" },
+  { pattern: "vote", canonical: "politics" },
+  { pattern: "regulat", canonical: "politics" },
+  { pattern: "reschedul", canonical: "politics" },
+  { pattern: "legali", canonical: "politics" },
+  { pattern: "bill", canonical: "politics" },
+  { pattern: "legislation", canonical: "politics" },
   { pattern: "sport", canonical: "sports" },
   { pattern: "nba", canonical: "sports" },
   { pattern: "nfl", canonical: "sports" },
   { pattern: "mlb", canonical: "sports" },
+  { pattern: "nhl", canonical: "sports" },
   { pattern: "soccer", canonical: "sports" },
   { pattern: "football", canonical: "sports" },
+  { pattern: "tennis", canonical: "sports" },
+  { pattern: "f1", canonical: "sports" },
+  { pattern: "ufc", canonical: "sports" },
+  { pattern: "boxing", canonical: "sports" },
+  { pattern: "rugby", canonical: "sports" },
+  { pattern: "cricket", canonical: "sports" },
+  { pattern: "total-3pt5", canonical: "sports" },
+  { pattern: "total-2pt5", canonical: "sports" },
+  { pattern: "total-1pt5", canonical: "sports" },
+  { pattern: "spread-home", canonical: "sports" },
+  { pattern: "btts", canonical: "sports" },
+  { pattern: "-win-on-", canonical: "sports" },
+  { pattern: "epl-", canonical: "sports" },
+  { pattern: "spl-", canonical: "sports" },
+  { pattern: "j1100-", canonical: "sports" },
+  { pattern: "lol-", canonical: "sports" },
+  { pattern: "cs2-", canonical: "sports" },
+  { pattern: "mls-", canonical: "sports" },
+  { pattern: "survivor", canonical: "culture" },
+  { pattern: "eurovision", canonical: "culture" },
   { pattern: "crypto", canonical: "crypto" },
   { pattern: "bitcoin", canonical: "crypto" },
   { pattern: "ethereum", canonical: "crypto" },
+  { pattern: "solana", canonical: "crypto" },
+  { pattern: "xrp", canonical: "crypto" },
   { pattern: "defi", canonical: "crypto" },
+  { pattern: "etf", canonical: "crypto" },
   { pattern: "tech", canonical: "tech" },
-  { pattern: "ai", canonical: "tech" },
+  { pattern: " ai ", canonical: "tech" },
+  { pattern: " ai-", canonical: "tech" },
+  { pattern: "openai", canonical: "tech" },
+  { pattern: "apple", canonical: "tech" },
+  { pattern: "google", canonical: "tech" },
+  { pattern: "nvidia", canonical: "tech" },
+  { pattern: "microsoft", canonical: "tech" },
   { pattern: "finance", canonical: "finance" },
   { pattern: "stock", canonical: "finance" },
+  { pattern: "spy", canonical: "finance" },
+  { pattern: "s&p", canonical: "finance" },
   { pattern: "econ", canonical: "economics" },
   { pattern: "fed", canonical: "economics" },
   { pattern: "inflation", canonical: "economics" },
   { pattern: "gdp", canonical: "economics" },
+  { pattern: "cpi", canonical: "economics" },
+  { pattern: "interest rate", canonical: "economics" },
+  { pattern: "tariff", canonical: "economics" },
   { pattern: "weather", canonical: "weather" },
   { pattern: "climate", canonical: "weather" },
   { pattern: "hurricane", canonical: "weather" },
+  { pattern: "temperature", canonical: "weather" },
   { pattern: "culture", canonical: "culture" },
   { pattern: "entertain", canonical: "culture" },
   { pattern: "movie", canonical: "culture" },
@@ -55,7 +106,11 @@ const CATEGORY_ALIASES = [
   { pattern: "mention", canonical: "mentions" },
   { pattern: "geopolitic", canonical: "geopolitics" },
   { pattern: "war", canonical: "geopolitics" },
-  { pattern: "conflict", canonical: "geopolitics" }
+  { pattern: "conflict", canonical: "geopolitics" },
+  { pattern: "iran", canonical: "geopolitics" },
+  { pattern: "russia", canonical: "geopolitics" },
+  { pattern: "china", canonical: "geopolitics" },
+  { pattern: "sanction", canonical: "geopolitics" }
 ];
 
 const PRICE_MARKET_CATEGORY_HINTS = [
@@ -128,6 +183,12 @@ export function isShortTermPriceMarket(market, nowMs = Date.now()) {
   return hasPriceCategory && hasPriceLanguage;
 }
 
+export function isShortTermDirectionMarket(market, nowMs = Date.now()) {
+  if (daysUntil(market?.endDate, nowMs) >= 2) return false;
+  const slug = (market.marketSlug ?? market.slug ?? "").toLowerCase();
+  return /btc-updown-5m|bitcoin-up-or-down|eth-updown-5m/.test(slug);
+}
+
 export function applyPulseMarketSelection(markets, options = {}) {
   const nowMs = options.nowMs ?? Date.now();
   const maxCandidates = Math.max(1, Math.floor(Number(options.maxCandidates ?? 20)));
@@ -135,6 +196,7 @@ export function applyPulseMarketSelection(markets, options = {}) {
   const removed = {
     missingClobTokenIds: 0,
     shortTermPrice: 0,
+    shortTermDirection: 0,
     lowLiquidity: 0
   };
   let candidates = [...markets];
@@ -152,6 +214,11 @@ export function applyPulseMarketSelection(markets, options = {}) {
   candidates = candidates.filter((market) => {
     const keep = !isShortTermPriceMarket(market, nowMs);
     if (!keep) removed.shortTermPrice += 1;
+    return keep;
+  });
+  candidates = candidates.filter((market) => {
+    const keep = !isShortTermDirectionMarket(market, nowMs);
+    if (!keep) removed.shortTermDirection += 1;
     return keep;
   });
 

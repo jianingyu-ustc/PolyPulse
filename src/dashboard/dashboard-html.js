@@ -205,9 +205,9 @@ function renderAll(){
   document.getElementById('h-closed').textContent = t('hClosed');
   document.getElementById('h-skipped').textContent = t('hSkipped');
   document.getElementById('open-head').innerHTML =
-    '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thExpiry'),t('thAmount'),t('thAiProb'),t('thMktProb'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl')].join('</th><th>')+'</th>';
+    '<th>'+[t('thMarket'),t('thCategory'),t('thSide'),t('thOpenTime'),t('thExpiry'),t('thAmount'),t('thAiProb'),t('thMktProb'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl')].join('</th><th>')+'</th>';
   document.getElementById('closed-head').innerHTML =
-    '<th>'+[t('thMarket'),t('thSide'),t('thOpenTime'),t('thCloseTime'),t('thAmount'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl'),t('thReturn')].join('</th><th>')+'</th>';
+    '<th>'+[t('thMarket'),t('thCategory'),t('thSide'),t('thOpenTime'),t('thCloseTime'),t('thAmount'),t('thEdge'),t('thFee'),t('thNetEdge'),t('thPnl'),t('thReturn')].join('</th><th>')+'</th>';
   document.getElementById('skipped-head').innerHTML =
     '<th>'+[t('thMarket'),t('thCategory'),t('thLiquidity'),t('thPhase'),t('thReason'),t('thTime')].join('</th><th>')+'</th>';
   if(_data){
@@ -241,10 +241,11 @@ function renderSummary(s){
 
 function renderOpen(positions){
   var tbody=document.getElementById('open-body');
-  if(!positions.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">'+t('noOpen')+'</td></tr>';return}
+  if(!positions.length){tbody.innerHTML='<tr><td colspan="12" style="color:#8b949e">'+t('noOpen')+'</td></tr>';return}
   tbody.innerHTML=positions.map(function(p,idx){
     var mainRow='<tr class="expandable" onclick="toggleReasoning(\\\'open-'+idx+'\\\')">'+
     '<td><span class="expand-icon" id="icon-open-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
+    '<td>'+(p.category||'-')+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.endDate)+'</td>'+
@@ -256,7 +257,7 @@ function renderOpen(positions){
     '<td class="positive">'+(p.netEdge!=null?pct(p.netEdge):'-')+'</td>'+
     '<td class="'+cls(p.unrealizedPnlUsd)+'">$'+fmt(p.unrealizedPnlUsd)+'</td>'+
     '</tr>';
-    var reasoningRow='<tr class="reasoning-row" id="open-'+idx+'" style="display:none"><td colspan="11">'+
+    var reasoningRow='<tr class="reasoning-row" id="open-'+idx+'" style="display:none"><td colspan="12">'+
     '<div class="reasoning-content">'+
     '<span class="reasoning-label">'+t('reasoning')+'</span>'+
     (p.confidence?'<span class="confidence-badge confidence-'+p.confidence+'">'+esc(p.confidence)+'</span>':'')+
@@ -269,10 +270,11 @@ function renderOpen(positions){
 
 function renderClosed(trades){
   var tbody=document.getElementById('closed-body');
-  if(!trades.length){tbody.innerHTML='<tr><td colspan="10" style="color:#8b949e">'+t('noClosed')+'</td></tr>';return}
+  if(!trades.length){tbody.innerHTML='<tr><td colspan="11" style="color:#8b949e">'+t('noClosed')+'</td></tr>';return}
   tbody.innerHTML=trades.map(function(p,idx){
     var mainRow='<tr class="expandable" onclick="toggleReasoning(\\\'closed-'+idx+'\\\')">'+
     '<td><span class="expand-icon" id="icon-closed-'+idx+'">&#9654;</span>'+marketLink(p)+'</td>'+
+    '<td>'+(p.category||'-')+'</td>'+
     '<td>'+(p.side||p.outcome||'-')+'</td>'+
     '<td>'+ts(p.openedAt)+'</td>'+
     '<td>'+ts(p.closedAt)+'</td>'+
@@ -283,7 +285,7 @@ function renderClosed(trades){
     '<td class="'+cls(p.realizedPnlUsd)+'">$'+fmt(p.realizedPnlUsd)+'</td>'+
     '<td class="'+cls(p.returnPct)+'">'+(p.returnPct!=null?pct(p.returnPct):'-')+'</td>'+
     '</tr>';
-    var reasoningRow='<tr class="reasoning-row" id="closed-'+idx+'" style="display:none"><td colspan="10">'+
+    var reasoningRow='<tr class="reasoning-row" id="closed-'+idx+'" style="display:none"><td colspan="11">'+
     '<div class="reasoning-content">'+
     '<span class="reasoning-label">'+t('reasoning')+'</span>'+
     (p.confidence?'<span class="confidence-badge confidence-'+p.confidence+'">'+esc(p.confidence)+'</span>':'')+

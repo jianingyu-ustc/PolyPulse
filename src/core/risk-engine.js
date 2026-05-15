@@ -188,7 +188,12 @@ export class RiskEngine {
     const aiProb = Number(decision.aiProbability ?? 0);
     const minMarketPrice = this.config.risk.minMarketPrice ?? 0.03;
     const maxEdgeRatio = this.config.risk.edgeSkepticismMaxRatio ?? 5;
-    if (marketProb > 0 && marketProb < minMarketPrice && aiProb > 0 && aiProb / marketProb > maxEdgeRatio) {
+    const categorySlug = (decision.categorySlug ?? market.category ?? "").toLowerCase();
+    const relaxedCategories = ["weather", "culture", "politics", "geopolitics"];
+    const effectiveMaxRatio = relaxedCategories.some(c => categorySlug.includes(c))
+      ? maxEdgeRatio * 4
+      : maxEdgeRatio;
+    if (marketProb > 0 && marketProb < minMarketPrice && aiProb > 0 && aiProb / marketProb > effectiveMaxRatio) {
       blockedReasons.push("edge_skepticism_extreme_ratio");
     }
 

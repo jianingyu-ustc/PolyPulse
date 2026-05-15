@@ -77,8 +77,10 @@ export class PolymarketMarketSource {
     const startOffset = parseOffset(request.cursor ?? request.offset);
     const maxDays = this.config.scan?.maxDaysToResolution;
     const endsBefore = maxDays > 0 ? Date.now() + maxDays * 86_400_000 : undefined;
+    const endsAfter = Date.now();
     const filters = describeMarketFilters({
       ...request,
+      endsAfter: request.endsAfter ?? endsAfter,
       endsBefore: request.endsBefore ?? endsBefore,
       minLiquidityUsd: request.minLiquidityUsd ?? request.minLiquidity ?? (pulseCompatible ? this.config.pulse?.minLiquidityUsd : null),
       activeOnly: request.activeOnly ?? request.active ?? true,
