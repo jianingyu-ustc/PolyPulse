@@ -56,6 +56,7 @@ function emptyMonitorState(now = nowIso()) {
     lastError: null,
     runHistory: [],
     dailyTradeUsd: { date: todayKey(), amountUsd: 0, trades: 0 },
+    dailyClosedProceedsUsd: 0,
     tradedMarkets: {},
     watchlist: [],
     blocklist: []
@@ -286,7 +287,11 @@ export class FileStateStore {
 
   async getMonitorState() {
     const state = await this.readState();
-    state.monitorState.dailyTradeUsd = normalizeDailyTradeUsd(state.monitorState.dailyTradeUsd);
+    const prev = state.monitorState.dailyTradeUsd;
+    state.monitorState.dailyTradeUsd = normalizeDailyTradeUsd(prev);
+    if (prev?.date !== todayKey()) {
+      state.monitorState.dailyClosedProceedsUsd = 0;
+    }
     await this.writeState(state);
     return state.monitorState;
   }
@@ -360,6 +365,16 @@ export class FileStateStore {
     state.monitorState.updatedAt = now;
     await this.writeState(state);
     return state.monitorState;
+  }
+
+  async recordMonitorCloseProceeds(proceedsUsd) {
+    const state = await this.readState();
+    state.monitorState.dailyTradeUsd = normalizeDailyTradeUsd(state.monitorState.dailyTradeUsd);
+    state.monitorState.dailyClosedProceedsUsd = roundUsd(
+      (Number(state.monitorState.dailyClosedProceedsUsd) || 0) + Number(proceedsUsd ?? 0)
+    );
+    state.monitorState.updatedAt = nowIso();
+    await this.writeState(state);
   }
 
   async stopMonitor(reason = "manual_stop") {

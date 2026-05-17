@@ -67,6 +67,7 @@ export class SimulatedMonitorLedger {
     this.closedTrades = [];
     this.openTrades = [];
     this.dailyTradeUsd = { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 };
+    this.dailyClosedProceedsUsd = 0;
     this.highWaterMarkUsd = this.initialCashUsd;
     this.maxDrawdownUsd = 0;
     this.skippedCandidates = [];
@@ -169,6 +170,12 @@ export class SimulatedMonitorLedger {
   }
 
   async beginRound({ runId, limit, maxAmountUsd }) {
+    this.skippedCandidates = [];
+    const today = nowIso().slice(0, 10);
+    if (this.dailyTradeUsd.date !== today) {
+      this.dailyTradeUsd = { date: today, amountUsd: 0, trades: 0 };
+      this.dailyClosedProceedsUsd = 0;
+    }
     await this.log("round.start", {
       run_id: runId,
       limit: limit ?? "default",
@@ -374,6 +381,7 @@ export class SimulatedMonitorLedger {
     const proceedsUsd = round(position.currentValueUsd);
     const realizedPnlUsd = round(proceedsUsd - position.costUsd);
     this.cashUsd = round(this.cashUsd + proceedsUsd);
+    this.dailyClosedProceedsUsd = round(this.dailyClosedProceedsUsd + proceedsUsd);
     const closed = {
       ...position,
       closedAt: nowIso(),

@@ -698,7 +698,8 @@ export class Scheduler {
     const monitorState = await this.stateStore.getMonitorState();
     const maxDaily = this.config.monitor.maxDailyTradeUsd;
     const dailyUsed = asNumber(monitorState.dailyTradeUsd?.amountUsd);
-    const remainingDaily = Math.max(0, maxDaily - dailyUsed - filledUsdThisRun);
+    const dailyRecycled = asNumber(monitorState.dailyClosedProceedsUsd);
+    const remainingDaily = Math.max(0, maxDaily - dailyUsed + dailyRecycled - filledUsdThisRun);
     if (remainingDaily < this.config.risk.minTradeUsd) {
       const risk = blockedRisk("monitor_daily_trade_limit_reached");
       return { decision, risk, order: blockedOrder({ reason: "monitor_daily_trade_limit_reached" }) };
@@ -875,7 +876,8 @@ export class Scheduler {
 
     const maxDaily = this.config.monitor.maxDailyTradeUsd;
     const dailyUsed = asNumber(ledger.dailyTradeUsd?.amountUsd);
-    const remainingDaily = Math.max(0, maxDaily - dailyUsed - filledUsdThisRun);
+    const dailyRecycled = asNumber(ledger.dailyClosedProceedsUsd);
+    const remainingDaily = Math.max(0, maxDaily - dailyUsed + dailyRecycled - filledUsdThisRun);
     if (remainingDaily < this.config.risk.minTradeUsd) {
       const risk = blockedRisk("monitor_daily_trade_limit_reached");
       await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "open-scan" });
@@ -1485,12 +1487,19 @@ export class Scheduler {
         await this.applyPreScreen({ candidateEntries, accumulator, ledger });
         await this.applyCandidateTriage({ candidateEntries, accumulator, ledger });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
-        for (const candidate of accumulator.candidates) {
+        for (const [idx, candidate] of accumulator.candidates.entries()) {
           await ledger.log("candidate", {
             market: candidate.marketSlug,
             selected: candidate.selected,
             reasons: (candidate.skipped_reasons ?? []).join(",") || "none"
           });
+          if (!candidate.selected) {
+            ledger.recordSkippedCandidate({
+              market: candidateEntries[idx].market,
+              reason: (candidate.skipped_reasons ?? []).join(", "),
+              phase: "filter"
+            });
+          }
         }
         const selected = candidateEntries.filter((item) => item.summary.selected);
         const predictions = await mapLimit(
@@ -1502,6 +1511,11 @@ export class Scheduler {
               return await this.predictCandidateNoCache(candidate);
             } catch (error) {
               accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${error instanceof Error ? error.message : String(error)}`);
+              ledger.recordSkippedCandidate({
+                market: candidate.market,
+                reason: `prediction_failed: ${error instanceof Error ? error.message : String(error)}`,
+                phase: "prediction"
+              });
               return null;
             }
           }
@@ -1586,6 +1600,19 @@ export class Scheduler {
           if (result.order.status === "filled" && result.order.filledUsd > 0) {
             orderCount += 1;
             filledUsdThisRun += result.order.filledUsd;
+          } else {
+            const skipPhase = result.decision?.noTradeReason ? "decision"
+              : result.risk?.allowed === false ? "risk"
+              : "execution";
+            const skipReason = result.order.reason
+              ?? (result.risk?.blockedReasons ?? []).join(", ")
+              ?? result.decision?.noTradeReason
+              ?? "blocked";
+            ledger.recordSkippedCandidate({
+              market: prediction.market,
+              reason: skipReason,
+              phase: skipPhase
+            });
           }
         }
         await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });

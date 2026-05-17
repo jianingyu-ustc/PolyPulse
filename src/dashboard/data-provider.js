@@ -2,6 +2,29 @@ function round(value, digits = 4) {
   return Number((Number(value) || 0).toFixed(digits));
 }
 
+const CATEGORY_SLUG_PATTERNS = [
+  [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat/, "politics"],
+  [/sport|nba|nfl|mlb|nhl|soccer|football|tennis|f1|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-/, "sports"],
+  [/crypto|bitcoin|ethereum|solana|xrp|defi|etf/, "crypto"],
+  [/tech| ai |openai|apple|google|nvidia|microsoft/, "tech"],
+  [/finance|stock|spy|s&p/, "finance"],
+  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff/, "economics"],
+  [/weather|climate|hurricane|temperature/, "weather"],
+  [/culture|entertain|movie|music|oscar|survivor|eurovision/, "culture"],
+  [/geopolitic|war|conflict|iran|russia|china|sanction/, "geopolitics"],
+  [/mention/, "mentions"]
+];
+
+function inferCategory(pos) {
+  if (pos.category) return pos.category;
+  const text = [pos.marketSlug, pos.question, pos.eventSlug].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return "";
+  for (const [re, cat] of CATEGORY_SLUG_PATTERNS) {
+    if (re.test(text)) return cat;
+  }
+  return "";
+}
+
 function computeReturns(initialCashUsd, totalEquityUsd, startedAt) {
   const elapsedMs = Date.now() - new Date(startedAt).getTime();
   const elapsedDays = Math.max(1, elapsedMs / 86_400_000);
@@ -23,7 +46,7 @@ function formatPosition(pos) {
     marketId: pos.marketId,
     marketUrl: pos.marketUrl ?? null,
     question: pos.question ?? pos.marketSlug ?? "",
-    category: pos.category ?? "",
+    category: inferCategory(pos),
     outcome: pos.outcome ?? "",
     side: pos.side ?? "",
     openedAt: pos.openedAt ?? null,
@@ -33,6 +56,7 @@ function formatPosition(pos) {
     unrealizedPnlUsd: pos.unrealizedPnlUsd ?? 0,
     aiProbability: pos.lastDecision?.aiProbability ?? null,
     marketProbability: pos.lastDecision?.marketProbability ?? null,
+    currentMarketProb: pos.currentPrice ?? null,
     edge: pos.lastDecision?.edge ?? pos.lastDecision?.grossEdge ?? null,
     netEdge: pos.lastDecision?.netEdge ?? null,
     feeImpact: pos.lastDecision?.edge != null && pos.lastDecision?.netEdge != null
@@ -49,7 +73,7 @@ function formatClosedTrade(trade) {
     marketId: trade.marketId,
     marketUrl: trade.marketUrl ?? null,
     question: trade.question ?? trade.marketSlug ?? "",
-    category: trade.category ?? "",
+    category: inferCategory(trade),
     outcome: trade.outcome ?? "",
     side: trade.side ?? "",
     openedAt: trade.openedAt ?? null,

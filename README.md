@@ -13,7 +13,7 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
-概率和下单金额口径：AI provider 输出的 `ai_probability` 表示 Yes outcome 的独立概率估计；代码会为每个 outcome 生成可执行比较口径，Yes 使用 `ai_probability`，No 使用 `1 - ai_probability`。`DecisionEngine` 会同时评估 Yes 和 No，分别比较 `outcome_ai_probability` 和该 outcome 的 `market_implied_probability`，计算 `grossEdge = outcome_ai_probability - market_implied_probability`，再扣除 fee 得到 `netEdge`。因此当 Yes 的 `ai_probability < Yes market_implied_probability` 时，不是必然跳过；如果 No outcome 的 `1 - ai_probability` 高于 No 盘口且扣费后 `netEdge > 0`，系统会考虑买入 No，否则跳过。`pulse-direct` 下仓位先按 quarter Kelly 计算：`fullKellyPct = max(0, (outcome_ai_probability - market_implied_probability) / (1 - market_implied_probability))`，`quarterKellyPct = fullKellyPct / 4`，`suggestedNotionalUsd = bankrollUsd * quarterKellyPct`。最终可下单金额不是 AI 决定，也不等于 `MONITOR_MAX_AMOUNT_USD`，而是由代码取 `MONITOR_MAX_AMOUNT_USD`（或默认 `MIN_TRADE_USD`）、`suggestedNotionalUsd`、单笔/总敞口/event 敞口/流动性上限、真实余额和 allowance 等约束后的 `approvedUsd`；Scheduler 在调用 RiskEngine 之前还会检查 `MONITOR_MAX_DAILY_TRADE_USD` 日限额，超限时直接阻断不进入风控。实际提交的 `risk.order.amountUsd` 小于等于 `MONITOR_MAX_AMOUNT_USD`，风控不通过时为 0。
+概率和下单金额口径：AI provider 输出的 `ai_probability` 表示 Yes outcome 的独立概率估计；代码会为每个 outcome 生成可执行比较口径，Yes 使用 `ai_probability`，No 使用 `1 - ai_probability`。`DecisionEngine` 会同时评估 Yes 和 No，分别比较 `outcome_ai_probability` 和该 outcome 的 `market_implied_probability`，计算 `grossEdge = outcome_ai_probability - market_implied_probability`，再扣除 fee 得到 `netEdge`。因此当 Yes 的 `ai_probability < Yes market_implied_probability` 时，不是必然跳过；如果 No outcome 的 `1 - ai_probability` 高于 No 盘口且扣费后 `netEdge > 0`，系统会考虑买入 No，否则跳过。`pulse-direct` 下仓位先按 quarter Kelly 计算：`fullKellyPct = max(0, (outcome_ai_probability - market_implied_probability) / (1 - market_implied_probability))`，`quarterKellyPct = fullKellyPct / 4`，`suggestedNotionalUsd = bankrollUsd * quarterKellyPct`。最终可下单金额不是 AI 决定，也不等于 `MONITOR_MAX_AMOUNT_USD`，而是由代码取 `MONITOR_MAX_AMOUNT_USD`（或默认 `MIN_TRADE_USD`）、`suggestedNotionalUsd`、单笔/总敞口/event 敞口/流动性上限、真实余额和 allowance 等约束后的 `approvedUsd`；Scheduler 在调用 RiskEngine 之前还会检查 `MONITOR_MAX_DAILY_TRADE_USD` 日限额（关仓回收的金额会回补额度），超限时直接阻断不进入风控。实际提交的 `risk.order.amountUsd` 小于等于 `MONITOR_MAX_AMOUNT_USD`，风控不通过时为 0。
 
 PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
@@ -150,7 +150,7 @@ RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT
 
 | 阻断条件 | 说明 |
 | --- | --- |
-| `monitor_daily_trade_limit_reached` | Scheduler 层：当日累计交易金额已达 `MONITOR_MAX_DAILY_TRADE_USD`（在 RiskEngine 之前检查） |
+| `monitor_daily_trade_limit_reached` | Scheduler 层：当日净交易金额（开仓累计 - 关仓回收）已达 `MONITOR_MAX_DAILY_TRADE_USD`（在 RiskEngine 之前检查） |
 | `system_paused` / `system_halted` | 系统级暂停或回撤触发停机 |
 | `drawdown_halt_threshold_exceeded` | 组合回撤超 `DRAWDOWN_HALT_PCT` |
 | `decision_action_*_not_executable` | DecisionEngine 输出非 `open`（如 `skip`） |
@@ -192,6 +192,41 @@ approvedUsd = min(
 ```
 
 `approvedUsd` 即为实际提交的订单金额。阻断检查任一不通过时为 0。
+
+### 每日开仓总金额和数量控制
+
+以下环境变量共同决定每日的开仓总金额和交易笔数上限：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `MONITOR_MAX_DAILY_TRADE_USD` | 25 | **每日所有交易的累计部署金额上限（美元）**。Scheduler 在调用 RiskEngine 之前检查，超限时直接以 `monitor_daily_trade_limit_reached` 阻断，不进入风控。每日 UTC 00:00 重置。**关仓释放的现金会回补日限额**——若当日已用 $25 但关仓回收 $10，则额外释放 $10 可用额度。 |
+| `MONITOR_MAX_TRADES_PER_ROUND` | 3 | **每轮最大交易（开仓）笔数**。一轮中已开仓数达到此值后，剩余候选直接跳过。每日总笔数 = 此值 × 当日运行轮数。 |
+| `MONITOR_MAX_AMOUNT_USD` | = `MIN_TRADE_USD` | **单笔交易最大开仓金额（美元）**。风控取 min(此值, quarterKellyUsd, 各风控上限)，实际每笔 ≤ 此值。 |
+| `MIN_TRADE_USD` | 1 | **最小交易金额（美元）**。风控约束后低于此值的订单被 `below_min_trade_usd` 阻断。也用作 `MONITOR_MAX_AMOUNT_USD` 未设置时的单笔上限回退值。 |
+| `MAX_POSITION_COUNT` | 20 | **同时持有的最大仓位数**。达到上限后新开仓以 `above_max_position_count` 阻断。间接限制日开仓数——仓位满后不再开新仓。 |
+| `PULSE_MAX_CANDIDATES` | 20 | **规则预筛后每轮最大候选数**。候选池越大，通过 prescreen/triage/prediction 进入执行阶段的机会越多，间接提升每轮开仓概率。 |
+| `PULSE_REPORT_CANDIDATES` | 4 | **最终执行阶段的 top 候选数**。经 AI 概率估算和排序后，只有排名前 N 的候选进入风控和执行。直接限制每轮可能开仓的上限（受 `MONITOR_MAX_TRADES_PER_ROUND` 进一步约束）。 |
+| `PULSE_BATCH_CAP_PCT` | — | **单轮最大部署占总资金比例 (0-1]**。一轮内所有订单累计金额不超过 `portfolioEquity × batchCapPct`。 |
+| `MONITOR_INTERVAL_SECONDS` | — | **各轮之间的间隔（秒）**。间接影响每日总交易数——间隔越短，每日轮数越多，总开仓笔数和金额越高（受 `MONITOR_MAX_DAILY_TRADE_USD` 封顶）。 |
+
+**每日交易金额的约束链**：
+
+```
+单笔金额 = min(MONITOR_MAX_AMOUNT_USD, quarterKellyUsd, 风控各层上限)
+每轮金额 ≤ MONITOR_MAX_TRADES_PER_ROUND × 单笔金额
+每轮金额 ≤ portfolioEquity × PULSE_BATCH_CAP_PCT  (如设置)
+每日金额 ≤ MONITOR_MAX_DAILY_TRADE_USD - 当日关仓回收额   (有效上限)
+```
+
+**增大每日开仓金额和数量的调参方向**：
+
+- 增大 `MONITOR_MAX_DAILY_TRADE_USD`（提升每日总金额上限）
+- 增大 `MONITOR_MAX_TRADES_PER_ROUND`（每轮可开更多仓）
+- 增大 `MONITOR_MAX_AMOUNT_USD` 或 `MIN_TRADE_USD`（提升单笔金额）
+- 增大 `PULSE_MAX_CANDIDATES` 和 `PULSE_REPORT_CANDIDATES`（扩大候选池和执行池）
+- 缩短 `MONITOR_INTERVAL_SECONDS`（每日运行更多轮）
+- 增大 `MAX_POSITION_COUNT`（允许同时持有更多仓位）
+- 降低 `PULSE_MIN_NET_EDGE` / `PULSE_LOW_CONFIDENCE_MIN_EDGE`（降低开仓门槛，更多候选通过）
 
 ### Monitor 候选去重（已持仓市场处理）
 
