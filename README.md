@@ -9,7 +9,7 @@ PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。
 
 所有测试、验收和部署命令都必须使用 `.env`，并读取当前 Polymarket 真实市场。
 
-核心链路：抓取当前 Polymarket 市场话题，规则预筛后先用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP），再用 AI provider 做候选 triage，收集证据（包括从 Polymarket 页面抓取的结算规则、注释和社区评论，从 CLOB 获取的 order book 深度和价差，以及对 resolution source URL 的实时访问验证），调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
+核心链路：抓取当前 Polymarket 市场话题，规则预筛后先用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，prompt 中包含市场标题、分类、价格、到期日、流动性和结算规则摘要前 200 字），再用 AI provider 做候选 triage，收集证据（包括从 Polymarket 页面抓取的结算规则、注释和社区评论，从 CLOB 获取的 order book 深度和价差，以及对 resolution source URL 的实时访问验证），调用配置的 AI provider 估算事件真实发生概率，借鉴 Predict-Raven `pulse-direct` 的职责分离和收益计算口径计算 fee、net edge、quarter Kelly sizing 和 monthly return，再通过 `RiskEngine`、live preflight、余额检查和 `OrderExecutor` 决定是否执行。
 
 Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEstimate`，不能直接输出 broker 参数、token 改写、交易金额或可执行订单。AI 只负责候选语义 triage、概率、证据质量、可研究性和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序、batch cap 和执行风控都由代码计算。
 
@@ -30,7 +30,7 @@ PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Pre
 | Step | 阶段 | 实际执行 |
 |------|------|---------|
 | 1 | **Scan** | 从 Polymarket Gamma 拉取 200 个市场，按流动性/volume/规则过滤为 20 个候选 |
-| 2 | **Pre-screen** | 轻量 AI 判定 `TRADE`："可通过选区基本面和历史共和党优势验证 7% 定价合理性" |
+| 2 | **Pre-screen** | 轻量 AI 判定 `TRADE`（prompt 含结算规则摘要）："可通过选区基本面和历史共和党优势验证 7% 定价合理性" |
 | 3 | **Triage** | AI 语义 triage：score=0.2, researchability=medium, information_advantage=low；识别证据缺口（partisan lean, incumbency, polling, wave indicators, order book depth） |
 | 4 | **Evidence** | 收集证据：Polymarket 页面结算规则/评论、CLOB order book 深度、resolution source 验证、领域适配器、AI Evidence Research 定向搜索 |
 | 5 | **Prediction** | AI 估算 `ai_probability=0.05`（民主党仅 5% 概率赢），confidence=low；代码计算 No 侧 market_probability=0.935, grossEdge=0.015, 扣 fee 后 netEdge=0.015, quarterKellyPct=5.8%, monthlyReturn=0.26% |
@@ -47,7 +47,7 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - AI provider 只输出 `CandidateTriage` 或 `ProbabilityEstimate`：候选语义 triage、概率估计、置信度、证据引用、不确定性因素、可研究性、信息优势和证据缺口。
 - 代码负责 fee、edge、net edge、quarter Kelly、monthly return、候选排序、batch cap、风控和执行。
 - provider 输出不能控制 broker、token 改写、交易金额或真实订单。
-- `monitor run` 在规则预筛后会先调用轻量 AI pre-screen 对候选做信息优势预筛（TRADE/SKIP 分类，60 秒超时，失败时全部保留），再调用 AI candidate triage 对剩余候选做语义聚类、主题优先级、可研究性、信息优势和证据缺口判断；`reject` 候选会被记录为 `ai_triage_reject`，不进入后续概率估算。这对齐了 Predict-Raven 的 `pulse-prescreen.ts` 两层 AI 筛选机制。
+- `monitor run` 在规则预筛后会先调用轻量 AI pre-screen 对候选做信息优势预筛（TRADE/SKIP 分类，prompt 包含市场标题、分类、价格、到期日、流动性和结算规则摘要前 200 字以减少因标题模糊导致的误判，60 秒超时，失败时全部保留），再调用 AI candidate triage 对剩余候选做语义聚类、主题优先级、可研究性、信息优势和证据缺口判断；`reject` 候选会被记录为 `ai_triage_reject`，不进入后续概率估算。这对齐了 Predict-Raven 的 `pulse-prescreen.ts` 两层 AI 筛选机制。
 - `monitor run` 对规则预筛后的候选先调用 provider 生成概率估计，再由代码按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生收益指标排序后执行。
 - 证据收集阶段会从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据，提取完整结算规则、注释/公告和社区高赞评论，作为高可信度证据传给 AI。这对齐了 Predict-Raven 的 `scrape-market.ts --sections context,rules,comments` 深度研究步骤，使 AI 能看到市场完整的结算条件、官方公告和社区讨论。
 - 证据收集阶段会从 Polymarket CLOB 获取每个 outcome token 的 order book 深度，提取 best bid/ask、spread、spread%、2% 档位深度和 top 5 挂单，作为高可信度市场微结构证据。这对齐了 Predict-Raven 的 `orderbook.ts` 研究步骤（BUY side, medium urgency, 5 levels），使 AI 能看到真实流动性分布和执行成本，避免正 edge 被交易成本吃掉。
@@ -500,7 +500,7 @@ header 字段含义：
 | 序号 | Runtime | 提示词用途 | 调用次数/轮 |
 | --- | --- | --- | --- |
 | 1 | `topic-discovery-runtime.js` | AI 话题发现：从外部信号发现被规则遗漏的话题 | 1 次 |
-| 2 | `prescreen-runtime.js` | AI pre-screen：对候选池做 TRADE/SKIP 信息优势预判 | 1 次（批量） |
+| 2 | `prescreen-runtime.js` | AI pre-screen：对候选池做 TRADE/SKIP 信息优势预判（含结算规则摘要） | 1 次（批量） |
 | 3 | `candidate-triage-runtime.js` | AI candidate triage：语义聚类、可研究性、证据缺口 | 1 次（批量） |
 | 4 | `evidence-research-runtime.js` | AI 证据研究：评估证据充分性、指导定向搜索 | N 次（每个选中候选 1 次） |
 | 5 | `codex-runtime.js` | AI 概率估算：估算事件发生概率 | N 次（每个选中候选 1 次） |
@@ -826,7 +826,7 @@ node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop
 Monitor 行为：
 
 - 每轮自动抓取当前 Polymarket topic，按 pulse-compatible 口径筛选候选。
-- 规则预筛后先调用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，60 秒超时，失败时保留全部），被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
+- 规则预筛后先调用轻量 AI pre-screen 做信息优势预判（TRADE/SKIP，prompt 包含市场标题、分类、价格、到期日、流动性和结算规则摘要前 200 字，60 秒超时，失败时保留全部），被标为 SKIP 的候选记录 `ai_prescreen_skip` 并排除。
 - 通过 pre-screen 的候选再调用 provider 做 candidate triage：语义聚类、主题优先级、可研究性、信息优势和证据缺口；被标记为 `reject` 的候选会记录 `ai_triage_reject` 并跳过概率估算。
 - 证据收集阶段从 Polymarket 事件页面抓取 `__NEXT_DATA__` SSR 数据（结算规则、注释/公告、社区高赞评论），从 CLOB 获取每个 outcome token 的 order book 深度（best bid/ask、spread、2% 深度、top 5 挂单），并对 resolution source URL 做实时访问验证获取官方数据源当前状态，连同 market metadata 和 resolution rules 一起作为上下文传给 AI 做概率估算。
 - 对候选市场调用配置的真实 AI provider 预测胜率、证据质量、可研究性和信息优势，并由代码计算 implied probability、edge、net edge、quarter Kelly 和 monthly return。

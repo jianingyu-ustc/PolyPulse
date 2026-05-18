@@ -19,7 +19,7 @@
  * SKIP|market_slug|一句话原因
  *
  * 候选市场：
- * 1. <question> | slug: <slug> | category: <cat> | price: <price> | ends: <date> | liquidity: <liq>
+ * 1. <question> | slug: <slug> | category: <cat> | price: <price> | ends: <date> | liquidity: <liq> | context: <resolution rules truncated to 200 chars>
  * 2. ...
  * ─────────────────────────────────────────────────────────────────
  *
@@ -75,7 +75,9 @@ function buildPreScreenPrompt({ candidates, settings }) {
     const liq = formatLiquidity(market.liquidityUsd ?? 0);
     const endDate = formatEndDate(market.endDate);
     const category = market.category || "uncategorized";
-    return `${index + 1}. ${market.question} | slug: ${market.marketSlug} | category: ${category} | price: ${price} | ends: ${endDate} | liquidity: ${liq}`;
+    const rawRules = market.resolutionRules || "";
+    const rules = rawRules ? ` | context: ${rawRules.length > 200 ? rawRules.slice(0, 200) + "…" : rawRules}` : "";
+    return `${index + 1}. ${market.question} | slug: ${market.marketSlug} | category: ${category} | price: ${price} | ends: ${endDate} | liquidity: ${liq}${rules}`;
   });
 
   if (localeIsChinese) {
