@@ -47,15 +47,15 @@ function topLevels(levels, count = 5) {
   }));
 }
 
-function summarizeBook(book, outcomeLabel) {
+function summarizeBook(book, outcomeLabel, depthLevels = 5) {
   if (!book) return `${outcomeLabel}: order book unavailable`;
   const { bestBid, bestAsk, bids, asks } = book;
   const { spread, spreadPct } = formatSpread(bestBid, bestAsk);
   const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : null;
   const bidDepth = mid ? computeDepth2Pct(bids, mid, "bid") : 0;
   const askDepth = mid ? computeDepth2Pct(asks, mid, "ask") : 0;
-  const topBids = topLevels(bids, 5);
-  const topAsks = topLevels(asks, 5);
+  const topBids = topLevels(bids, depthLevels);
+  const topAsks = topLevels(asks, depthLevels);
 
   const lines = [
     `[${outcomeLabel}]`,
@@ -102,7 +102,7 @@ export class OrderBookEvidenceAdapter {
     }
 
     const summaryParts = bookResults.map(({ outcome, book }) =>
-      summarizeBook(book, outcome.label ?? outcome.clobTokenId)
+      summarizeBook(book, outcome.label ?? outcome.clobTokenId, this.depthLevels)
     );
 
     const allFailed = bookResults.every(({ book }) => book === null);

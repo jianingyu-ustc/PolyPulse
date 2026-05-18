@@ -3,12 +3,12 @@ import { CodexProbabilityProvider } from "../runtime/codex-runtime.js";
 import { ClaudeProbabilityProvider } from "../runtime/claude-runtime.js";
 import { resolveEffectiveProvider } from "../runtime/codex-skill-settings.js";
 
-function clampProbability(value) {
+function clampProbability(value, min = 0.01, max = 0.99) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
     return 0.5;
   }
-  return Math.min(0.95, Math.max(0.05, Number(number.toFixed(4))));
+  return Math.min(max, Math.max(min, Number(number.toFixed(4))));
 }
 
 function marketProbability(outcome) {
@@ -81,7 +81,9 @@ export class ProbabilityEstimator {
   async estimate({ market, evidenceBundle = null, evidence = null }) {
     const evidenceItems = normalizeEvidenceInput(evidence ?? evidenceBundle);
     const providerResult = await this.provider.estimate({ market, evidence: evidenceItems });
-    const aiProbability = clampProbability(providerResult.ai_probability ?? providerResult.aiProbability);
+    const clampMin = this.config.calibration?.probabilityClampMin ?? 0.01;
+    const clampMax = this.config.calibration?.probabilityClampMax ?? 0.99;
+    const aiProbability = clampProbability(providerResult.ai_probability ?? providerResult.aiProbability, clampMin, clampMax);
     const confidence = providerResult.confidence ?? "low";
     const freshness = Number(providerResult.freshness_score ?? providerResult.freshnessScore ?? freshnessScore(evidenceItems));
     const keyItems = providerResult.key_evidence ?? providerResult.keyEvidence ?? keyEvidence(evidenceItems);
@@ -93,7 +95,7 @@ export class ProbabilityEstimator {
     const estimates = market.outcomes.map((outcome, index) => {
       const label = outcome.label.toLowerCase();
       const isNoSide = label === "no" || (index === 1 && label !== "yes");
-      const outcomeAiProbability = isNoSide ? clampProbability(1 - aiProbability) : aiProbability;
+      const outcomeAiProbability = isNoSide ? clampProbability(1 - aiProbability, clampMin, clampMax) : aiProbability;
       const implied = marketProbability(outcome);
       return {
         tokenId: outcome.tokenId,

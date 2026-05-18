@@ -53,7 +53,7 @@ function sourceIds(estimate) {
   ].filter(Boolean))];
 }
 
-export function buildTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1 }) {
+export function buildTradeCandidate({ market, estimate, side = "yes", portfolio = null, amountUsd = 1, minNetEdge = MIN_NET_EDGE }) {
   const wantedSide = normalizeSide(side);
   const outcome = outcomeForSide(market, wantedSide);
   const outcomeEstimate = estimateForSide(estimate, wantedSide);
@@ -81,7 +81,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
     ? "uninformed_prior"
     : insufficientEvidence
       ? "insufficient_evidence"
-      : netEdge < MIN_NET_EDGE
+      : netEdge < minNetEdge
         ? "edge_below_threshold"
         : null;
 
@@ -229,7 +229,7 @@ export class DecisionEngine {
     const lowConfidenceMinEdge = this.config.pulse?.lowConfidenceMinEdge ?? 0;
     const candidate = this.pulseDirect
       ? buildPulseTradeCandidate({ market, estimate, side, portfolio, amountUsd, dynamicFeeParams, minNetEdge, lowConfidenceMinEdge })
-      : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd });
+      : buildTradeCandidate({ market, estimate, side, portfolio, amountUsd, minNetEdge });
     const common = {
       marketId: market.marketId,
       eventId: market.eventId,

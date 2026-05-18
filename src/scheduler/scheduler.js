@@ -14,6 +14,7 @@ import { EvidenceResearchProvider } from "../runtime/evidence-research-runtime.j
 import { TopicDiscoveryProvider } from "../runtime/topic-discovery-runtime.js";
 import { SemanticDiscoveryRuntime } from "../runtime/semantic-discovery-runtime.js";
 import { DownsideRiskRanker } from "../core/downside-risk-ranker.js";
+import { applyPulseBatchCap } from "../core/pulse-strategy.js";
 import { PredictionPerformanceTracker } from "../core/prediction-tracker.js";
 import { DynamicFeeService } from "../core/dynamic-fee-service.js";
 import { LiveBroker } from "../brokers/live-broker.js";
@@ -21,6 +22,16 @@ import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
 import { DashboardServer } from "../dashboard/dashboard-server.js";
 import { createPaperDataProvider, createLiveDataProvider } from "../dashboard/data-provider.js";
+
+function applyBatchCapToRanked(rankedPredictions, bankrollUsd, batchCapPct) {
+  if (!batchCapPct || batchCapPct >= 1 || bankrollUsd <= 0) return rankedPredictions;
+  const plans = rankedPredictions.map((r) => r.analysis);
+  const capped = applyPulseBatchCap(plans, bankrollUsd, batchCapPct);
+  return rankedPredictions.map((r, i) => ({
+    ...r,
+    analysis: { ...r.analysis, suggestedNotionalUsd: capped[i].suggestedNotionalUsd, batchCapScaleFactor: capped[i].batchCapScaleFactor }
+  }));
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -1241,13 +1252,17 @@ export class Scheduler {
           decisionEngine: this.decisionEngine,
           dynamicFeeParamsMap
         });
-        const rankedPredictions = simulated
-          ? this.downsideRiskRanker.rankWithDownsideRisk({
-            rankedPredictions: baseRanked,
-            portfolio: ledger.portfolio(),
-            ledgerStatistics: ledger.statistics()
-          })
-          : baseRanked;
+        const rankedPredictions = applyBatchCapToRanked(
+          simulated && this.config.pulse?.downsideRiskRanking !== false
+            ? this.downsideRiskRanker.rankWithDownsideRisk({
+              rankedPredictions: baseRanked,
+              portfolio: ledger.portfolio(),
+              ledgerStatistics: ledger.statistics()
+            })
+            : baseRanked,
+          portfolioForRanking.totalEquityUsd ?? 0,
+          this.config.pulse?.batchCapPct
+        );
         if (simulated) {
           for (const [index, ranked] of rankedPredictions.entries()) {
             await ledger.log("candidate.ranked", {
@@ -1534,11 +1549,17 @@ export class Scheduler {
           decisionEngine: this.decisionEngine,
           dynamicFeeParamsMap: dynamicFeeParamsMapSim
         });
-        const rankedPredictions = this.downsideRiskRanker.rankWithDownsideRisk({
-          rankedPredictions: baseRanked,
-          portfolio: ledger.portfolio(),
-          ledgerStatistics: ledger.statistics()
-        });
+        const rankedPredictions = applyBatchCapToRanked(
+          this.config.pulse?.downsideRiskRanking !== false
+            ? this.downsideRiskRanker.rankWithDownsideRisk({
+              rankedPredictions: baseRanked,
+              portfolio: ledger.portfolio(),
+              ledgerStatistics: ledger.statistics()
+            })
+            : baseRanked,
+          ledger.portfolio().totalEquityUsd ?? 0,
+          this.config.pulse?.batchCapPct
+        );
         for (const [index, ranked] of rankedPredictions.entries()) {
           await ledger.log("candidate.ranked", {
             rank: index + 1,
@@ -1732,13 +1753,18 @@ export class Scheduler {
           const params = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
           if (params) dynamicFeeParamsMapLive.set(prediction.market.marketId, params);
         }
-        const rankedPredictions = rankPredictionsForExecution({
-          predictions: accumulator.predictions,
-          portfolio: await this.stateStore.getPortfolio(),
-          amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
-          decisionEngine: this.decisionEngine,
-          dynamicFeeParamsMap: dynamicFeeParamsMapLive
-        });
+        const livePortfolio = await this.stateStore.getPortfolio();
+        const rankedPredictions = applyBatchCapToRanked(
+          rankPredictionsForExecution({
+            predictions: accumulator.predictions,
+            portfolio: livePortfolio,
+            amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
+            decisionEngine: this.decisionEngine,
+            dynamicFeeParamsMap: dynamicFeeParamsMapLive
+          }),
+          livePortfolio.totalEquityUsd ?? 0,
+          this.config.pulse?.batchCapPct
+        );
         const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
         let orderCount = 0;
         let filledUsdThisRun = 0;
