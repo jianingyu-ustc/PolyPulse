@@ -124,7 +124,7 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
    ```
    其中 `bankrollUsd` = 组合总权益（`portfolio.totalEquityUsd`）。
 6. **Monthly return**：`monthlyReturn = netEdge / (daysToResolution / 30)`，其中 `daysToResolution` 取 `market.endDate` 距当前的天数（无 endDate 时回退 180 天）。同样的 net edge，短期市场月化收益更高。
-7. **开仓条件**：`quarterKellyUsd > 0 && netEdge > 0 && netEdge >= PULSE_MIN_NET_EDGE` 时 `action=open`，否则 `skip`。低置信度时 `effectiveMinEdge = max(PULSE_MIN_NET_EDGE, PULSE_LOW_CONFIDENCE_MIN_EDGE)`。
+7. **开仓条件**：`marketProb > 0.5 && quarterKellyUsd > 0 && netEdge > 0 && netEdge >= PULSE_MIN_NET_EDGE` 时 `action=open`，否则 `skip`。其中 `marketProb > 0.5` 要求所选方向的市场概率超过50%（即只顺大概率方向下注，不做尾部赌注）。低置信度时 `effectiveMinEdge = max(PULSE_MIN_NET_EDGE, PULSE_LOW_CONFIDENCE_MIN_EDGE)`。
 8. **选择方向**：两侧均计算完毕后，选 `monthlyReturn` 最高且 `action=open` 的方向作为最终候选。
 
 **概率校准**：DecisionEngine 优先使用 `calibratedProbability`（经 ProbabilityCalibrationLayer 向 0.5 shrinkage 后的值），仅在校准未启用时回退到 raw `aiProbability`。校准后概率被 clamp 到 `[PULSE_PROBABILITY_CLAMP_MIN, PULSE_PROBABILITY_CLAMP_MAX]`（默认 [0.01, 0.99]）。
@@ -154,6 +154,7 @@ RiskEngine 对 `suggestedNotionalUsd` 和 `requestedUsd`（= `MONITOR_MAX_AMOUNT
 | `system_paused` / `system_halted` | 系统级暂停或回撤触发停机 |
 | `drawdown_halt_threshold_exceeded` | 组合回撤超 `DRAWDOWN_HALT_PCT` |
 | `decision_action_*_not_executable` | DecisionEngine 输出非 `open`（如 `skip`） |
+| `direction_probability_below_threshold` | 所选方向的市场概率 ≤ 50%，不做尾部赌注 |
 | `market_closed` / `market_inactive` / `market_not_tradable` | 市场已关闭或不可交易 |
 | `above_max_position_count` | 持仓数已达 `MAX_POSITION_COUNT` |
 | `edge_skepticism_extreme_ratio` | 市场价 < `RISK_MIN_MARKET_PRICE` 且 AI/市场概率比 > `RISK_EDGE_SKEPTICISM_MAX_RATIO` |

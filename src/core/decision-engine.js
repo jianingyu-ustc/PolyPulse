@@ -81,9 +81,11 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
     ? "uninformed_prior"
     : insufficientEvidence
       ? "insufficient_evidence"
-      : netEdge < minNetEdge
-        ? "edge_below_threshold"
-        : null;
+      : implied <= 0.5
+        ? "direction_probability_below_threshold"
+        : netEdge < minNetEdge
+          ? "edge_below_threshold"
+          : null;
 
   return assertSchema("TradeCandidate", {
     marketId: market.marketId,

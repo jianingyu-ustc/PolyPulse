@@ -339,9 +339,12 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
     ? Math.max(baseMinEdge, lowConfidenceMinEdge)
     : baseMinEdge;
   const isUninformedPrior = isLowConfidence && Math.abs(aiProb - 0.5) <= 0.02;
+  const directionProbBelowHalf = marketProb <= 0.5;
   const action = isUninformedPrior
     ? "skip"
-    : (kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip");
+    : directionProbBelowHalf
+      ? "skip"
+      : (kelly.quarterKellyUsd > 0 && netEdge > 0 && netEdge >= effectiveMinEdge ? "open" : "skip");
   return {
     side,
     categorySlug,
@@ -358,7 +361,10 @@ export function buildPulseTradePlan({ market, side, aiProb, marketProb, bankroll
     resolutionSource: monthly.resolutionSource,
     action,
     skipReason: action === "skip"
-      ? (isUninformedPrior ? "uninformed_prior" : netEdge > 0 && netEdge < effectiveMinEdge ? "below_min_net_edge" : "quarter_kelly_not_positive")
+      ? (isUninformedPrior ? "uninformed_prior"
+        : directionProbBelowHalf ? "direction_probability_below_threshold"
+        : netEdge > 0 && netEdge < effectiveMinEdge ? "below_min_net_edge"
+        : "quarter_kelly_not_positive")
       : null
   };
 }
