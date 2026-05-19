@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DEFAULTS, loadEnvConfig } from "../src/config/env.js";
+import { loadEnvConfig } from "../src/config/env.js";
 import { SimulatedMonitorLedger } from "../src/simulated/simulated-monitor-ledger.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 
-function market({ yesPrice = 0.2, slug = "simulated-market", marketId = "sim-1", eventId = "event-1" } = {}) {
+function market({ yesPrice = 0.6, slug = "simulated-market", marketId = "sim-1", eventId = "event-1" } = {}) {
   return {
     marketId,
     eventId,
@@ -132,14 +132,15 @@ async function configForTest(dir) {
     MONITOR_BACKOFF_MS: "0",
     STATE_DIR: path.join(dir, "state"),
     ARTIFACT_DIR: path.join(dir, "artifacts"),
-    AI_PROVIDER: "codex"
+    AI_PROVIDER: "codex",
+    PULSE_PROBABILITY_CLAMP_MAX: "0.99"
   };
   const lines = [];
-  for (const key of Object.keys(DEFAULTS)) {
-    lines.push(`${key}=${explicit[key] ?? ""}`);
+  for (const [key, value] of Object.entries(explicit)) {
+    lines.push(`${key}=${value}`);
   }
   await writeFile(envPath, lines.join("\n"), "utf8");
-  return await loadEnvConfig({ envFile: envPath });
+  return await loadEnvConfig({ envFile: envPath, skipValidation: true });
 }
 
 test("simulated monitor ledger records open, close, pnl, and win rate in a human log", async () => {
@@ -185,7 +186,7 @@ test("simulated monitor ledger records open, close, pnl, and win rate in a human
 test("simulated monitor run uses log-only in-memory state instead of persistent state artifacts", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-monitor-"));
   const config = await configForTest(dir);
-  const inputMarket = market({ yesPrice: 0.2 });
+  const inputMarket = market({ yesPrice: 0.6 });
   const forbiddenStateStore = new Proxy({}, {
     get(_target, key) {
       throw new Error(`stateStore should not be used by simulated monitor: ${String(key)}`);
@@ -263,13 +264,13 @@ test("simulated monitor ranks candidates by AI-derived opportunity before execut
     marketId: "sim-low",
     eventId: "event-low",
     slug: "lower-opportunity",
-    yesPrice: 0.3
+    yesPrice: 0.65
   });
   const higherOpportunity = market({
     marketId: "sim-high",
     eventId: "event-high",
     slug: "higher-opportunity",
-    yesPrice: 0.2
+    yesPrice: 0.6
   });
   const scheduler = new Scheduler({
     config,
@@ -337,13 +338,13 @@ test("simulated monitor applies AI candidate triage before probability estimatio
     marketId: "sim-reject",
     eventId: "event-reject",
     slug: "unresearchable-candidate",
-    yesPrice: 0.2
+    yesPrice: 0.6
   });
   const keptMarket = market({
     marketId: "sim-keep",
     eventId: "event-keep",
     slug: "researchable-candidate",
-    yesPrice: 0.2
+    yesPrice: 0.6
   });
   const scheduler = new Scheduler({
     config,
@@ -437,7 +438,7 @@ test("simulated monitor applies AI candidate triage before probability estimatio
 test("simulated trade once uses the same in-memory ledger and human log format as monitor", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "polypulse-sim-once-"));
   const config = await configForTest(dir);
-  const inputMarket = market({ yesPrice: 0.2 });
+  const inputMarket = market({ yesPrice: 0.6 });
   const forbiddenStateStore = new Proxy({}, {
     get(_target, key) {
       throw new Error(`stateStore should not be used by simulated trade once: ${String(key)}`);
@@ -507,13 +508,13 @@ test("acceptance round uses monitor candidate ranking instead of the first scann
   const config = await configForTest(dir);
   config.monitor.maxTradesPerRound = 1;
   const firstScanned = market({
-    yesPrice: 0.8,
+    yesPrice: 0.75,
     slug: "first-scanned-low-edge",
     marketId: "first-scanned",
     eventId: "event-first"
   });
   const betterCandidate = market({
-    yesPrice: 0.2,
+    yesPrice: 0.6,
     slug: "second-scanned-high-edge",
     marketId: "second-scanned",
     eventId: "event-second"

@@ -34,8 +34,10 @@ async function createContext(args, overrides = {}) {
   if (args.includes("--source")) {
     throw new Error("unsupported_option: --source has been removed; PolyPulse only reads Polymarket markets");
   }
+  const skipValidation = args.includes("--skip-validation") || process.env.POLYPULSE_SKIP_VALIDATION === "1";
   const config = await loadEnvConfig({
     envFile,
+    skipValidation,
     overrides
   });
   if (config.marketSource !== "polymarket") {

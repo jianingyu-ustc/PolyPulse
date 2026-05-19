@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULTS, loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
+import { loadEnvConfig, validateEnvConfig } from "../src/config/env.js";
 import { FileStateStore } from "../src/state/file-state-store.js";
 import { PolymarketMarketSource } from "../src/adapters/polymarket-market-source.js";
 import { RiskEngine } from "../src/core/risk-engine.js";
@@ -69,11 +69,13 @@ function liveEnvLines({ stateDir, artifactDir, executionMode = "paper" }) {
     MONITOR_MAX_DAILY_TRADE_USD: "10",
     MONITOR_CONCURRENCY: "1",
     MONITOR_RUN_TIMEOUT_MS: "60000",
-    MONITOR_BACKOFF_MS: "0"
+    MONITOR_BACKOFF_MS: "0",
+    PROVIDER_TIMEOUT_SECONDS: "15",
+    PROVIDER_MAX_RETRIES: "0"
   };
   const lines = [];
-  for (const key of Object.keys(DEFAULTS)) {
-    lines.push(`${key}=${explicit[key] ?? ""}`);
+  for (const [key, value] of Object.entries(explicit)) {
+    lines.push(`${key}=${value}`);
   }
   return lines;
 }
@@ -148,7 +150,7 @@ test("live env accepts only Polymarket as the market source", async () => {
 
 test("CLI rejects removed source override", async () => {
   const { envPath } = await createConfig();
-  const result = await execCli(["market", "topics", "--source", "alternate-source", "--env-file", envPath], {
+  const result = await execCli(["market", "topics", "--source", "alternate-source", "--env-file", envPath, "--skip-validation"], {
     env: { ...process.env }
   });
   assert.notEqual(result.status, 0);
@@ -193,7 +195,7 @@ test("market source reads current Polymarket markets from Gamma", async (t) => {
 test("CLI market topics returns current Polymarket topics", async (t) => {
   const { config, envPath } = await createConfig();
   if (!await requireGamma(t, config)) return;
-  const result = await execCli(["market", "topics", "--env-file", envPath, "--limit", "3", "--quick"], {
+  const result = await execCli(["market", "topics", "--env-file", envPath, "--limit", "3", "--quick", "--skip-validation"], {
     env: { ...process.env }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -210,7 +212,7 @@ test("CLI market topics returns current Polymarket topics", async (t) => {
 
 test("paper mode balance uses the live broker path with paper wallet", async () => {
   const { envPath } = await createConfig();
-  const result = await execCli(["account", "balance", "--env-file", envPath], {
+  const result = await execCli(["account", "balance", "--env-file", envPath, "--skip-validation"], {
     env: { ...process.env }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -224,7 +226,7 @@ test("paper mode balance uses the live broker path with paper wallet", async () 
 
 test("paper mode account audit runs full remote audit path", async () => {
   const { envPath } = await createConfig();
-  const result = await execCli(["account", "audit", "--env-file", envPath], {
+  const result = await execCli(["account", "audit", "--env-file", envPath, "--skip-validation"], {
     env: { ...process.env }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -239,13 +241,13 @@ test("paper mode account audit runs full remote audit path", async () => {
 
 test("allowance approval requires explicit APPROVE confirmation", async () => {
   const { envPath } = await createConfig();
-  const denied = await execCli(["account", "approve", "--env-file", envPath], {
+  const denied = await execCli(["account", "approve", "--env-file", envPath, "--skip-validation"], {
     env: { ...process.env }
   });
   assert.notEqual(denied.status, 0);
   assert.match(denied.stderr || denied.stdout, /account_approve_requires_confirm_approve/);
 
-  const approved = await execCli(["account", "approve", "--env-file", envPath, "--confirm", "APPROVE"], {
+  const approved = await execCli(["account", "approve", "--env-file", envPath, "--confirm", "APPROVE", "--skip-validation"], {
     env: { ...process.env }
   });
   assert.equal(approved.status, 0, approved.stderr || approved.stdout);

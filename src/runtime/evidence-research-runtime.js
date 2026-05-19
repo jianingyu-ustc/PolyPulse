@@ -39,7 +39,7 @@
  * 1. 评估已收集证据的质量、相关性、新鲜度和充分性，用于估算该市场结算概率。
  * 2. 识别具体信息缺口——如果填补这些缺口，能显著改善概率估算。
  * 3. 对每个缺口，提出一个具体的网络搜索查询，能找到相关且可信的信息。
- * 4. 评定证据整体充分性："sufficient"/"needs_more"/"critical_gap"。
+ * 4. 评定证据整体充分性："sufficient"（足够进行置信估算）、"needs_more"（可以估算但不确定性高）或 "critical_gap"（缺少关键信息，可能大幅改变估算）。
  * 5. 总结现有证据中与概率估算最相关的关键发现。
  *
  * 硬规则：
@@ -52,8 +52,11 @@
  * 7. 每个搜索必须包含清晰的 rationale，说明搜索什么信息以及为什么重要。
  *
  * 输出字段：
- * - research_strategy, evidence_assessment, evidence_sufficiency,
- *   key_findings, directed_searches
+ * - research_strategy: 研究策略和思路（简述）
+ * - evidence_assessment: 对现有证据的整体评价
+ * - evidence_sufficiency: sufficient | needs_more | critical_gap
+ * - key_findings: 现有证据中最相关的关键发现列表
+ * - directed_searches: 定向搜索列表，每项含 query, category, rationale, priority
  * 只输出最终 JSON。
  * ─────────────────────────────────────────────────────────────────
  *

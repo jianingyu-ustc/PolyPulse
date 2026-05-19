@@ -369,7 +369,7 @@ function parseList(value) {
   return String(value ?? "")
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter((item) => item && item.toLowerCase() !== "none");
 }
 
 export async function loadEnvConfig(options = {}) {
@@ -392,6 +392,16 @@ export async function loadEnvConfig(options = {}) {
       }
       console.error(`\n共 ${missing.length} 项缺失。请补全后重试。`);
       console.error(`所有必需变量见 src/config/env.js 的 DEFAULTS 对象。\n`);
+      process.exit(1);
+    }
+    const empty = Object.keys(DEFAULTS).filter(key => Object.hasOwn(allSources, key) && String(allSources[key]).trim() === "");
+    if (empty.length > 0) {
+      const envPath = envFilePath ?? ".env";
+      console.error(`\n[PolyPulse] 启动失败：以下环境变量在 ${envPath} 中值为空：\n`);
+      for (const key of empty) {
+        console.error(`  - ${key}`);
+      }
+      console.error(`\n共 ${empty.length} 项为空。所有变量必须有非空值，请补全后重试。\n`);
       process.exit(1);
     }
   }

@@ -508,16 +508,7 @@ header 字段含义：
 
 `predict` 和 `trade once` 只调用第 4、5 步（单市场：证据研究 + 概率估算 = 2 次 AI 调用）。
 
-每个 runtime 文件顶部的 JSDoc 注释包含完整的中文提示词模板示例。具体参见：
-
-| Runtime | 提示词模板位置 |
-| --- | --- |
-| `src/runtime/topic-discovery-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
-| `src/runtime/prescreen-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
-| `src/runtime/candidate-triage-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
-| `src/runtime/evidence-research-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
-| `src/runtime/codex-runtime.js` | 文件顶部 JSDoc + `buildPrompt()` |
-
+每个 runtime 文件顶部的 JSDoc 注释包含完整的中文提示词模板示例。具体参见对应文件。
 所有 prompt 由各 runtime 的 `buildPrompt()` 函数动态生成，支持 `CODEX_SKILL_LOCALE=zh|en` 双语切换。实际命令形态：
 
 ```bash

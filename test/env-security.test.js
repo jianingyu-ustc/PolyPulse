@@ -142,7 +142,10 @@ test("paper mode passes preflight with real wallet credentials", async () => {
       DRAWDOWN_HALT_PCT: "0.2",
       LIQUIDITY_TRADE_CAP_PCT: "0.01",
       PULSE_STRATEGY: "pulse-direct",
-      PULSE_BATCH_CAP_PCT: "0.2"
+      PULSE_BATCH_CAP_PCT: "0.2",
+      MONITOR_RUN_TIMEOUT_MS: "60000",
+      PROVIDER_TIMEOUT_SECONDS: "15",
+      PROVIDER_MAX_RETRIES: "0"
     })
   });
   const report = validateEnvConfig(config, { mode: "live" });
@@ -182,7 +185,7 @@ test("private key value is excluded from stdout, artifacts, and memory", async (
   }
   await writeFile(envPath, lines.join("\n") + "\n", "utf8");
 
-  const result = await execCli(["env", "check", "--env-file", envPath]);
+  const result = await execCli(["env", "check", "--env-file", envPath, "--skip-validation"]);
   const artifacts = await readTreeText(artifactDir);
   const memory = await readFile(path.join(repoRoot, "docs", "memory", "POLYPULSE_MEMORY.md"), "utf8");
 
