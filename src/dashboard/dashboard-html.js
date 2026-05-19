@@ -39,6 +39,12 @@ tr.expandable:hover td{background:#161b22}
 .expand-icon{color:#8b949e;font-size:0.7em;margin-right:4px;display:inline-block;transition:transform 0.2s}
 a{color:#58a6ff;text-decoration:none}
 a:hover{text-decoration:underline}
+.pagination{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
+.pagination button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8em}
+.pagination button:hover{border-color:#58a6ff;color:#58a6ff}
+.pagination button:disabled{opacity:0.4;cursor:default;border-color:#30363d;color:#8b949e}
+.pagination button.active{background:#58a6ff;color:#0d1117;border-color:#58a6ff}
+.pagination .page-info{color:#8b949e;font-size:0.8em}
 .refresh{color:#8b949e;font-size:0.75em;margin-top:8px}
 @media(max-width:600px){.summary{grid-template-columns:1fr 1fr}td,th{padding:4px 3px;font-size:0.78em}}
 </style>
@@ -61,6 +67,7 @@ a:hover{text-decoration:underline}
 </tr></thead><tbody id="closed-body"></tbody></table></div>
 
 <h2 id="h-skipped">已跳过</h2>
+<div id="skipped-pagination" class="pagination"></div>
 <div style="overflow-x:auto"><table id="skipped-table"><thead><tr id="skipped-head">
 </tr></thead><tbody id="skipped-body"></tbody></table></div>
 
@@ -113,7 +120,7 @@ var i18n = {
     confidence: '置信度',
     evidence: '关键证据',
     noReasoning: '暂无推理信息',
-    hSkipped: '本轮已跳过',
+    hSkipped: '已跳过',
     noSkipped: '暂无跳过记录',
     thPhase: '阶段',
     thReason: '原因',
@@ -164,7 +171,7 @@ var i18n = {
     confidence: 'Confidence',
     evidence: 'Key Evidence',
     noReasoning: 'No reasoning available',
-    hSkipped: 'Skipped This Round',
+    hSkipped: 'Skipped',
     noSkipped: 'No skipped candidates',
     thPhase: 'Phase',
     thReason: 'Reason',
@@ -308,10 +315,30 @@ function toggleReasoning(id){
   if(icon)icon.style.transform=isHidden?'rotate(90deg)':'';
 }
 
+var _skippedPage = 0;
+var _skippedPerPage = 50;
+var _skippedItems = [];
+
 function renderSkipped(items){
+  _skippedItems = items || [];
+  _skippedPage = 0;
+  renderSkippedPage();
+}
+
+function renderSkippedPage(){
   var tbody=document.getElementById('skipped-body');
-  if(!items||!items.length){tbody.innerHTML='<tr><td colspan="6" style="color:#8b949e">'+t('noSkipped')+'</td></tr>';return}
-  tbody.innerHTML=items.map(function(c){return '<tr>'+
+  var pag=document.getElementById('skipped-pagination');
+  if(!_skippedItems.length){
+    tbody.innerHTML='<tr><td colspan="6" style="color:#8b949e">'+t('noSkipped')+'</td></tr>';
+    pag.innerHTML='';
+    return;
+  }
+  var total=_skippedItems.length;
+  var pages=Math.ceil(total/_skippedPerPage);
+  var start=_skippedPage*_skippedPerPage;
+  var end=Math.min(start+_skippedPerPage,total);
+  var pageItems=_skippedItems.slice(start,end);
+  tbody.innerHTML=pageItems.map(function(c){return '<tr>'+
     '<td>'+marketLink(c)+'</td>'+
     '<td>'+(c.category||'-')+'</td>'+
     '<td>$'+fmt(c.liquidityUsd,0)+'</td>'+
@@ -319,6 +346,25 @@ function renderSkipped(items){
     '<td style="white-space:normal;max-width:400px">'+esc(c.reason||'-')+'</td>'+
     '<td>'+ts(c.skippedAt)+'</td>'+
   '</tr>'}).join('');
+  var html='<button onclick="skippedGoPage(0)" '+((_skippedPage===0)?'disabled':'')+'>&#171;</button>';
+  html+='<button onclick="skippedGoPage('+(_skippedPage-1)+')" '+((_skippedPage===0)?'disabled':'')+'>&lsaquo;</button>';
+  var rangeStart=Math.max(0,_skippedPage-2);
+  var rangeEnd=Math.min(pages,rangeStart+5);
+  if(rangeEnd-rangeStart<5)rangeStart=Math.max(0,rangeEnd-5);
+  for(var i=rangeStart;i<rangeEnd;i++){
+    html+='<button class="'+(i===_skippedPage?'active':'')+'" onclick="skippedGoPage('+i+')">'+(i+1)+'</button>';
+  }
+  html+='<button onclick="skippedGoPage('+(_skippedPage+1)+')" '+((_skippedPage>=pages-1)?'disabled':'')+'>&rsaquo;</button>';
+  html+='<button onclick="skippedGoPage('+(pages-1)+')" '+((_skippedPage>=pages-1)?'disabled':'')+'">&#187;</button>';
+  html+='<span class="page-info">'+(start+1)+'-'+end+' / '+total+'</span>';
+  pag.innerHTML=html;
+}
+
+function skippedGoPage(p){
+  var pages=Math.ceil(_skippedItems.length/_skippedPerPage);
+  if(p<0)p=0;if(p>=pages)p=pages-1;
+  _skippedPage=p;
+  renderSkippedPage();
 }
 
 async function refresh(){

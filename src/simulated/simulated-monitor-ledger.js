@@ -111,8 +111,8 @@ export class SimulatedMonitorLedger {
       phase,
       skippedAt: nowIso()
     });
-    if (this.skippedCandidates.length > 200) {
-      this.skippedCandidates = this.skippedCandidates.slice(-200);
+    if (this.skippedCandidates.length > 500) {
+      this.skippedCandidates = this.skippedCandidates.slice(-500);
     }
   }
 
@@ -170,7 +170,6 @@ export class SimulatedMonitorLedger {
   }
 
   async beginRound({ runId, limit, maxAmountUsd }) {
-    this.skippedCandidates = [];
     const today = nowIso().slice(0, 10);
     if (this.dailyTradeUsd.date !== today) {
       this.dailyTradeUsd = { date: today, amountUsd: 0, trades: 0 };

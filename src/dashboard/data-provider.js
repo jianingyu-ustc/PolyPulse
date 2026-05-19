@@ -122,7 +122,7 @@ export function createPaperDataProvider(scheduler) {
       },
       openPositions: ledger.positions.map(formatPosition),
       closedPositions: ledger.closedTrades.slice(-100).reverse().map(formatClosedTrade),
-      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-200).reverse()
+      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-500).reverse()
     };
   };
 }
