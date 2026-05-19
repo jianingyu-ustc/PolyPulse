@@ -78,9 +78,9 @@ export class ProbabilityEstimator {
     }
   }
 
-  async estimate({ market, evidenceBundle = null, evidence = null }) {
+  async estimate({ market, evidenceBundle = null, evidence = null, upstreamContext = null }) {
     const evidenceItems = normalizeEvidenceInput(evidence ?? evidenceBundle);
-    const providerResult = await this.provider.estimate({ market, evidence: evidenceItems });
+    const providerResult = await this.provider.estimate({ market, evidence: evidenceItems, upstreamContext });
     const clampMin = this.config.calibration?.probabilityClampMin ?? 0.01;
     const clampMax = this.config.calibration?.probabilityClampMax ?? 0.99;
     const aiProbability = clampProbability(providerResult.ai_probability ?? providerResult.aiProbability, clampMin, clampMax);

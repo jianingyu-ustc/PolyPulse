@@ -255,7 +255,7 @@ export class ClaudeProbabilityProvider {
     this.config = config;
   }
 
-  async estimate({ market, evidence }) {
+  async estimate({ market, evidence, upstreamContext = null }) {
     const settings = resolveClaudeSkillSettings(this.config);
     const repoRoot = path.resolve(this.config.repoRoot ?? process.cwd());
     const riskDocPath = path.resolve(repoRoot, "docs", "specs", "risk-controls.md");
@@ -273,7 +273,7 @@ export class ClaudeProbabilityProvider {
     try {
       await writeFile(marketPath, JSON.stringify(redactSecrets(market), null, 2), "utf8");
       await writeFile(evidencePath, JSON.stringify(redactSecrets(evidence), null, 2), "utf8");
-      const prompt = buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath });
+      const prompt = buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath, upstreamContext });
       const schemaContent = JSON.stringify(buildProbabilityEstimateSchema(), null, 2);
       await writeFile(promptPath, prompt, "utf8");
       await writeFile(schemaPath, schemaContent, "utf8");

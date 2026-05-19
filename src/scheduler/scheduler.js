@@ -37,6 +37,25 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function buildUpstreamContext(candidate) {
+  const triage = candidate?.summary?.ai_triage;
+  const research = candidate?.summary?.ai_research;
+  if (!triage && !research) return null;
+  return {
+    triage: triage ? {
+      rationale: triage.rationale ?? null,
+      information_advantage: triage.information_advantage ?? null,
+      researchability: triage.researchability ?? null,
+      recommended_action: triage.recommended_action ?? null
+    } : null,
+    research: research ? {
+      key_findings: research.key_findings ?? [],
+      evidence_sufficiency: research.evidence_sufficiency ?? null,
+      evidence_assessment: research.evidence_assessment ?? null
+    } : null
+  };
+}
+
 function monitorRunId() {
   return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
@@ -397,7 +416,8 @@ export class Scheduler {
     const evidence = await this.evidenceCrawler.collect({ market });
     const additionalEvidence = await this.runEvidenceResearch({ market, evidence, candidate });
     const allEvidence = [...evidence, ...additionalEvidence];
-    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
+    const upstreamContext = buildUpstreamContext(candidate);
+    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence, upstreamContext });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
     this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
@@ -408,7 +428,8 @@ export class Scheduler {
     const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
     const additionalEvidence = await this.runEvidenceResearch({ market, evidence, candidate });
     const allEvidence = [...evidence, ...additionalEvidence];
-    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence });
+    const upstreamContext = buildUpstreamContext(candidate);
+    const estimate = await this.probabilityEstimator.estimate({ market, evidence: allEvidence, upstreamContext });
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
     this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
@@ -438,6 +459,13 @@ export class Scheduler {
     try {
       const triage = candidate?.summary?.ai_triage ?? null;
       const researchResult = await this.evidenceResearchProvider.research({ market, evidence, triage });
+      if (candidate?.summary && researchResult) {
+        candidate.summary.ai_research = {
+          key_findings: researchResult.key_findings ?? [],
+          evidence_sufficiency: researchResult.evidence_sufficiency ?? null,
+          evidence_assessment: researchResult.evidence_assessment ?? null
+        };
+      }
       if (!researchResult || !researchResult.directed_searches || researchResult.directed_searches.length === 0) {
         return await this.fillEvidenceGaps({ market, evidence, candidate });
       }

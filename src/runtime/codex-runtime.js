@@ -243,7 +243,7 @@ function buildProbabilityEstimateSchema() {
   };
 }
 
-function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath }) {
+function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath, upstreamContext = null }) {
   const skillLines = settings.skills.map((skill) => `- ${skill.id}: ${skill.skillFile}`);
   const localeIsChinese = isChineseLocale(settings.locale);
   const marketSnapshot = {
@@ -298,6 +298,11 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
         status: item.status,
         summary: item.summary
       }))),
+      upstreamContext ? [
+        "",
+        "上游分析上下文（来自 candidate-triage 和 evidence-research 阶段）：",
+        JSON.stringify(upstreamContext)
+      ].join("\n") : "",
       "",
       "硬规则：",
       "1. 只能输出合法 JSON，不要输出 markdown 代码块。",
@@ -376,6 +381,11 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
       status: item.status,
       summary: item.summary
     }))),
+    upstreamContext ? [
+      "",
+      "Upstream analysis context (from candidate-triage and evidence-research stages):",
+      JSON.stringify(upstreamContext)
+    ].join("\n") : "",
     "",
     "Hard rules:",
     "1. Output valid JSON only. Do not wrap it in markdown fences.",
@@ -600,7 +610,7 @@ export class CodexProbabilityProvider {
     this.config = config;
   }
 
-  async estimate({ market, evidence }) {
+  async estimate({ market, evidence, upstreamContext = null }) {
     const settings = resolveCodexSkillSettings(this.config);
     const repoRoot = path.resolve(this.config.repoRoot ?? process.cwd());
     const riskDocPath = path.resolve(repoRoot, "docs", "specs", "risk-controls.md");
@@ -618,7 +628,7 @@ export class CodexProbabilityProvider {
     try {
       await writeFile(marketPath, JSON.stringify(redactSecrets(market), null, 2), "utf8");
       await writeFile(evidencePath, JSON.stringify(redactSecrets(evidence), null, 2), "utf8");
-      const prompt = buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath });
+      const prompt = buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evidencePath, upstreamContext });
       const schemaContent = JSON.stringify(buildProbabilityEstimateSchema(), null, 2);
       await writeFile(promptPath, prompt, "utf8");
       await writeFile(schemaPath, schemaContent, "utf8");
