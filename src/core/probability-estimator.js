@@ -90,6 +90,10 @@ export class ProbabilityEstimator {
     const counterItems = providerResult.counter_evidence ?? providerResult.counterEvidence ?? counterEvidence(evidenceItems);
     const uncertainty = providerResult.uncertainty_factors ?? providerResult.uncertaintyFactors ?? [];
     const reasoning = providerResult.reasoning_summary ?? providerResult.reasoningSummary ?? "No reasoning summary returned.";
+    const baseRate = providerResult.base_rate ?? providerResult.baseRate ?? null;
+    const baseRateSource = providerResult.base_rate_source ?? providerResult.baseRateSource ?? null;
+    const evidenceAdjustment = providerResult.evidence_adjustment ?? providerResult.evidenceAdjustment ?? null;
+    const deviationJustification = providerResult.deviation_justification ?? providerResult.deviationJustification ?? null;
     const generatedAt = new Date().toISOString();
 
     const estimates = market.outcomes.map((outcome, index) => {
@@ -124,6 +128,14 @@ export class ProbabilityEstimator {
       uncertaintyFactors: [...new Set(uncertainty)],
       freshness_score: Number(freshness.toFixed(4)),
       freshnessScore: Number(freshness.toFixed(4)),
+      base_rate: baseRate,
+      baseRate: baseRate,
+      base_rate_source: baseRateSource,
+      baseRateSource: baseRateSource,
+      evidence_adjustment: evidenceAdjustment,
+      evidenceAdjustment: evidenceAdjustment,
+      deviation_justification: deviationJustification,
+      deviationJustification: deviationJustification,
       outcomeEstimates: estimates,
       diagnostics: {
         provider: this.providerName,

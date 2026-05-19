@@ -4,67 +4,6 @@
  * AI 概率估算运行时：综合市场信息和全部证据，估算事件在结算日发生的概率。
  * 对齐 Predict-Raven pulse-direct 的概率估算分工。
  *
- * 提示词模板（zh locale 示例，由 buildPrompt() 动态生成）：
- * ─────────────────────────────────────────────────────────────────
- * 你是 PolyPulse 的 Polymarket 概率估算运行时。
- * 当前 provider：codex
- * 必须先阅读这些 skill 文件，再做概率估算：
- * - <skill id>: <skill SKILL.md path>
- *
- * 必须先阅读这份风险控制文档：
- * - <repoRoot>/docs/specs/risk-controls.md
- *
- * 只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
- * 不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单。
- *
- * 输入文件：
- * - Market JSON: <tempDir>/market.json
- * - Evidence JSON: <tempDir>/evidence.json
- *
- * 市场快照：
- * <JSON: marketId, marketSlug, eventId, eventSlug, question, outcomes,
- * endDate, liquidityUsd, volumeUsd, volume24hUsd, category, tags,
- * active, closed, tradable, riskFlags>
- *
- * 证据摘要：
- * <JSON array: evidenceId, source, title, sourceUrl, timestamp,
- * relevanceScore, credibility, status, summary>
- *
- * 硬规则：
- * 1. 只能输出合法 JSON，不要输出 markdown 代码块。
- * 2. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入 Evidence JSON。
- * 3. 必须区分盘口价格和独立证据；盘口价格只能作为对照基准，不能当作支持事件发生的证据。
- * 4. 必须判断该市场是否可研究、证据是否足够独立新鲜、是否存在相对盘口的信息优势；
- *    把判断写进 reasoning_summary。
- * 5. confidence 分级标准（重要：大多数可研究市场应为 medium，low 是例外而非默认）：
- *    - high：有多条独立、新鲜（7天内）、高可信度证据，且推理链清晰指向一个方向，市场可研究。
- *    - medium（默认选择）：只要满足以下任一条件即应给 medium：
- *      * 有至少1条14天内的相关证据
- *      * 市场类型有公开可查的数据源（天气预报、赛程表、官方日历、民调、链上数据）
- *      * 你能基于公开信息形成有方向性的概率判断（即使不完全确定）
- *    - low（仅限以下情况）：证据为零且无公开数据源可查、结算规则完全不清、纯粹依赖内幕信息、或市场不可交易。
- *    记住：存在不确定性≠low confidence。如果能说出合理推理依据，就应该是 medium。
- * 6. 市场锚定规则（防止幻觉偏差）：
- *    - 盘口价格代表所有参与者的综合判断，概率估算应以盘口为起点调整，而非独立猜测。
- *    - 偏离盘口超过25个百分点时，必须有明确、具体、可验证的证据支撑。
- *    - '我不确定'、'缺乏信息'不是偏离盘口的理由——缺乏独立证据时，锚定在盘口±10%以内。
- *    - 对某个候选人/事件完全没有认知时，注明 'no_specific_knowledge'，保持在盘口±5%以内。
- * 7. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。
- * 8. 按 predict-raven pulse-direct 的分工处理：你只给概率、证据质量和信息优势判断；
- *    fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。
- * 9. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
- *
- * 输出字段必须匹配 ProbabilityEstimate provider schema：
- * - ai_probability
- * - confidence: low | medium | high
- * - reasoning_summary
- * - key_evidence
- * - counter_evidence
- * - uncertainty_factors
- * - freshness_score
- * 只输出最终 JSON。
- * ─────────────────────────────────────────────────────────────────
- *
  * Key properties:
  * - Provider outputs ProbabilityEstimate JSON (probability, confidence, reasoning)
  * - Provider CANNOT output trade instructions, sizing, or broker parameters
@@ -290,7 +229,11 @@ function buildProbabilityEstimateSchema() {
         type: "array",
         items: { type: "string" }
       },
-      freshness_score: { type: "number", minimum: 0, maximum: 1 }
+      freshness_score: { type: "number", minimum: 0, maximum: 1 },
+      base_rate: { type: "number", minimum: 0, maximum: 1 },
+      base_rate_source: { type: "string" },
+      evidence_adjustment: { type: "number", minimum: -1, maximum: 1 },
+      deviation_justification: { type: "string" }
     }
   };
 }
@@ -364,11 +307,17 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
       "     政治选举有民调/公开声明、宏观经济有官方数据预期、体育有赛程/伤病/历史对阵、天气有预报模型、科技有公司公告/产品路线图、加密有链上数据/监管文件时，均应给 medium。",
       "   - low（仅限以下情况）：证据为零且无公开数据源可查、结算规则完全不清、纯粹依赖内幕信息、或市场不可交易。",
       "   记住：你是在做概率估算，不是在做确定性判断。存在不确定性≠low confidence。如果你能说出合理的推理依据，就应该是 medium。",
-      "6. 市场锚定规则（防止幻觉偏差）：",
-      "   - 盘口价格代表所有参与者的综合判断，你的概率估算应以盘口为起点进行调整，而非独立猜测。",
-      "   - 如果你的估算偏离盘口超过25个百分点（如盘口90%你给50%），你必须有明确、具体、可验证的证据支撑这一偏离。",
-      "   - '我不确定'、'缺乏信息'、'该人物不知名'不是偏离盘口的理由——在缺乏独立证据时，应将概率估算锚定在盘口±10%以内。",
-      "   - 如果你对某个候选人/事件完全没有认知，在 uncertainty_factors 中注明 'no_specific_knowledge'，并将概率保持在盘口±5%以内。",
+      "6. 估算方法（两阶段法）：",
+      "   阶段一：独立估算",
+      "   - 首先确定基础概率（base_rate）：该类事件的历史频率、先例统计或结构性先验。写明来源（base_rate_source），例如'该选区历史上共和党胜率80%'、'同类天气事件过去5年发生率30%'。",
+      "   - 然后根据当前收集到的证据进行调整（evidence_adjustment）：正数表示证据支持事件发生，负数表示证据反对。",
+      "   - ai_probability 应逻辑上约等于 base_rate + evidence_adjustment（允许合理偏差）。",
+      "   - 这一阶段不要参考盘口价格，完全基于证据和先验进行独立判断。",
+      "   阶段二：与盘口对比审视",
+      "   - 完成独立估算后，将你的 ai_probability 与当前盘口价格对比。",
+      "   - 如果偏离盘口超过15个百分点，必须在 deviation_justification 中明确说明支撑偏离的具体证据。",
+      "   - 如果偏离盘口超过25个百分点且无法给出有力的 deviation_justification，应重新审视推理过程。",
+      "   - 如果对该事件完全没有认知且证据为零，在 uncertainty_factors 中注明 'no_specific_knowledge'。",
       "7. ai_probability 必须是该事件 Yes outcome 发生概率，范围 0 到 1。",
       "8. 按 predict-raven pulse-direct 的分工处理：你只给概率、证据质量和信息优势判断；fee、net edge、quarter Kelly、monthly return、排序和风控由代码计算。",
       "9. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。",
@@ -381,6 +330,10 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
       "- counter_evidence",
       "- uncertainty_factors",
       "- freshness_score",
+      "- base_rate (0-1): 该类事件的先验/历史概率",
+      "- base_rate_source: base_rate 的来源（如历史统计、先例）",
+      "- evidence_adjustment (-1 到 1): 证据对 base_rate 的调整量",
+      "- deviation_justification: 当估算偏离盘口>15pp 时的解释（可选）",
       "只输出最终 JSON。"
     ].join("\n");
   }
@@ -427,11 +380,17 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
     "   - medium: at least 2 relevant evidence items (at least 1 within 14 days) forming a directional inference, even if some uncertainty remains. Political markets with polls/public statements, macro-economics with official data expectations, sports with schedules/injuries/historical matchups, tech with company announcements/roadmaps, crypto with on-chain data/regulatory filings — all qualify for medium.",
     "   - low: severely insufficient evidence (0-1 items and stale), unclear settlement rules, completely unresearchable, purely dependent on insider information, or market is not tradable. Name reasons in uncertainty_factors.",
     "   Do not downgrade to low merely because you cannot guarantee the outcome — prediction markets are inherently probabilistic; uncertainty is normal.",
-    "6. Market anchoring (anti-hallucination):",
-    "   - Market price represents the consensus of all participants. Your estimate should START from the market price and adjust, not guess independently.",
-    "   - If your estimate deviates from market price by more than 25 percentage points (e.g., market 90%, you give 50%), you MUST have specific, verifiable evidence supporting that deviation.",
-    "   - 'I am unsure', 'lack of information', or 'unknown candidate' are NOT reasons to deviate from market price — when lacking independent evidence, anchor your estimate within ±10% of market price.",
-    "   - If you have zero knowledge about a specific candidate/event, note 'no_specific_knowledge' in uncertainty_factors and keep probability within ±5% of market price.",
+    "6. Estimation method (two-phase approach):",
+    "   Phase 1: Independent estimation",
+    "   - First determine the base rate (base_rate): historical frequency, precedent statistics, or structural prior for this class of event. State the source (base_rate_source), e.g. 'Republicans won this district 80% historically', 'similar weather events occurred 30% of time in past 5 years'.",
+    "   - Then adjust based on current collected evidence (evidence_adjustment): positive means evidence supports the event, negative means it opposes.",
+    "   - ai_probability should logically approximate base_rate + evidence_adjustment (reasonable deviation allowed).",
+    "   - In this phase, do NOT reference the market price. Estimate purely from evidence and priors.",
+    "   Phase 2: Market comparison review",
+    "   - After completing independent estimation, compare your ai_probability to the current market price.",
+    "   - If deviation from market exceeds 15 percentage points, provide explicit justification in deviation_justification citing specific evidence.",
+    "   - If deviation exceeds 25 percentage points and you cannot provide strong deviation_justification, reconsider your reasoning.",
+    "   - If you have zero knowledge about the event and evidence is empty, note 'no_specific_knowledge' in uncertainty_factors.",
     "7. ai_probability is the probability that the Yes outcome resolves true, from 0 to 1.",
     "8. Follow the predict-raven pulse-direct separation of duties: provide probability, evidence-quality, and information-advantage judgment only; code computes fees, net edge, quarter Kelly, monthly return, ranking, and risk controls.",
     "9. Do not output trade instructions, token rewrites, sizing, or broker parameters.",
@@ -444,6 +403,10 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
     "- counter_evidence",
     "- uncertainty_factors",
     "- freshness_score",
+    "- base_rate (0-1): prior/historical probability for this event class",
+    "- base_rate_source: where the base rate comes from (e.g. historical statistics, precedent)",
+    "- evidence_adjustment (-1 to 1): how much evidence shifts probability from base rate",
+    "- deviation_justification: explanation when your estimate deviates >15pp from market price (optional)",
     "Output final JSON only."
   ].join("\n");
 }

@@ -423,7 +423,8 @@ export class Scheduler {
           market,
           evidence,
           triageAssessment: candidate?.summary?.ai_triage ?? null,
-          prescreenResult: candidate?.summary?.ai_prescreen ?? null
+          prescreenResult: candidate?.summary?.ai_prescreen ?? null,
+          deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null
         });
         oe.calibratedProbability = cal.calibratedProbability;
       }
@@ -469,7 +470,8 @@ export class Scheduler {
       market,
       evidence,
       triageAssessment: triage,
-      prescreenResult: prescreen
+      prescreenResult: prescreen,
+      deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null
     });
   }
 

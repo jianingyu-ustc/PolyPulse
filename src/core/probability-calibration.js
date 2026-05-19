@@ -33,6 +33,10 @@ const DEFAULT_CALIBRATION_CONFIG = {
   lowLiquidityShrinkage: 0.1,
   shortTermShrinkage: 0.05,
   prescreenSkipShrinkage: 0.4,
+  unjustifiedLargeDeviationShrinkage: 0.35,
+  unjustifiedModerateDeviationShrinkage: 0.15,
+  deviationLargeThreshold: 0.25,
+  deviationModerateThreshold: 0.15,
   // Thresholds
   lowLiquidityThresholdUsd: 10000,
   sparseEvidenceThreshold: 2,
@@ -80,7 +84,8 @@ export class ProbabilityCalibrationLayer {
     market = {},
     evidence = [],
     triageAssessment = null,
-    prescreenResult = null
+    prescreenResult = null,
+    deviationJustification = null
   }) {
     if (!this.enabled) {
       return {
@@ -147,6 +152,24 @@ export class ProbabilityCalibrationLayer {
       reasons.push(`prescreen_skip: shrink ${this.params.prescreenSkipShrinkage}`);
     }
 
+    // 9. Unjustified large deviation from market
+    const marketImplied = market.outcomes?.[0]?.impliedProbability
+      ?? market.outcomes?.[0]?.lastPrice
+      ?? market.outcomes?.[0]?.bestAsk
+      ?? null;
+    if (marketImplied != null) {
+      const deviation = Math.abs(rawProbability - marketImplied);
+      const hasJustification = typeof deviationJustification === "string"
+        && deviationJustification.trim().length > 20;
+      if (deviation > this.params.deviationLargeThreshold && !hasJustification) {
+        calibrated = shrinkToward(calibrated, target, this.params.unjustifiedLargeDeviationShrinkage);
+        reasons.push(`unjustified_large_deviation (${(deviation * 100).toFixed(1)}pp): shrink ${this.params.unjustifiedLargeDeviationShrinkage}`);
+      } else if (deviation > this.params.deviationModerateThreshold && !hasJustification) {
+        calibrated = shrinkToward(calibrated, target, this.params.unjustifiedModerateDeviationShrinkage);
+        reasons.push(`unjustified_moderate_deviation (${(deviation * 100).toFixed(1)}pp): shrink ${this.params.unjustifiedModerateDeviationShrinkage}`);
+      }
+    }
+
     calibrated = clampProbability(calibrated, this.params.probabilityClampMin, this.params.probabilityClampMax);
 
     return {
@@ -162,7 +185,10 @@ export class ProbabilityCalibrationLayer {
         validEvidenceCount: validEvidence.length,
         liquidityUsd,
         daysToResolution: Number(daysLeft.toFixed(1)),
-        prescreenSuitable: prescreenResult?.suitable ?? null
+        prescreenSuitable: prescreenResult?.suitable ?? null,
+        marketImpliedProbability: marketImplied,
+        deviationFromMarket: marketImplied != null ? Number(Math.abs(rawProbability - marketImplied).toFixed(4)) : null,
+        hasDeviationJustification: typeof deviationJustification === "string" && deviationJustification.trim().length > 20
       }
     };
   }
