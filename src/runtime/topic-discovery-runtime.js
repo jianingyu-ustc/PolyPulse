@@ -70,6 +70,40 @@ function isChineseLocale(locale) {
   return locale === "zh";
 }
 
+function nowContext() {
+  const now = new Date();
+  return now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
+async function fetchRecentNewsHeadlines(timeoutMs = 8000) {
+  const queries = ["breaking news today", "world news headlines today"];
+  const headlines = [];
+  for (const query of queries) {
+    try {
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await globalThis.fetch(url, {
+        headers: { "user-agent": "PolyPulse/0.1 topic-discovery", accept: "text/html" },
+        redirect: "follow",
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+      if (!response.ok) continue;
+      const html = await response.text();
+      const titleMatches = html.matchAll(/<a[^>]+class="result__a"[^>]*>(.*?)<\/a>/gi);
+      for (const match of titleMatches) {
+        const title = match[1].replace(/<[^>]+>/g, "").trim();
+        if (title && title.length > 10) headlines.push(title);
+      }
+    } catch {
+      // Non-blocking: if news fetch fails, continue without headlines
+    }
+    if (headlines.length >= 20) break;
+  }
+  return headlines.slice(0, 20);
+}
+
 function buildTopicDiscoverySchema() {
   return {
     type: "object",
@@ -101,7 +135,7 @@ function buildTopicDiscoverySchema() {
   };
 }
 
-function buildPrompt({ settings, currentCategories, currentMarketCount, recentTopics }) {
+function buildPrompt({ settings, currentCategories, currentMarketCount, recentTopics, newsHeadlines = [] }) {
   const localeIsChinese = isChineseLocale(settings.locale);
   const skillLines = settings.skills.map((skill) => `- ${skill.id}: ${skill.skillFile}`);
 
@@ -109,6 +143,7 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
     return [
       "你是 PolyPulse 的外部话题发现运行时。",
       `当前 provider：${settings.provider}`,
+      `当前时间：${nowContext()}`,
       "必须先阅读这些 skill 文件：",
       ...skillLines,
       "",
@@ -116,6 +151,11 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
       `- 活跃市场数量：${currentMarketCount}`,
       `- 已覆盖类别：${currentCategories.join(", ")}`,
       recentTopics.length > 0 ? `- 最近已发现话题（避免重复）：${recentTopics.join("; ")}` : "",
+      newsHeadlines.length > 0 ? [
+        "",
+        "最近 24 小时新闻摘要（用于发现时效性话题）：",
+        ...newsHeadlines.map((h, i) => `${i + 1}. ${h}`)
+      ].join("\n") : "",
       "",
       "任务：",
       "基于你对当前新闻、体育赛事、宏观经济日历、加密市场动态、政治事件和科技发展的知识，",
@@ -144,6 +184,7 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
   return [
     "You are the external topic discovery runtime for PolyPulse, a Polymarket analysis system.",
     `Active provider: ${settings.provider}`,
+    `Current time: ${nowContext()}`,
     "Read these selected skill files:",
     ...skillLines,
     "",
@@ -151,6 +192,11 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
     `- Active market count: ${currentMarketCount}`,
     `- Covered categories: ${currentCategories.join(", ")}`,
     recentTopics.length > 0 ? `- Recently discovered topics (avoid duplicates): ${recentTopics.join("; ")}` : "",
+    newsHeadlines.length > 0 ? [
+      "",
+      "Recent 24h news headlines (use to discover time-sensitive topics):",
+      ...newsHeadlines.map((h, i) => `${i + 1}. ${h}`)
+    ].join("\n") : "",
     "",
     "Task:",
     "Based on your knowledge of current news, sports events, macro economic calendar,",
@@ -239,7 +285,8 @@ export class TopicDiscoveryProvider {
     let preserveTempDir = false;
 
     try {
-      const prompt = buildPrompt({ settings, currentCategories, currentMarketCount, recentTopics });
+      const newsHeadlines = await fetchRecentNewsHeadlines(Math.min(8000, Math.floor(this.timeoutMs / 4)));
+      const prompt = buildPrompt({ settings, currentCategories, currentMarketCount, recentTopics, newsHeadlines });
       await writeFile(schemaPath, JSON.stringify(buildTopicDiscoverySchema(), null, 2), "utf8");
 
       const timeoutMs = this.timeoutMs;

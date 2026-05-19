@@ -33,6 +33,11 @@ function timestampId(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
 }
 
+function nowContext() {
+  const now = new Date();
+  return now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
 function isChineseLocale(locale) {
   return locale === "zh";
 }
@@ -264,6 +269,7 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
     return [
       "你是 PolyPulse 的 Polymarket 概率估算运行时。",
       `当前 provider：${settings.provider}`,
+      `当前时间：${nowContext()}`,
       "必须先阅读这些 skill 文件，再做概率估算：",
       ...skillLines,
       "",
@@ -341,6 +347,7 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
   return [
     "You are the probability estimation runtime for PolyPulse, a Polymarket analysis system.",
     `Active provider: ${settings.provider}`,
+    `Current time: ${nowContext()}`,
     "Read these selected skill files before estimating:",
     ...skillLines,
     "",

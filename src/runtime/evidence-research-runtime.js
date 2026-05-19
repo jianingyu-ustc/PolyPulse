@@ -90,6 +90,11 @@ function isChineseLocale(locale) {
   return locale === "zh";
 }
 
+function nowContext() {
+  const now = new Date();
+  return now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
 function truncate(text, maxChars = 24000) {
   const value = String(text ?? "");
   return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 24))}\n\n... truncated ...\n`;
@@ -222,6 +227,7 @@ function buildPrompt({ market, evidence, triage, settings, riskDocPath, marketPa
     return [
       "你是 PolyPulse 的 AI 证据研究运行时。",
       `当前 provider：${settings.provider}`,
+      `当前时间：${nowContext()}`,
       "必须先阅读这些 skill 文件，再进行研究分析：",
       ...skillLines,
       "",
@@ -274,6 +280,7 @@ function buildPrompt({ market, evidence, triage, settings, riskDocPath, marketPa
   return [
     "You are the AI evidence research runtime for PolyPulse, a Polymarket analysis system.",
     `Active provider: ${settings.provider}`,
+    `Current time: ${nowContext()}`,
     "Read these selected skill files before conducting research:",
     ...skillLines,
     "",

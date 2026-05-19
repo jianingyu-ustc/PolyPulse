@@ -108,7 +108,7 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~概率估算改为"先独立估算，后锚定审视"（Estimate-then-Anchor）~~：已实现两阶段法 prompt——阶段一要求 AI 基于 base_rate + evidence_adjustment 独立估算，不参考盘口；阶段二与盘口对比，偏离>15pp 须提供 deviation_justification。移除了旧的±10%/±5%硬编码锚定规则；代码端通过 ProbabilityCalibrationLayer 的 unjustified_deviation 维度做质量控制式 shrinkage（15-25pp 无解释收缩 0.15，>25pp 无解释收缩 0.35），有充分解释时不额外收缩。
 - [x] ~~概率估算 prompt 增加显式 base rate 推理步骤~~：已实现。prompt 要求 AI 输出 `base_rate`（0-1，历史/结构性先验）、`base_rate_source`（来源说明）、`evidence_adjustment`（-1 到 1，证据调整量），`ai_probability` 应逻辑上约等于 base_rate + evidence_adjustment。JSON Schema 和 ProbabilityEstimator 已扩展支持这些字段（可选，向后兼容）。
 - [ ] 跨 Runtime 上下文传递：将 candidate-triage 的 `rationale`/`information_advantage` 和 evidence-research 的 `key_findings`/`evidence_sufficiency` 注入概率估算 prompt，消除 5 个 runtime 独立运行导致的信息断层（当前 triage 发现的 insight 没有传给概率估算阶段）。
-- [ ] 所有 AI runtime prompt 注入当前日期和时间上下文：当前 5 个 prompt 均未告知 AI "今天是几号"，导致无法判断证据新鲜度、到期紧迫性和时效性事件（如"本周三 FOMC"）；Topic Discovery 额外需要注入最近 24h 新闻摘要，否则只能基于训练数据截止日的陈旧知识"发现"话题。
+- [x] ~~所有 AI runtime prompt 注入当前日期和时间上下文~~：已实现。5 个 AI runtime（概率估算、预筛、候选 triage、证据研究、话题发现）均在 prompt 开头注入 `当前时间：YYYY-MM-DD HH:MM:SS UTC`，AI 可据此判断证据新鲜度、到期紧迫性和时效性事件。Topic Discovery 额外通过 DuckDuckGo 抓取最近 24h 新闻标题（最多 20 条，8s 超时，失败不阻断），注入 prompt 供 AI 发现时效性话题。
 - [ ] 每个 AI runtime 增加 1-2 个 few-shot golden example：当前所有 prompt 只有规则描述无输出示例，AI 对格式和质量标准的理解全靠指令遵循；增加高质量示例（从历史 runtime-artifacts 中挑选成功预测的真实输出）可显著提升输出一致性和推理深度。
 
 ### 开仓金额计算和风控逻辑

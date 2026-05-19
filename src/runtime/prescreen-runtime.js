@@ -67,6 +67,11 @@ function isChineseLocale(locale) {
   return locale === "zh";
 }
 
+function nowContext() {
+  const now = new Date();
+  return now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
 function buildPreScreenPrompt({ candidates, settings }) {
   const localeIsChinese = isChineseLocale(settings.locale);
 
@@ -82,6 +87,8 @@ function buildPreScreenPrompt({ candidates, settings }) {
 
   if (localeIsChinese) {
     return [
+      `当前时间：${nowContext()}`,
+      "",
       "给定以下候选市场，快速分类每个市场为 TRADE 或 SKIP：",
       "- TRADE：AI 能通过推理、信息综合或先例匹配产生有意义的 edge",
       "- SKIP：结果太随机、依赖内幕信息或市场已经高效定价",
@@ -97,6 +104,8 @@ function buildPreScreenPrompt({ candidates, settings }) {
   }
 
   return [
+    `Current time: ${nowContext()}`,
+    "",
     "Given these market candidates, quickly classify each as TRADE (AI can generate meaningful edge through reasoning, information synthesis, or precedent matching) or SKIP (outcome is too random, depends on insider info, or is already efficiently priced).",
     "",
     "For each candidate, respond with exactly one line in this format:",
