@@ -105,6 +105,11 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~增加费率验证~~：已实现 `DynamicFeeService.verifyAndLog`，下单前通过 CLOB API 获取动态费率参数，对比静态估算的 feeRate/exponent，偏差超阈值时记录 `fee-discrepancies.jsonl` 并用动态值覆盖。对齐 Predict-Raven 的 `verifyFeeEstimate`。
 - [ ] 增加已有仓位收益复核：基于 avg cost、best bid、unrealized PnL、stop-loss 距离和刷新后的 calibrated edge，决定 hold/reduce/close，以提升实际收益率和降低回撤。
 - [ ] 用历史真实结算市场和已产生 artifact 做回放评估，比较不同 provider、PULSE_* 参数、筛选条件和排序规则对命中率、净收益率、最大回撤的影响。
+- [ ] 概率估算改为"先独立估算，后锚定审视"（Estimate-then-Anchor）：移除 prompt 中的强制锚定规则（当前±10%/±5%硬约束导致最大可发现 edge 被封顶），改为 AI 先基于 base rate + evidence 独立估算，然后给出与盘口的偏差解释（`deviation_justification`）；代码端通过 ProbabilityCalibrationLayer 做质量控制式 shrinkage，而非 prompt 层硬编码收缩。
+- [ ] 概率估算 prompt 增加显式 base rate 推理步骤：要求 AI 输出 `base_rate`（历史/结构性基础概率）、`base_rate_source`（来源）、`evidence_adjustment`（证据调整量），最终 `ai_probability = base_rate + adjustment`；强制贝叶斯式推理链，防止 AI 跳过先验直接猜数字。
+- [ ] 跨 Runtime 上下文传递：将 candidate-triage 的 `rationale`/`information_advantage` 和 evidence-research 的 `key_findings`/`evidence_sufficiency` 注入概率估算 prompt，消除 5 个 runtime 独立运行导致的信息断层（当前 triage 发现的 insight 没有传给概率估算阶段）。
+- [ ] 所有 AI runtime prompt 注入当前日期和时间上下文：当前 5 个 prompt 均未告知 AI "今天是几号"，导致无法判断证据新鲜度、到期紧迫性和时效性事件（如"本周三 FOMC"）；Topic Discovery 额外需要注入最近 24h 新闻摘要，否则只能基于训练数据截止日的陈旧知识"发现"话题。
+- [ ] 每个 AI runtime 增加 1-2 个 few-shot golden example：当前所有 prompt 只有规则描述无输出示例，AI 对格式和质量标准的理解全靠指令遵循；增加高质量示例（从历史 runtime-artifacts 中挑选成功预测的真实输出）可显著提升输出一致性和推理深度。
 
 ### 开仓金额计算和风控逻辑
 
