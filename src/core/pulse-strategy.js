@@ -308,6 +308,37 @@ export function calculateQuarterKelly({ aiProb, marketProb, bankrollUsd }) {
   };
 }
 
+export function calculateMultiArmKelly({ trades, bankrollUsd, fractionKelly = 0.25 }) {
+  if (!trades || trades.length === 0 || bankrollUsd <= 0) return [];
+  if (trades.length === 1) {
+    const t = trades[0];
+    const kelly = calculateQuarterKelly({ aiProb: t.aiProb, marketProb: t.marketProb, bankrollUsd });
+    return [{ ...t, fullKellyPct: kelly.fullKellyPct, kellyPct: kelly.quarterKellyPct, kellyUsd: kelly.quarterKellyUsd }];
+  }
+  const n = trades.length;
+  const fractions = new Array(n).fill(0);
+  const odds = trades.map((t) => (t.marketProb > 0 && t.marketProb < 1) ? (1 / t.marketProb - 1) : 0);
+  const probs = trades.map((t) => t.aiProb);
+  const probRemainder = Math.max(0, 1 - probs.reduce((s, p) => s + p, 0));
+  for (let iter = 0; iter < 50; iter++) {
+    for (let i = 0; i < n; i++) {
+      if (odds[i] <= 0) continue;
+      const othersStake = fractions.reduce((s, f, j) => j !== i ? s + f : s, 0);
+      const numerator = probs[i] * (1 + odds[i]) - 1 + probRemainder * othersStake;
+      const denominator = odds[i] * (1 - othersStake) + (1 + odds[i]) * (1 - probs[i]);
+      fractions[i] = Math.max(0, Math.min(numerator / (denominator || 1), 0.5));
+    }
+  }
+  const totalFraction = fractions.reduce((s, f) => s + f, 0);
+  const maxTotal = 0.5;
+  const scale = totalFraction > maxTotal ? maxTotal / totalFraction : 1;
+  return trades.map((t, i) => {
+    const fullKellyPct = fractions[i] * scale;
+    const kellyPct = fullKellyPct * fractionKelly;
+    return { ...t, fullKellyPct, kellyPct, kellyUsd: bankrollUsd * kellyPct };
+  });
+}
+
 export function calculateMonthlyReturn({ edge, endDate, nowMs = Date.now() }) {
   const daysToResolution = daysUntil(endDate, nowMs);
   const monthsToResolution = daysToResolution / 30;

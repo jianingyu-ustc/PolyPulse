@@ -1,5 +1,5 @@
 import { assertSchema } from "../domain/schemas.js";
-import { buildPulseTradePlan, isPulseDirectStrategy } from "./pulse-strategy.js";
+import { buildPulseTradePlan, isPulseDirectStrategy, calculateMultiArmKelly } from "./pulse-strategy.js";
 
 const FEE_ALLOWANCE = 0.005;
 const SLIPPAGE_ALLOWANCE = 0.005;
@@ -277,15 +277,39 @@ export class DecisionEngine {
       const dirKey = `${trade.market.marketId}:${trade.side}`;
       if (seenDirections.has(dirKey)) continue;
       seenDirections.add(dirKey);
-      selected.push({
-        ...trade.candidate,
-        ai_probability: trade.candidate.aiProbability,
-        marketSlug: trade.market.marketSlug,
-        eventGroup: trade.market.eventId || trade.market.eventSlug || null
-      });
+      selected.push(trade);
       if (selected.length >= 2) break;
     }
-    return selected;
+
+    if (selected.length > 1 && this.pulseDirect) {
+      const bankrollUsd = Number(portfolio?.totalEquityUsd ?? amountUsd ?? 0);
+      const kellyInputs = selected.map((t) => ({
+        aiProb: t.candidate.aiProbability,
+        marketProb: t.candidate.marketProbability,
+        marketId: t.market.marketId
+      }));
+      const kellyResults = calculateMultiArmKelly({ trades: kellyInputs, bankrollUsd });
+      for (let i = 0; i < selected.length; i++) {
+        const kr = kellyResults[i];
+        if (kr && kr.kellyUsd > 0) {
+          selected[i].candidate = {
+            ...selected[i].candidate,
+            fullKellyPct: kr.fullKellyPct,
+            quarterKellyPct: kr.kellyPct,
+            suggestedNotionalUsd: Math.max(1, Math.round(kr.kellyUsd * 100) / 100),
+            suggested_notional_before_risk: Math.max(1, Math.round(kr.kellyUsd * 100) / 100),
+            multiArmKelly: true
+          };
+        }
+      }
+    }
+
+    return selected.map((trade) => ({
+      ...trade.candidate,
+      ai_probability: trade.candidate.aiProbability,
+      marketSlug: trade.market.marketSlug,
+      eventGroup: trade.market.eventId || trade.market.eventSlug || null
+    }));
   }
 
   decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null, dynamicFeeParams = null }) {

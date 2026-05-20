@@ -108,7 +108,42 @@ function compareOpportunityAnalysis(left, right) {
   return 0;
 }
 
+export function applySiblingConstraints(predictions) {
+  const HIGH_CONFIDENCE_THRESHOLD = "medium";
+  const eventGroups = new Map();
+  for (const prediction of predictions) {
+    const groupKey = prediction.market.negRisk ? (prediction.market.eventId || prediction.market.eventSlug) : null;
+    if (groupKey) {
+      if (!eventGroups.has(groupKey)) eventGroups.set(groupKey, []);
+      eventGroups.get(groupKey).push(prediction);
+    }
+  }
+  for (const [, siblings] of eventGroups) {
+    if (siblings.length < 2) continue;
+    const confident = siblings.filter((p) => {
+      const conf = String(p.estimate?.confidence ?? "").toLowerCase();
+      return conf === "high" || conf === HIGH_CONFIDENCE_THRESHOLD;
+    });
+    if (confident.length === 0) continue;
+    const knownSum = confident.reduce((sum, p) => {
+      const prob = p.estimate?.outcomeEstimates?.[0]?.aiProbability ?? p.estimate?.ai_probability ?? 0;
+      return sum + prob;
+    }, 0);
+    for (const prediction of siblings) {
+      if (confident.includes(prediction)) continue;
+      const cap = Math.max(0.01, 1 - knownSum);
+      for (const oe of prediction.estimate?.outcomeEstimates ?? []) {
+        if (oe.label?.toLowerCase() === "yes" && oe.aiProbability > cap) {
+          oe.siblingConstraintApplied = true;
+          oe.aiProbability = cap;
+        }
+      }
+    }
+  }
+}
+
 export function rankPredictionsForExecution({ predictions, portfolio, amountUsd, decisionEngine, dynamicFeeParamsMap = null }) {
+  applySiblingConstraints(predictions);
   const eventGroupMap = new Map();
   const singletons = [];
   for (const prediction of predictions) {
