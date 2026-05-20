@@ -129,8 +129,8 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 
   **改进路线图**：
 
-  - Phase 0 — 结构性套利检测（纯代码，~30 行）｜**对应 Step: Ranking → Execution 之间**：在 `scheduler.js` 排序后、执行前，对 `negRisk=true` 的事件按 `eventId` 分组，计算 `Σ(yes_bestAsk)`；若 > 1 + total_fees 则标记为无风险套利机会（全买 No），若 < 1 - total_fees 则全买 Yes；套利交易不依赖 AI 预测，以最高优先级插入执行队列。
-  - Phase 1 — 事件分组透传（纯代码，~5 行）｜**对应 Step: Scan → Candidate Building**：在 `buildCandidates()` / `SemanticDiscovery` / `CandidateTriage` 层为同一事件的子市场挂 `eventGroup` 字段（直接复用 Polymarket `eventId` 或 `eventSlug`），下游全链路透传。
+  - [x] Phase 0 — 结构性套利检测（纯代码，~30 行）｜**对应 Step: Ranking → Execution 之间**：在 `scheduler.js` 排序后、执行前，对 `negRisk=true` 的事件按 `eventId` 分组，计算 `Σ(yes_bestAsk)`；若 > 1 则标记为无风险套利机会（全买 No，type=`buy_all_no`），若 < 1 则全买 Yes（type=`buy_all_yes`）；检测结果记录到 `accumulator.arbitrage` 并通过 ledger 日志输出（`arbitrage.detected` 事件），返回值中包含 `arbitrage` 计数。negRisk 事件费率为 0，阈值直接使用 1。
+  - [x] Phase 1 — 事件分组透传（纯代码，~5 行）｜**对应 Step: Scan → Candidate Building**：在 `buildCandidates()` 和 `candidateSummary()` 中为 `negRisk=true` 的子市场挂 `eventGroup` 字段（值为 `eventId || eventSlug`），下游全链路透传。候选对象（`candidateEntry`）和候选摘要（`candidateSummary`）均包含此字段，供后续 Phase 使用。
   - Phase 2 — 联合概率估计 Prompt（Prompt + 代码）｜**对应 Step: Prediction**：`ProbabilityEstimator` 新增批量入口 `estimateEventGroup(markets[])`，同 `eventGroup` 的子市场合并为一次 AI 调用；prompt 从"评估这个市场的 Yes 概率"改为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"；AI 能看到完整竞争格局，估计更准确。
   - Phase 3 — 归一化概率分布 Schema（Prompt + Schema + 代码）｜**对应 Step: Prediction（输出层）**：输出 schema 从 `{ai_probability: number}` 扩展为 `{outcomes: [{label, market_slug, probability}], distribution_confidence}`，prompt 强制"概率之和必须等于 1"约束；代码层后处理做归一化修正（按比例缩放至 sum=1），并校验偏离度（AI 原始 sum 与 1 的偏差 > 20% 时记录 warning）。
   - Phase 4 — 组内最优选择（纯代码，~40-60 行）｜**对应 Step: Decision（DecisionEngine.analyze）**：`DecisionEngine` 新增 `analyzeEventGroup(candidates[], jointProbabilities[])` 方法，基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优的 1-2 个交易（如同时做多最被低估的候选人 + 做空最被高估的候选人）。

@@ -205,6 +205,7 @@ function candidateSummary(market, selected, reasons = []) {
     marketSlug: market.marketSlug,
     eventId: market.eventId,
     eventSlug: market.eventSlug,
+    eventGroup: market.negRisk ? (market.eventId || market.eventSlug || null) : null,
     question: market.question,
     category: market.category ?? null,
     liquidityUsd: market.liquidityUsd,
@@ -263,9 +264,58 @@ function buildCandidates({ markets, monitorState, portfolio, config }) {
     }
     return {
       market,
-      summary: candidateSummary(market, reasons.length === 0, reasons)
+      summary: candidateSummary(market, reasons.length === 0, reasons),
+      eventGroup: market.negRisk ? (market.eventId || market.eventSlug || null) : null
     };
   });
+}
+
+function yesAskPrice(market) {
+  const yesOutcome = market.outcomes?.[0];
+  return yesOutcome?.bestAsk ?? yesOutcome?.lastPrice ?? null;
+}
+
+export function detectStructuralArbitrage(markets) {
+  const eventGroups = new Map();
+  for (const market of markets) {
+    if (!market.negRisk || !market.tradable) continue;
+    const groupKey = market.eventId || market.eventSlug;
+    if (!groupKey) continue;
+    if (!eventGroups.has(groupKey)) eventGroups.set(groupKey, []);
+    eventGroups.get(groupKey).push(market);
+  }
+
+  const opportunities = [];
+  for (const [eventId, siblings] of eventGroups) {
+    if (siblings.length < 2) continue;
+    let sumYesAsk = 0;
+    let allPriced = true;
+    for (const m of siblings) {
+      const price = yesAskPrice(m);
+      if (price == null || price <= 0) { allPriced = false; break; }
+      sumYesAsk += price;
+    }
+    if (!allPriced) continue;
+
+    if (sumYesAsk > 1) {
+      opportunities.push({
+        type: "buy_all_no",
+        eventId,
+        siblings,
+        sumYesAsk: Math.round(sumYesAsk * 1e6) / 1e6,
+        profit: Math.round((sumYesAsk - 1) * 1e6) / 1e6
+      });
+    } else if (sumYesAsk < 1) {
+      opportunities.push({
+        type: "buy_all_yes",
+        eventId,
+        siblings,
+        sumYesAsk: Math.round(sumYesAsk * 1e6) / 1e6,
+        profit: Math.round((1 - sumYesAsk) * 1e6) / 1e6
+      });
+    }
+  }
+  return opportunities;
 }
 
 async function mapLimit(items, limit, backoffMs, fn) {
@@ -1344,6 +1394,21 @@ export class Scheduler {
           }))
         };
 
+        const arbitrageOpportunities = detectStructuralArbitrage(accumulator.scan.markets ?? []);
+        accumulator.arbitrage = arbitrageOpportunities;
+        if (simulated) {
+          for (const arb of arbitrageOpportunities) {
+            await ledger.log("arbitrage.detected", {
+              type: arb.type,
+              eventId: arb.eventId,
+              sumYesAsk: arb.sumYesAsk,
+              profit: arb.profit,
+              siblingCount: arb.siblings.length,
+              siblings: arb.siblings.map((m) => m.marketSlug)
+            });
+          }
+        }
+
         if (simulated) {
           let orderCount = 0;
           let filledUsdThisRun = 0;
@@ -1619,6 +1684,18 @@ export class Scheduler {
             roundId: runId
           });
         }
+        const arbitrageOpportunities = detectStructuralArbitrage(accumulator.scan.markets ?? []);
+        accumulator.arbitrage = arbitrageOpportunities;
+        for (const arb of arbitrageOpportunities) {
+          await ledger.log("arbitrage.detected", {
+            type: arb.type,
+            eventId: arb.eventId,
+            sumYesAsk: arb.sumYesAsk,
+            profit: arb.profit,
+            siblingCount: arb.siblings.length,
+            siblings: arb.siblings.map((m) => m.marketSlug)
+          });
+        }
         let orderCount = 0;
         let filledUsdThisRun = 0;
         for (const { prediction } of rankedPredictions) {
@@ -1683,6 +1760,7 @@ export class Scheduler {
         candidates: accumulator.candidates.filter((item) => item.selected).length,
         predictions: accumulator.predictions.length,
         orders: accumulator.orders.filter((order) => order.status === "filled").length,
+        arbitrage: accumulator.arbitrage?.length ?? 0,
         action: accumulator.orders.some((order) => order.status === "filled") ? "simulated-orders" : "no-trade",
         artifact: ledger.logPath,
         log: ledger.logPath,
@@ -1798,6 +1876,8 @@ export class Scheduler {
           this.config.pulse?.batchCapPct
         );
         const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
+        const arbitrageOpportunities = detectStructuralArbitrage(accumulator.scan.markets ?? []);
+        accumulator.arbitrage = arbitrageOpportunities;
         let orderCount = 0;
         let filledUsdThisRun = 0;
         for (const { prediction } of rankedPredictions) {
@@ -1845,6 +1925,7 @@ export class Scheduler {
         candidates: accumulator.candidates.filter((item) => item.selected).length,
         predictions: accumulator.predictions.length,
         orders: accumulator.orders.filter((order) => order.status === "filled").length,
+        arbitrage: accumulator.arbitrage?.length ?? 0,
         action: accumulator.orders.some((order) => order.status === "filled") ? "live-orders" : "no-trade",
         artifact: artifacts.summary.path
       };
