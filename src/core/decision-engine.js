@@ -174,6 +174,20 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
   });
 }
 
+function injectJointProbability(estimate, jointProb) {
+  const updated = { ...estimate, outcomeEstimates: [...(estimate.outcomeEstimates ?? [])] };
+  for (let i = 0; i < updated.outcomeEstimates.length; i++) {
+    const oe = updated.outcomeEstimates[i];
+    const label = (oe.label ?? "").toLowerCase();
+    if (label === "yes") {
+      updated.outcomeEstimates[i] = { ...oe, aiProbability: jointProb };
+    } else if (label === "no") {
+      updated.outcomeEstimates[i] = { ...oe, aiProbability: 1 - jointProb };
+    }
+  }
+  return updated;
+}
+
 function chooseBestCandidate(candidates) {
   return candidates
     .filter(Boolean)
@@ -222,6 +236,56 @@ export class DecisionEngine {
       ai_probability: candidate.aiProbability,
       sources: sourceIds(estimate)
     };
+  }
+
+  analyzeEventGroup({ candidates, jointProbabilities, portfolio = null, amountUsd = 1, dynamicFeeParams = null }) {
+    const minNetEdge = this.config.pulse?.minNetEdge ?? 0;
+    const lowConfidenceMinEdge = this.config.pulse?.lowConfidenceMinEdge ?? 0;
+    const buildCandidate = this.pulseDirect ? buildPulseTradeCandidate : buildTradeCandidate;
+    const allTrades = [];
+
+    for (const { market, estimate } of candidates) {
+      const jointProb = jointProbabilities.find(
+        (jp) => jp.market_slug === market.marketSlug || jp.marketId === market.marketId
+      );
+      const effectiveEstimate = jointProb ? injectJointProbability(estimate, jointProb.probability) : estimate;
+      for (const side of ["yes", "no"]) {
+        const candidate = buildCandidate({
+          market,
+          estimate: effectiveEstimate,
+          side,
+          portfolio,
+          amountUsd,
+          dynamicFeeParams,
+          minNetEdge,
+          lowConfidenceMinEdge
+        });
+        if (candidate && candidate.action === "open") {
+          allTrades.push({ market, estimate: effectiveEstimate, candidate, side });
+        }
+      }
+    }
+
+    if (allTrades.length === 0) return [];
+
+    const sortKey = this.pulseDirect ? "monthlyReturn" : "netEdge";
+    allTrades.sort((a, b) => (b.candidate[sortKey] ?? -Infinity) - (a.candidate[sortKey] ?? -Infinity));
+
+    const selected = [];
+    const seenDirections = new Set();
+    for (const trade of allTrades) {
+      const dirKey = `${trade.market.marketId}:${trade.side}`;
+      if (seenDirections.has(dirKey)) continue;
+      seenDirections.add(dirKey);
+      selected.push({
+        ...trade.candidate,
+        ai_probability: trade.candidate.aiProbability,
+        marketSlug: trade.market.marketSlug,
+        eventGroup: trade.market.eventId || trade.market.eventSlug || null
+      });
+      if (selected.length >= 2) break;
+    }
+    return selected;
   }
 
   decide({ market, estimate, side = "yes", amountUsd = 1, portfolio = null, dynamicFeeParams = null }) {

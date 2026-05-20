@@ -226,6 +226,17 @@ export class RiskEngine {
       addLimit(appliedLimits, "maxEventExposureUsd", maxEventExposureUsd);
     }
 
+    if (market.negRisk && market.eventId) {
+      const sameSidePositions = (portfolio.positions ?? [])
+        .filter((position) => position.eventId === market.eventId && position.side === decision.suggestedSide);
+      const sameSideCost = sameSidePositions.reduce((sum, position) => sum + Number(position.costBasisUsd ?? position.currentValueUsd ?? 0), 0);
+      const mutualExclusionCap = roundUsd(Math.max(0, portfolioEquityUsd * this.config.risk.maxEventExposurePct - sameSideCost));
+      if (adjusted > mutualExclusionCap) {
+        adjusted = mutualExclusionCap;
+        addLimit(appliedLimits, "eventMutualExclusionCap", mutualExclusionCap);
+      }
+    }
+
     const liquidityCapUsd = roundUsd((market.liquidityUsd ?? 0) * this.config.risk.liquidityTradeCapPct);
     if (liquidityCapUsd > 0 && adjusted > liquidityCapUsd) {
       adjusted = liquidityCapUsd;

@@ -109,18 +109,70 @@ function compareOpportunityAnalysis(left, right) {
 }
 
 export function rankPredictionsForExecution({ predictions, portfolio, amountUsd, decisionEngine, dynamicFeeParamsMap = null }) {
-  return predictions
-    .map((prediction, index) => ({
-      prediction,
-      index,
-      analysis: decisionEngine.analyze({
-        market: prediction.market,
-        estimate: prediction.estimate,
-        portfolio,
-        amountUsd,
-        dynamicFeeParams: dynamicFeeParamsMap?.get(prediction.market.marketId) ?? null
-      })
-    }))
+  const eventGroupMap = new Map();
+  const singletons = [];
+  for (const prediction of predictions) {
+    const groupKey = prediction.market.negRisk ? (prediction.market.eventId || prediction.market.eventSlug) : null;
+    if (groupKey) {
+      if (!eventGroupMap.has(groupKey)) eventGroupMap.set(groupKey, []);
+      eventGroupMap.get(groupKey).push(prediction);
+    } else {
+      singletons.push(prediction);
+    }
+  }
+
+  const singletonRanked = singletons.map((prediction, index) => ({
+    prediction,
+    index,
+    analysis: decisionEngine.analyze({
+      market: prediction.market,
+      estimate: prediction.estimate,
+      portfolio,
+      amountUsd,
+      dynamicFeeParams: dynamicFeeParamsMap?.get(prediction.market.marketId) ?? null
+    })
+  }));
+
+  const groupRanked = [];
+  for (const [, groupPredictions] of eventGroupMap) {
+    if (groupPredictions.length < 2) {
+      for (const prediction of groupPredictions) {
+        singletonRanked.push({
+          prediction,
+          index: singletonRanked.length,
+          analysis: decisionEngine.analyze({
+            market: prediction.market,
+            estimate: prediction.estimate,
+            portfolio,
+            amountUsd,
+            dynamicFeeParams: dynamicFeeParamsMap?.get(prediction.market.marketId) ?? null
+          })
+        });
+      }
+      continue;
+    }
+    const candidates = groupPredictions.map((p) => ({ market: p.market, estimate: p.estimate }));
+    const jointProbabilities = groupPredictions.map((p) => ({
+      market_slug: p.market.marketSlug,
+      marketId: p.market.marketId,
+      probability: p.estimate?.outcomeEstimates?.[0]?.aiProbability ?? p.estimate?.ai_probability ?? 0.5
+    }));
+    const bestTrades = decisionEngine.analyzeEventGroup({ candidates, jointProbabilities, portfolio, amountUsd });
+    for (const trade of bestTrades) {
+      const matchedPrediction = groupPredictions.find(
+        (p) => p.market.marketId === trade.marketId || p.market.marketSlug === trade.marketSlug
+      );
+      if (matchedPrediction) {
+        groupRanked.push({
+          prediction: matchedPrediction,
+          index: groupRanked.length,
+          analysis: trade
+        });
+      }
+    }
+  }
+
+  return [...singletonRanked, ...groupRanked]
     .sort((left, right) => compareOpportunityAnalysis(left.analysis, right.analysis) || left.index - right.index);
 }
 
@@ -153,6 +205,12 @@ function blockedOrder({ reason }) {
 }
 
 function dedupeKeys(market) {
+  if (market.negRisk) {
+    return [
+      market.marketId ? `market:${market.marketId}` : null,
+      market.marketSlug ? `market:${market.marketSlug}` : null
+    ].filter(Boolean);
+  }
   return [
     market.marketId ? `market:${market.marketId}` : null,
     market.marketSlug ? `market:${market.marketSlug}` : null,
@@ -191,6 +249,12 @@ function tradedByMonitor(monitorState, market) {
 }
 
 function heldInPortfolio(portfolio, market) {
+  if (market.negRisk) {
+    return (portfolio.positions ?? []).some((position) =>
+      position.marketId === market.marketId
+        || position.marketSlug === market.marketSlug
+    );
+  }
   return (portfolio.positions ?? []).some((position) =>
     position.marketId === market.marketId
       || position.marketSlug === market.marketSlug

@@ -32,6 +32,12 @@ function outcomeForToken(market, tokenId) {
 }
 
 function dedupeKeys(market) {
+  if (market?.negRisk) {
+    return [
+      market.marketId ? `market:${market.marketId}` : null,
+      market.marketSlug ? `market:${market.marketSlug}` : null
+    ].filter(Boolean);
+  }
   return [
     market?.marketId ? `market:${market.marketId}` : null,
     market?.marketSlug ? `market:${market.marketSlug}` : null,
