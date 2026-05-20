@@ -14,7 +14,10 @@ import { resolveClaudeSkillSettings } from "./claude-skill-settings.js";
 import { codexRuntimeInternals } from "./codex-runtime.js";
 
 const RUNTIME_HEARTBEAT_INTERVAL_MS = 5000;
-const { buildProbabilityEstimateSchema, buildPrompt, extractJsonPayload } = codexRuntimeInternals;
+const {
+  buildProbabilityEstimateSchema, buildPrompt, extractJsonPayload,
+  buildEventGroupProbabilityEstimateSchema, buildEventGroupPrompt, extractGroupJsonPayload
+} = codexRuntimeInternals;
 
 function timestampId(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
@@ -253,6 +256,80 @@ async function archiveRuntimeLog({ config, settings, rawOutput, promptMetrics, s
 export class ClaudeProbabilityProvider {
   constructor(config = {}) {
     this.config = config;
+  }
+
+  async estimateGroup({ markets, evidenceMap, upstreamContexts = null }) {
+    const settings = resolveClaudeSkillSettings(this.config);
+    const repoRoot = path.resolve(this.config.repoRoot ?? process.cwd());
+    const riskDocPath = path.resolve(repoRoot, "docs", "specs", "risk-controls.md");
+    const tempDir = await mkdtemp(path.join(tmpdir(), "polypulse-claude-group-"));
+    const outputPath = path.join(tempDir, "provider-output.json");
+    const promptPath = path.join(tempDir, "provider-prompt.txt");
+    const schemaPath = path.join(tempDir, "event-group-estimate.schema.json");
+    const timeoutMs = (this.config.providerTimeoutSeconds ?? 0) * 1000;
+    const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
+    const runtimeStartedAt = Date.now();
+    let preserveTempDir = false;
+
+    try {
+      const prompt = buildEventGroupPrompt({ markets, evidenceMap, settings, riskDocPath, upstreamContexts });
+      const schemaContent = JSON.stringify(buildEventGroupProbabilityEstimateSchema(), null, 2);
+      await writeFile(promptPath, prompt, "utf8");
+      await writeFile(schemaPath, schemaContent, "utf8");
+
+      const promptMetrics = measureText(prompt);
+      const schemaMetrics = measureText(schemaContent);
+
+      await runClaude({
+        prompt,
+        settings,
+        repoRoot,
+        tempDir,
+        outputPath,
+        schemaPath,
+        timeoutMs
+      });
+
+      const rawOutput = await readFile(outputPath, "utf8");
+      const parsed = extractGroupJsonPayload(rawOutput);
+      if (!this.config.suppressProviderRuntimeArtifacts) {
+        const artifactDir = path.join(this.config.artifactDir, "claude-code-runtime-group", timestampId());
+        await mkdir(artifactDir, { recursive: true });
+        const logPath = path.join(artifactDir, "runtime-log.md");
+        await writeFile(logPath, truncate([
+          "# Claude Code Event Group Probability Runtime Log",
+          `Provider: ${settings.provider}`,
+          `Markets: ${markets.length}`,
+          `Prompt: ${formatTextMetrics(promptMetrics)}`,
+          `Schema: ${formatTextMetrics(schemaMetrics)}`,
+          "",
+          "## Raw Provider Output",
+          "```json",
+          rawOutput.trim(),
+          "```"
+        ].join("\n"), this.config.pulse?.maxMarkdownChars ?? 24000), "utf8");
+      }
+      return parsed;
+    } catch (error) {
+      preserveTempDir = true;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message}\n` +
+        `${buildRuntimeHeartbeatDetail({
+          stage: "Event group probability runtime failure",
+          providerDetail: `${settings.provider} provider`,
+          startedAt: runtimeStartedAt,
+          timeoutMs: effectiveTimeoutMs,
+          tempDir,
+          outputPath
+        })}\n\nEvent group probability runtime temp preserved at ${tempDir}`,
+        { cause: error }
+      );
+    } finally {
+      if (!preserveTempDir) {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
   }
 
   async estimate({ market, evidence, upstreamContext = null }) {

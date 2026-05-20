@@ -318,6 +318,29 @@ export function detectStructuralArbitrage(markets) {
   return opportunities;
 }
 
+function groupCandidatesByEvent(candidates) {
+  const groupMap = new Map();
+  const singletons = [];
+  for (const candidate of candidates) {
+    const key = candidate.eventGroup;
+    if (!key) {
+      singletons.push(candidate);
+      continue;
+    }
+    if (!groupMap.has(key)) groupMap.set(key, []);
+    groupMap.get(key).push(candidate);
+  }
+  const groups = new Map();
+  for (const [key, members] of groupMap) {
+    if (members.length >= 2) {
+      groups.set(key, members);
+    } else {
+      singletons.push(...members);
+    }
+  }
+  return { groups, singletons };
+}
+
 async function mapLimit(items, limit, backoffMs, fn) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -483,6 +506,38 @@ export class Scheduler {
     const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
     this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
     return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
+  }
+
+  async predictEventGroup(groupCandidates) {
+    const evidenceMap = new Map();
+    const upstreamContexts = new Map();
+    const allEvidenceMap = new Map();
+
+    for (const candidate of groupCandidates) {
+      const market = candidate.market;
+      const evidence = await this.evidenceCrawler.collect({ market, noCache: true });
+      const additionalEvidence = await this.runEvidenceResearch({ market, evidence, candidate });
+      const allEvidence = [...evidence, ...additionalEvidence];
+      evidenceMap.set(market.marketId, allEvidence);
+      allEvidenceMap.set(market.marketId, allEvidence);
+      const upstreamContext = buildUpstreamContext(candidate);
+      if (upstreamContext) upstreamContexts.set(market.marketId, upstreamContext);
+    }
+
+    const markets = groupCandidates.map((c) => c.market);
+    const results = await this.probabilityEstimator.estimateEventGroup({
+      markets,
+      evidenceMap,
+      upstreamContexts: upstreamContexts.size > 0 ? upstreamContexts : null
+    });
+
+    return results.map(({ market, estimate }) => {
+      const candidate = groupCandidates.find((c) => c.market.marketId === market.marketId);
+      const allEvidence = allEvidenceMap.get(market.marketId) ?? [];
+      const calibration = this.applyCalibration({ estimate, market, evidence: allEvidence, candidate });
+      this._injectCalibratedProbabilities(estimate, market, allEvidence, candidate);
+      return { market, evidence: allEvidence, estimate: { ...estimate, calibration }, calibration };
+    });
   }
 
   _injectCalibratedProbabilities(estimate, market, evidence, candidate) {
@@ -1288,8 +1343,9 @@ export class Scheduler {
           selectedCandidates: selected.map((item) => item.summary)
         };
 
-        const predictions = await mapLimit(
-          selected,
+        const { groups: accGroups, singletons: accSingletons } = groupCandidatesByEvent(selected);
+        const accSingletonPredictions = await mapLimit(
+          accSingletons,
           this.config.monitor.concurrency,
           this.config.monitor.backoffMs,
           async (candidate) => {
@@ -1303,6 +1359,32 @@ export class Scheduler {
             }
           }
         );
+        const accGroupPredictions = [];
+        for (const [eventGroup, groupCandidates] of accGroups) {
+          try {
+            const results = await this.predictEventGroup(groupCandidates);
+            accGroupPredictions.push(...results);
+          } catch (error) {
+            accumulator.errors.push(`event_group_prediction_failed:${eventGroup}:${(error.message ?? String(error)).split("\n")[0].slice(0, 200)}`);
+            const fallback = await mapLimit(
+              groupCandidates,
+              this.config.monitor.concurrency,
+              this.config.monitor.backoffMs,
+              async (candidate) => {
+                try {
+                  return simulated
+                    ? await this.predictCandidateNoCache(candidate)
+                    : await this.predictCandidate(candidate);
+                } catch (err) {
+                  accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${err.message ?? err}`);
+                  return null;
+                }
+              }
+            );
+            accGroupPredictions.push(...fallback.filter(Boolean));
+          }
+        }
+        const predictions = [...accSingletonPredictions, ...accGroupPredictions];
         accumulator.predictions = predictions.filter(Boolean);
         if (accumulator.predictions.length === 0) {
           throw new Error(`acceptance_no_predictions:${accumulator.errors.join(";") || "unknown"}`);
@@ -1612,8 +1694,9 @@ export class Scheduler {
           }
         }
         const selected = candidateEntries.filter((item) => item.summary.selected);
-        const predictions = await mapLimit(
-          selected,
+        const { groups, singletons } = groupCandidatesByEvent(selected);
+        const singletonPredictions = await mapLimit(
+          singletons,
           this.config.monitor.concurrency,
           this.config.monitor.backoffMs,
           async (candidate) => {
@@ -1632,6 +1715,32 @@ export class Scheduler {
             }
           }
         );
+        const groupPredictions = [];
+        for (const [eventGroup, groupCandidates] of groups) {
+          try {
+            const results = await this.predictEventGroup(groupCandidates);
+            groupPredictions.push(...results);
+          } catch (error) {
+            const fullMsg = error instanceof Error ? error.message : String(error);
+            accumulator.errors.push(`event_group_prediction_failed:${eventGroup}:${fullMsg.split("\n")[0].slice(0, 200)}`);
+            const fallback = await mapLimit(
+              groupCandidates,
+              this.config.monitor.concurrency,
+              this.config.monitor.backoffMs,
+              async (candidate) => {
+                try {
+                  return await this.predictCandidateNoCache(candidate);
+                } catch (err) {
+                  accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${err.message ?? err}`);
+                  ledger.recordSkippedCandidate({ market: candidate.market, reason: `prediction_failed: ${String(err.message ?? err).split("\n")[0].slice(0, 200)}`, phase: "prediction" });
+                  return null;
+                }
+              }
+            );
+            groupPredictions.push(...fallback.filter(Boolean));
+          }
+        }
+        const predictions = [...singletonPredictions, ...groupPredictions];
         const validPredictions = predictions.filter(Boolean);
         accumulator.predictions.push(...validPredictions);
         const dynamicFeeParamsMapSim = new Map();
@@ -1844,8 +1953,9 @@ export class Scheduler {
         await this.applyCandidateTriage({ candidateEntries, accumulator });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
         const selected = candidateEntries.filter((item) => item.summary.selected);
-        const predictions = await mapLimit(
-          selected,
+        const { groups: liveGroups, singletons: liveSingletons } = groupCandidatesByEvent(selected);
+        const liveSingletonPredictions = await mapLimit(
+          liveSingletons,
           this.config.monitor.concurrency,
           this.config.monitor.backoffMs,
           async (candidate) => {
@@ -1857,6 +1967,28 @@ export class Scheduler {
             }
           }
         );
+        const liveGroupPredictions = [];
+        for (const [eventGroup, groupCandidates] of liveGroups) {
+          try {
+            const results = await this.predictEventGroup(groupCandidates);
+            liveGroupPredictions.push(...results);
+          } catch (error) {
+            accumulator.errors.push(`event_group_prediction_failed:${eventGroup}:${(error.message ?? String(error)).split("\n")[0].slice(0, 200)}`);
+            const fallback = await mapLimit(
+              groupCandidates,
+              this.config.monitor.concurrency,
+              this.config.monitor.backoffMs,
+              async (candidate) => {
+                try { return await this.predictCandidate(candidate); } catch (err) {
+                  accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${err.message ?? err}`);
+                  return null;
+                }
+              }
+            );
+            liveGroupPredictions.push(...fallback.filter(Boolean));
+          }
+        }
+        const predictions = [...liveSingletonPredictions, ...liveGroupPredictions];
         accumulator.predictions = predictions.filter(Boolean);
         const dynamicFeeParamsMapLive = new Map();
         for (const prediction of accumulator.predictions) {

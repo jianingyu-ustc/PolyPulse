@@ -64,6 +64,104 @@ function counterEvidence(evidence) {
     .slice(0, 5);
 }
 
+function normalizeDistribution(outcomes) {
+  const sum = outcomes.reduce((acc, o) => acc + (Number(o.probability) || 0), 0);
+  const deviation = Math.abs(sum - 1.0);
+  if (deviation > 0.20) {
+    console.warn(`event_group_distribution_deviation: sum=${sum.toFixed(4)}, expected=1.0, deviation=${(deviation * 100).toFixed(1)}%`);
+  }
+  if (sum === 0) {
+    const uniform = 1 / outcomes.length;
+    return { outcomes: outcomes.map((o) => ({ ...o, probability: uniform })), normalizedFromSum: 0 };
+  }
+  return {
+    outcomes: outcomes.map((o) => ({ ...o, probability: o.probability / sum })),
+    normalizedFromSum: sum
+  };
+}
+
+function decomposeGroupEstimate(groupResult, markets, evidenceMap, config, providerName) {
+  const { outcomes: normalizedOutcomes, normalizedFromSum } = normalizeDistribution(groupResult.outcomes);
+  const clampMin = config.calibration?.probabilityClampMin ?? 0.01;
+  const clampMax = config.calibration?.probabilityClampMax ?? 0.99;
+  const generatedAt = new Date().toISOString();
+
+  return markets.map((market) => {
+    const outcomeEntry = normalizedOutcomes.find(
+      (o) => o.market_id === market.marketId || o.market_slug === market.marketSlug
+    );
+    if (!outcomeEntry) {
+      return null;
+    }
+    const aiProbability = clampProbability(outcomeEntry.probability, clampMin, clampMax);
+    const confidence = outcomeEntry.confidence ?? groupResult.distribution_confidence ?? "low";
+    const reasoning = outcomeEntry.reasoning_summary ?? groupResult.distribution_reasoning ?? "Joint estimation — no per-market reasoning.";
+    const keyItems = (outcomeEntry.key_evidence ?? []).slice(0, 5);
+    const counterItems = (outcomeEntry.counter_evidence ?? []).slice(0, 5);
+    const uncertainty = outcomeEntry.uncertainty_factors ?? [];
+    const baseRate = outcomeEntry.base_rate ?? null;
+    const baseRateSource = outcomeEntry.base_rate_source ?? null;
+    const evidenceAdjustment = outcomeEntry.evidence_adjustment ?? null;
+    const deviationJustification = outcomeEntry.deviation_justification ?? null;
+    const freshness = Number(groupResult.freshness_score ?? 0);
+    const evidenceItems = evidenceMap.get(market.marketId) ?? [];
+
+    const estimates = market.outcomes.map((outcome, index) => {
+      const label = outcome.label.toLowerCase();
+      const isNoSide = label === "no" || (index === 1 && label !== "yes");
+      const outcomeAiProbability = isNoSide ? clampProbability(1 - aiProbability, clampMin, clampMax) : aiProbability;
+      const implied = marketProbability(outcome);
+      return {
+        tokenId: outcome.tokenId,
+        label: outcome.label,
+        aiProbability: outcomeAiProbability,
+        marketProbability: implied,
+        confidence,
+        reasoning,
+        evidenceIds: keyItems.map((item) => item.evidenceId)
+      };
+    });
+
+    const estimate = assertSchema("ProbabilityEstimate", {
+      marketId: market.marketId,
+      targetOutcome: "yes",
+      ai_probability: aiProbability,
+      aiProbability,
+      confidence,
+      reasoning_summary: reasoning,
+      reasoningSummary: reasoning,
+      key_evidence: keyItems,
+      keyEvidence: keyItems,
+      counter_evidence: counterItems,
+      counterEvidence: counterItems,
+      uncertainty_factors: [...new Set(uncertainty)],
+      uncertaintyFactors: [...new Set(uncertainty)],
+      freshness_score: Number(freshness.toFixed(4)),
+      freshnessScore: Number(freshness.toFixed(4)),
+      base_rate: baseRate,
+      baseRate: baseRate,
+      base_rate_source: baseRateSource,
+      baseRateSource: baseRateSource,
+      evidence_adjustment: evidenceAdjustment,
+      evidenceAdjustment: evidenceAdjustment,
+      deviation_justification: deviationJustification,
+      deviationJustification: deviationJustification,
+      outcomeEstimates: estimates,
+      diagnostics: {
+        provider: providerName,
+        effectiveProvider: providerName,
+        estimationMode: "event_group_joint",
+        distributionConfidence: groupResult.distribution_confidence ?? null,
+        normalizedFromSum,
+        model: config.ai?.model || providerName,
+        generatedAt,
+        evidenceCount: evidenceItems.length
+      }
+    });
+    return { market, estimate };
+  }).filter(Boolean);
+}
+
 export class ProbabilityEstimator {
   constructor(config = {}) {
     this.config = config;
@@ -151,6 +249,11 @@ export class ProbabilityEstimator {
         promptTemplate: "src/runtime/codex-runtime.js#buildPrompt"
       }
     });
+  }
+
+  async estimateEventGroup({ markets, evidenceMap, upstreamContexts = null }) {
+    const groupResult = await this.provider.estimateGroup({ markets, evidenceMap, upstreamContexts });
+    return decomposeGroupEstimate(groupResult, markets, evidenceMap, this.config, this.providerName);
   }
 }
 

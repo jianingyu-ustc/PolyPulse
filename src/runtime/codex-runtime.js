@@ -614,6 +614,88 @@ export class CodexProbabilityProvider {
     this.config = config;
   }
 
+  async estimateGroup({ markets, evidenceMap, upstreamContexts = null }) {
+    const settings = resolveCodexSkillSettings(this.config);
+    const repoRoot = path.resolve(this.config.repoRoot ?? process.cwd());
+    const riskDocPath = path.resolve(repoRoot, "docs", "specs", "risk-controls.md");
+    const tempDir = await mkdtemp(path.join(tmpdir(), "polypulse-codex-group-"));
+    const outputPath = path.join(tempDir, "provider-output.json");
+    const promptPath = path.join(tempDir, "provider-prompt.txt");
+    const schemaPath = path.join(tempDir, "event-group-estimate.schema.json");
+    const marketsPath = path.join(tempDir, "markets.json");
+    const evidencePath = path.join(tempDir, "evidence-all.json");
+    const timeoutMs = (this.config.providerTimeoutSeconds ?? 0) * 1000;
+    const effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : null;
+    const runtimeStartedAt = Date.now();
+    let preserveTempDir = false;
+
+    try {
+      await writeFile(marketsPath, JSON.stringify(redactSecrets(markets), null, 2), "utf8");
+      const evidenceObj = Object.fromEntries(
+        markets.map((m) => [m.marketId, redactSecrets(evidenceMap.get(m.marketId) ?? [])])
+      );
+      await writeFile(evidencePath, JSON.stringify(evidenceObj, null, 2), "utf8");
+      const prompt = buildEventGroupPrompt({ markets, evidenceMap, settings, riskDocPath, upstreamContexts });
+      const schemaContent = JSON.stringify(buildEventGroupProbabilityEstimateSchema(), null, 2);
+      await writeFile(promptPath, prompt, "utf8");
+      await writeFile(schemaPath, schemaContent, "utf8");
+
+      const promptMetrics = measureText(prompt);
+      const schemaMetrics = measureText(schemaContent);
+
+      await runCodex({
+        prompt,
+        settings,
+        repoRoot,
+        tempDir,
+        outputPath,
+        schemaPath,
+        timeoutMs,
+        maxRetries: this.config.providerMaxRetries
+      });
+
+      const rawOutput = await readFile(outputPath, "utf8");
+      const parsed = extractGroupJsonPayload(rawOutput);
+      if (!this.config.suppressProviderRuntimeArtifacts) {
+        const artifactDir = path.join(this.config.artifactDir, "codex-runtime-group", timestampId());
+        await mkdir(artifactDir, { recursive: true });
+        const logPath = path.join(artifactDir, "runtime-log.md");
+        await writeFile(logPath, truncate([
+          "# Codex Event Group Probability Runtime Log",
+          `Provider: ${settings.provider}`,
+          `Markets: ${markets.length}`,
+          `Prompt: ${formatTextMetrics(promptMetrics)}`,
+          `Schema: ${formatTextMetrics(schemaMetrics)}`,
+          "",
+          "## Raw Provider Output",
+          "```json",
+          rawOutput.trim(),
+          "```"
+        ].join("\n"), this.config.pulse?.maxMarkdownChars ?? 24000), "utf8");
+      }
+      return parsed;
+    } catch (error) {
+      preserveTempDir = true;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message}\n` +
+        `${buildRuntimeHeartbeatDetail({
+          stage: "Event group probability runtime failure",
+          providerDetail: `${settings.provider} provider`,
+          startedAt: runtimeStartedAt,
+          timeoutMs: effectiveTimeoutMs,
+          tempDir,
+          outputPath
+        })}\n\nEvent group probability runtime temp preserved at ${tempDir}`,
+        { cause: error }
+      );
+    } finally {
+      if (!preserveTempDir) {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   async estimate({ market, evidence, upstreamContext = null }) {
     const settings = resolveCodexSkillSettings(this.config);
     const repoRoot = path.resolve(this.config.repoRoot ?? process.cwd());
@@ -711,10 +793,271 @@ export class CodexProbabilityProvider {
   }
 }
 
+function buildEventGroupProbabilityEstimateSchema() {
+  const evidenceProperties = {
+    evidenceId: { type: "string", minLength: 1 },
+    marketId: { type: "string" },
+    title: { type: "string", minLength: 1 },
+    summary: { type: "string" },
+    source: { type: "string" },
+    sourceUrl: { type: "string" },
+    url: { type: "string" },
+    timestamp: { type: "string" },
+    retrievedAt: { type: "string" },
+    relevanceScore: { type: "number" },
+    relevance_score: { type: "number" },
+    credibility: { type: "string" },
+    status: { type: "string" }
+  };
+  const evidenceItemSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: Object.keys(evidenceProperties),
+    properties: evidenceProperties
+  };
+  const outcomeItemSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "market_id", "market_slug", "label", "probability", "confidence",
+      "reasoning_summary", "base_rate", "base_rate_source",
+      "evidence_adjustment", "deviation_justification"
+    ],
+    properties: {
+      market_id: { type: "string", minLength: 1 },
+      market_slug: { type: "string", minLength: 1 },
+      label: { type: "string", minLength: 1 },
+      probability: { type: "number", minimum: 0, maximum: 1 },
+      confidence: { type: "string", enum: ["low", "medium", "high"] },
+      reasoning_summary: { type: "string", minLength: 1 },
+      key_evidence: { type: "array", items: evidenceItemSchema },
+      counter_evidence: { type: "array", items: evidenceItemSchema },
+      uncertainty_factors: { type: "array", items: { type: "string" } },
+      base_rate: { type: "number", minimum: 0, maximum: 1 },
+      base_rate_source: { type: "string" },
+      evidence_adjustment: { type: "number", minimum: -1, maximum: 1 },
+      deviation_justification: { type: "string" }
+    }
+  };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["outcomes", "distribution_confidence", "distribution_reasoning", "freshness_score"],
+    properties: {
+      outcomes: { type: "array", items: outcomeItemSchema },
+      distribution_confidence: { type: "string", enum: ["low", "medium", "high"] },
+      distribution_reasoning: { type: "string", minLength: 1 },
+      freshness_score: { type: "number", minimum: 0, maximum: 1 }
+    }
+  };
+}
+
+function buildEventGroupPrompt({ markets, evidenceMap, settings, riskDocPath, upstreamContexts = null }) {
+  const skillLines = settings.skills.map((skill) => `- ${skill.id}: ${skill.skillFile}`);
+  const localeIsChinese = isChineseLocale(settings.locale);
+  const marketSnapshots = markets.map((market) => ({
+    marketId: market.marketId,
+    marketSlug: market.marketSlug,
+    eventId: market.eventId,
+    eventSlug: market.eventSlug,
+    question: market.question,
+    outcomes: market.outcomes,
+    endDate: market.endDate,
+    liquidityUsd: market.liquidityUsd,
+    volumeUsd: market.volumeUsd,
+    volume24hUsd: market.volume24hUsd,
+    category: market.category,
+    active: market.active
+  }));
+
+  const perMarketEvidence = markets.map((market) => {
+    const items = evidenceMap.get(market.marketId) ?? [];
+    return {
+      marketId: market.marketId,
+      marketSlug: market.marketSlug,
+      question: market.question,
+      evidence: items.map((item) => ({
+        evidenceId: item.evidenceId,
+        source: item.source,
+        title: item.title,
+        sourceUrl: item.sourceUrl ?? item.url,
+        timestamp: item.timestamp ?? item.retrievedAt,
+        relevanceScore: item.relevanceScore,
+        credibility: item.credibility,
+        status: item.status,
+        summary: item.summary
+      }))
+    };
+  });
+
+  if (localeIsChinese) {
+    return [
+      "你是 PolyPulse 的 Polymarket 联合概率估算运行时。",
+      `当前 provider：${settings.provider}`,
+      `当前时间：${nowContext()}`,
+      "必须先阅读这些 skill 文件，再做概率估算：",
+      ...skillLines,
+      "",
+      "必须先阅读这份风险控制文档：",
+      `- ${riskDocPath}`,
+      "",
+      "只允许阅读上面列出的 skill 文件、这份风险文档和下面给出的结构化上下文。",
+      "不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单。",
+      "",
+      `本次估算是一个多选项事件的联合概率分布。以下 ${markets.length} 个子市场属于同一事件，结果互斥——只有一个候选人能获胜。`,
+      "",
+      "事件子市场快照：",
+      JSON.stringify(marketSnapshots),
+      "",
+      "各子市场证据：",
+      JSON.stringify(perMarketEvidence),
+      upstreamContexts ? [
+        "",
+        "上游分析上下文（来自 candidate-triage 和 evidence-research 阶段）：",
+        JSON.stringify(Object.fromEntries(upstreamContexts))
+      ].join("\n") : "",
+      "",
+      "硬规则：",
+      "1. 你正在估算同一事件下 N 个互斥结果的联合概率分布。这些结果是穷尽的——概率之和必须等于 1.0。",
+      "2. 只能输出合法 JSON，不要输出 markdown 代码块。",
+      "3. 不允许编造证据；所有 key_evidence 和 counter_evidence 必须来自输入证据。",
+      "4. 必须区分盘口价格和独立证据；盘口价格只能作为对照基准。",
+      "5. 对每个候选人分别判断 confidence：",
+      "   - high：有多条独立、新鲜（7天内）、高可信度证据，推理链清晰。",
+      "   - medium（默认）：有至少1条14天内的相关证据，或有公开可查数据源。",
+      "   - low：证据为零且无公开数据源、结算规则不清、纯粹依赖内幕信息。",
+      "6. 估算方法（两阶段法，对每个候选人）：",
+      "   阶段一：独立估算",
+      "   - 确定每个候选人的基础概率（base_rate）及来源（base_rate_source）。",
+      "   - 根据证据调整（evidence_adjustment）。",
+      "   - 确保所有候选人的概率之和 = 1.0。如果独立估算后总和不为 1，按比例调整。",
+      "   阶段二：与盘口对比审视",
+      "   - 将联合分布与盘口价格对比。",
+      "   - 对任何偏离盘口超过15pp的候选人，提供 deviation_justification。",
+      "7. probability 是该候选人 Yes outcome 发生的概率，范围 0 到 1。所有 probability 之和必须等于 1.0。",
+      "8. 按 pulse-direct 分工：你只给概率分布和证据质量判断；fee、edge、Kelly 由代码计算。",
+      "9. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。",
+      "",
+      "输出必须匹配联合概率分布 schema：",
+      "- outcomes: [{market_id, market_slug, label, probability, confidence, reasoning_summary, key_evidence, counter_evidence, uncertainty_factors, base_rate, base_rate_source, evidence_adjustment, deviation_justification}]",
+      "- distribution_confidence: low | medium | high（对整体分布的信心）",
+      "- distribution_reasoning: 整体分布推理摘要",
+      "- freshness_score: 证据新鲜度 0-1",
+      "重要约束：outcomes 中所有 probability 之和必须严格等于 1.0。",
+      "只输出最终 JSON。"
+    ].join("\n");
+  }
+
+  return [
+    "You are the JOINT probability estimation runtime for PolyPulse, a Polymarket analysis system.",
+    `Active provider: ${settings.provider}`,
+    `Current time: ${nowContext()}`,
+    "Read these selected skill files before estimating:",
+    ...skillLines,
+    "",
+    "Read this risk control document before estimating:",
+    `- ${riskDocPath}`,
+    "",
+    "Only inspect the listed skill files, this risk document, and the structured context below.",
+    "Do not scan unrelated repository files, do not run tests, do not modify code, and do not place orders.",
+    "",
+    `This estimation covers a MULTI-OUTCOME EVENT. The following ${markets.length} sub-markets belong to the same event with mutually-exclusive outcomes — only one candidate can win.`,
+    "",
+    "Event sub-market snapshots:",
+    JSON.stringify(marketSnapshots),
+    "",
+    "Per-market evidence:",
+    JSON.stringify(perMarketEvidence),
+    upstreamContexts ? [
+      "",
+      "Upstream analysis context (from candidate-triage and evidence-research stages):",
+      JSON.stringify(Object.fromEntries(upstreamContexts))
+    ].join("\n") : "",
+    "",
+    "Hard rules:",
+    "1. You are estimating a JOINT probability distribution across N mutually-exclusive outcomes for the SAME event. These outcomes are exhaustive — probabilities MUST sum to exactly 1.0.",
+    "2. Output valid JSON only. Do not wrap it in markdown fences.",
+    "3. Do not fabricate evidence; key_evidence and counter_evidence must come from the input evidence.",
+    "4. Separate market prices from independent evidence; market prices are a comparison baseline, not supporting evidence.",
+    "5. Per-outcome confidence levels:",
+    "   - high: multiple independent, fresh (within 7 days), high-credibility evidence with clear reasoning chain.",
+    "   - medium (default): at least 1 relevant evidence item within 14 days, or publicly available data sources exist.",
+    "   - low: zero evidence and no public data sources, unclear settlement rules, or purely insider-dependent.",
+    "6. Estimation method (two-phase, applied to each outcome):",
+    "   Phase 1: Independent estimation",
+    "   - Determine base_rate for each candidate (historical frequency, precedent). State base_rate_source.",
+    "   - Adjust based on evidence (evidence_adjustment): positive supports, negative opposes.",
+    "   - CRITICAL: Ensure all probabilities sum to 1.0. If independent estimates don't sum to 1, normalize proportionally.",
+    "   Phase 2: Market comparison review",
+    "   - Compare your joint distribution to current market prices.",
+    "   - For any outcome deviating >15pp from market price, provide deviation_justification with specific evidence.",
+    "   - If deviation >25pp without strong justification, reconsider.",
+    "7. probability is P(Yes) for each candidate, from 0 to 1. ALL probabilities MUST sum to exactly 1.0.",
+    "8. Follow pulse-direct separation of duties: provide probability distribution and evidence-quality judgment only; code computes fees, edge, Kelly, sizing.",
+    "9. Do not output trade instructions, token rewrites, sizing, or broker parameters.",
+    "",
+    "Output must match the EventGroupProbabilityEstimate schema:",
+    "- outcomes: [{market_id, market_slug, label, probability, confidence, reasoning_summary, key_evidence, counter_evidence, uncertainty_factors, base_rate, base_rate_source, evidence_adjustment, deviation_justification}]",
+    "- distribution_confidence: low | medium | high (confidence in the overall distribution)",
+    "- distribution_reasoning: summary of the overall distribution reasoning",
+    "- freshness_score: evidence freshness 0-1",
+    "CRITICAL CONSTRAINT: The sum of all probability values in outcomes MUST equal exactly 1.0.",
+    "Output final JSON only."
+  ].join("\n");
+}
+
+function hasGroupEstimateShape(value) {
+  return Boolean(
+    value
+      && typeof value === "object"
+      && Array.isArray(value.outcomes)
+      && value.outcomes.length > 0
+      && value.outcomes.every((o) => o.probability != null && (o.market_id != null || o.market_slug != null))
+  );
+}
+
+function parseGroupEstimateValue(value) {
+  if (hasGroupEstimateShape(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    for (const key of SUPPORTED_WRAPPER_KEYS) {
+      if (key in value && hasGroupEstimateShape(value[key])) {
+        return value[key];
+      }
+    }
+  }
+  throw new Error("Provider output did not contain a valid EventGroupProbabilityEstimate object.");
+}
+
+function extractGroupJsonPayload(text) {
+  const candidates = [
+    String(text ?? "").trim(),
+    stripCodeFences(text)
+  ];
+  for (const candidate of candidates) {
+    try {
+      return parseGroupEstimateValue(JSON.parse(candidate));
+    } catch {
+      // Try the next parse strategy.
+    }
+  }
+  const value = String(text ?? "");
+  const firstBrace = value.indexOf("{");
+  const lastBrace = value.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return parseGroupEstimateValue(JSON.parse(value.slice(firstBrace, lastBrace + 1)));
+  }
+  throw new Error("Provider output did not contain a valid EventGroupProbabilityEstimate JSON payload.");
+}
+
 export const codexRuntimeInternals = {
   buildProbabilityEstimateSchema,
   buildPrompt,
   extractJsonPayload,
   normalizeSourceUrl,
-  runCodex
+  runCodex,
+  buildEventGroupProbabilityEstimateSchema,
+  buildEventGroupPrompt,
+  extractGroupJsonPayload
 };
