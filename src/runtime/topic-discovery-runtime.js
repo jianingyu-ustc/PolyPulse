@@ -177,6 +177,14 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
       "4. 优先推荐有明确、可验证外部信号的话题（如赛程、日历事件、已公布数据）。",
       "5. 避免推荐太随机或纯粹依赖内幕信息的话题。",
       "",
+      "示例输出（仅展示格式和质量标准）：",
+      JSON.stringify({
+        discovered_topics: [
+          { topic: "六月 FOMC 会议利率决议及降息时点重新定价", category: "economics", signal_source: "macro_calendar", rationale: "最新通胀数据可能导致市场重新评估首次降息时间，Polymarket 利率市场可能存在定价偏差", search_terms: ["fed rate decision", "FOMC June 2026", "rate cut", "interest rate hold"], urgency: "high", confidence: "medium" },
+          { topic: "霍尔木兹海峡航运正常化或美伊缓和信号", category: "geopolitics", signal_source: "news", rationale: "近期外交动向暗示地缘紧张可能缓和，但市场可能仍在定价高风险溢价", search_terms: ["Hormuz strait", "US Iran deal", "shipping normalization", "de-escalation"], urgency: "medium", confidence: "medium" }
+        ]
+      }),
+      "",
       "只输出最终 JSON。"
     ].filter(Boolean).join("\n");
   }
@@ -218,6 +226,14 @@ function buildPrompt({ settings, currentCategories, currentMarketCount, recentTo
     "3. Do not fabricate facts; only recommend topics where you have reasonable basis to believe edge exists.",
     "4. Prefer topics with clear, verifiable external signals (schedules, calendar events, published data).",
     "5. Avoid topics that are too random or depend on insider information.",
+    "",
+    "Example output (showing format and quality standard only):",
+    JSON.stringify({
+      discovered_topics: [
+        { topic: "June FOMC rate decision and repricing of first 2026 rate cut", category: "economics", signal_source: "macro_calendar", rationale: "Latest inflation data may cause market to reassess first rate cut timing; Polymarket rate markets may have pricing gaps", search_terms: ["fed rate decision", "FOMC June 2026", "rate cut", "interest rate hold"], urgency: "high", confidence: "medium" },
+        { topic: "Strait of Hormuz shipping normalization or US-Iran de-escalation signal", category: "geopolitics", signal_source: "news", rationale: "Recent diplomatic moves suggest possible de-escalation but market may still price high risk premium", search_terms: ["Hormuz strait", "US Iran deal", "shipping normalization", "de-escalation"], urgency: "medium", confidence: "medium" }
+      ]
+    }),
     "",
     "Output final JSON only."
   ].filter(Boolean).join("\n");

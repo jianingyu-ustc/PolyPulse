@@ -349,6 +349,22 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
       "- base_rate_source: base_rate 的来源（如历史统计、先例）",
       "- evidence_adjustment (-1 到 1): 证据对 base_rate 的调整量",
       "- deviation_justification: 当估算偏离盘口>15pp 时的解释（可选）",
+      "",
+      "示例输出（仅展示格式和质量标准）：",
+      JSON.stringify({
+        ai_probability: 0.32,
+        confidence: "medium",
+        reasoning_summary: "PSD 是议会第一大党（30% 议席），虽退出前联盟但仍拥有最大党团。基于议会算术和宪政流程，总统倾向提名能获得多数支持的候选人，PSD 通过与 AUR 合作具备组阁可能性。盘口 22% 低估了 PSD 的议会优势和联盟灵活性。",
+        key_evidence: [{ evidenceId: "ev-001", title: "PSD exits coalition, allies with AUR on no-confidence motion", source: "reuters", relevanceScore: 0.92, credibility: "high", status: "fetched", summary: "PSD withdrew from Bolojan coalition and partnered with AUR to pass no-confidence vote on May 5" }],
+        counter_evidence: [{ evidenceId: "ev-003", title: "President signals preference for technocratic PM", source: "romania-insider", relevanceScore: 0.75, credibility: "medium", status: "fetched", summary: "President Nicușor Dan indicated openness to non-partisan cabinet amid coalition fragmentation" }],
+        uncertainty_factors: ["coalition_negotiations_ongoing", "president_discretion_in_nomination"],
+        freshness_score: 0.85,
+        base_rate: 0.25,
+        base_rate_source: "PSD 历史上在类似政治危机后获得总理职位的频率约 25%（2000 年以来 4 次危机中 1 次）",
+        evidence_adjustment: 0.07,
+        deviation_justification: "盘口 22% 未充分反映 PSD 退出联盟后与 AUR 组成的议会多数优势（合计超 50% 议席），以及总统宪法义务优先提名多数支持候选人的约束"
+      }),
+      "",
       "只输出最终 JSON。"
     ].join("\n");
   }
@@ -428,6 +444,22 @@ function buildPrompt({ market, evidence, settings, riskDocPath, marketPath, evid
     "- base_rate_source: where the base rate comes from (e.g. historical statistics, precedent)",
     "- evidence_adjustment (-1 to 1): how much evidence shifts probability from base rate",
     "- deviation_justification: explanation when your estimate deviates >15pp from market price (optional)",
+    "",
+    "Example output (showing format and quality standard only):",
+    JSON.stringify({
+      ai_probability: 0.32,
+      confidence: "medium",
+      reasoning_summary: "PSD is the largest parliamentary party (30% of seats). Despite exiting the prior coalition, they retain the largest caucus. Based on parliamentary arithmetic and constitutional procedure, the president tends to nominate candidates who can command a majority; PSD's alliance with AUR gives them a plausible path to government formation. Market at 22% underestimates PSD's parliamentary leverage and coalition flexibility.",
+      key_evidence: [{ evidenceId: "ev-001", title: "PSD exits coalition, allies with AUR on no-confidence motion", source: "reuters", relevanceScore: 0.92, credibility: "high", status: "fetched", summary: "PSD withdrew from Bolojan coalition and partnered with AUR to pass no-confidence vote on May 5" }],
+      counter_evidence: [{ evidenceId: "ev-003", title: "President signals preference for technocratic PM", source: "romania-insider", relevanceScore: 0.75, credibility: "medium", status: "fetched", summary: "President indicated openness to non-partisan cabinet amid coalition fragmentation" }],
+      uncertainty_factors: ["coalition_negotiations_ongoing", "president_discretion_in_nomination"],
+      freshness_score: 0.85,
+      base_rate: 0.25,
+      base_rate_source: "PSD historically became PM in ~25% of similar political crises (1 of 4 since 2000)",
+      evidence_adjustment: 0.07,
+      deviation_justification: "Market at 22% does not fully reflect PSD+AUR combined parliamentary majority (>50% of seats) and constitutional obligation for president to first nominate a candidate with majority support"
+    }),
+    "",
     "Output final JSON only."
   ].join("\n");
 }
@@ -944,6 +976,19 @@ function buildEventGroupPrompt({ markets, evidenceMap, settings, riskDocPath, up
       "- distribution_reasoning: 整体分布推理摘要",
       "- freshness_score: 证据新鲜度 0-1",
       "重要约束：outcomes 中所有 probability 之和必须严格等于 1.0。",
+      "",
+      "示例输出（3 个候选人的联合分布，概率之和 = 1.0）：",
+      JSON.stringify({
+        outcomes: [
+          { market_id: "m-001", market_slug: "candidate-a-wins", label: "Candidate A", probability: 0.45, confidence: "medium", reasoning_summary: "议会第一大党，联盟谈判中占主动", key_evidence: [], counter_evidence: [], uncertainty_factors: ["coalition_fluid"], base_rate: 0.40, base_rate_source: "最大党在类似危机中组阁成功率约40%", evidence_adjustment: 0.05, deviation_justification: "" },
+          { market_id: "m-002", market_slug: "candidate-b-wins", label: "Candidate B", probability: 0.35, confidence: "medium", reasoning_summary: "第二大党，可通过跨阵营联盟获得多数", key_evidence: [], counter_evidence: [], uncertainty_factors: ["coalition_fluid"], base_rate: 0.30, base_rate_source: "第二大党在联合政府中获总理职位的历史频率", evidence_adjustment: 0.05, deviation_justification: "" },
+          { market_id: "m-003", market_slug: "candidate-c-wins", label: "Candidate C", probability: 0.20, confidence: "low", reasoning_summary: "技术官僚候选人，总统偏好但需跨党派支持", key_evidence: [], counter_evidence: [], uncertainty_factors: ["no_party_base", "president_discretion"], base_rate: 0.15, base_rate_source: "无党派技术官僚在议会制国家获任命的基础概率", evidence_adjustment: 0.05, deviation_justification: "" }
+        ],
+        distribution_confidence: "medium",
+        distribution_reasoning: "基于议会席位分布、联盟谈判信号和总统宪法权力的综合判断；三人概率之和为 1.0",
+        freshness_score: 0.80
+      }),
+      "",
       "只输出最终 JSON。"
     ].join("\n");
   }
@@ -1002,6 +1047,19 @@ function buildEventGroupPrompt({ markets, evidenceMap, settings, riskDocPath, up
     "- distribution_reasoning: summary of the overall distribution reasoning",
     "- freshness_score: evidence freshness 0-1",
     "CRITICAL CONSTRAINT: The sum of all probability values in outcomes MUST equal exactly 1.0.",
+    "",
+    "Example output (3-candidate joint distribution, probabilities sum to 1.0):",
+    JSON.stringify({
+      outcomes: [
+        { market_id: "m-001", market_slug: "candidate-a-wins", label: "Candidate A", probability: 0.45, confidence: "medium", reasoning_summary: "Largest parliamentary party with active coalition leverage", key_evidence: [], counter_evidence: [], uncertainty_factors: ["coalition_fluid"], base_rate: 0.40, base_rate_source: "Largest party succeeded in forming government in ~40% of similar crises", evidence_adjustment: 0.05, deviation_justification: "" },
+        { market_id: "m-002", market_slug: "candidate-b-wins", label: "Candidate B", probability: 0.35, confidence: "medium", reasoning_summary: "Second-largest party, can form cross-bloc alliance for majority", key_evidence: [], counter_evidence: [], uncertainty_factors: ["coalition_fluid"], base_rate: 0.30, base_rate_source: "Historical rate of second-largest party securing PM in coalition governments", evidence_adjustment: 0.05, deviation_justification: "" },
+        { market_id: "m-003", market_slug: "candidate-c-wins", label: "Candidate C", probability: 0.20, confidence: "low", reasoning_summary: "Technocratic candidate preferred by president but lacks party base", key_evidence: [], counter_evidence: [], uncertainty_factors: ["no_party_base", "president_discretion"], base_rate: 0.15, base_rate_source: "Base rate for non-partisan technocrats receiving PM appointment in parliamentary systems", evidence_adjustment: 0.05, deviation_justification: "" }
+      ],
+      distribution_confidence: "medium",
+      distribution_reasoning: "Joint assessment based on parliamentary seat distribution, coalition signals, and presidential constitutional authority; probabilities sum to 1.0",
+      freshness_score: 0.80
+    }),
+    "",
     "Output final JSON only."
   ].join("\n");
 }

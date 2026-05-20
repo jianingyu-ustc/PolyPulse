@@ -273,6 +273,19 @@ function buildPrompt({ market, evidence, triage, settings, riskDocPath, marketPa
       "- key_findings: 现有证据中最相关的关键发现列表",
       "- directed_searches: 定向搜索列表，每项含 query, category, rationale, priority",
       "",
+      "示例输出（仅展示格式和质量标准）：",
+      JSON.stringify({
+        research_strategy: "聚焦议会算术和联盟谈判信号，寻找最新政党声明和组阁进展",
+        evidence_assessment: "已有证据覆盖了政治背景但缺少最新的联盟谈判动态，时效性中等",
+        evidence_sufficiency: "needs_more",
+        key_findings: ["PSD 退出执政联盟后与 AUR 合作推翻了前政府", "总统已开始与议会各党协商新总理人选"],
+        directed_searches: [
+          { query: "Romania prime minister appointment May 2026", category: "news", rationale: "确认最新的组阁进展和总统提名动向", priority: 1 },
+          { query: "PSD PNL coalition negotiation Romania 2026", category: "news", rationale: "了解主要政党间的联盟谈判状态", priority: 2 },
+          { query: "Romania parliament confidence vote schedule", category: "official", rationale: "确认议会信任投票的时间表约束", priority: 3 }
+        ]
+      }),
+      "",
       "只输出最终 JSON。"
     ].join("\n");
   }
@@ -325,6 +338,19 @@ function buildPrompt({ market, evidence, triage, settings, riskDocPath, marketPa
     "- evidence_sufficiency: sufficient | needs_more | critical_gap",
     "- key_findings: List of most relevant findings from existing evidence",
     "- directed_searches: Directed search list, each with query, category, rationale, priority",
+    "",
+    "Example output (showing format and quality standard only):",
+    JSON.stringify({
+      research_strategy: "Focus on parliamentary arithmetic and coalition signals; look for latest party statements and government formation progress",
+      evidence_assessment: "Existing evidence covers political background but lacks recent coalition negotiation dynamics; timeliness is moderate",
+      evidence_sufficiency: "needs_more",
+      key_findings: ["Ruling party withdrew from coalition and partnered with opposition to topple previous government", "President has begun formal consultations with parliamentary parties on new PM"],
+      directed_searches: [
+        { query: "Romania prime minister appointment May 2026", category: "news", rationale: "Confirm latest government formation progress and presidential nomination moves", priority: 1 },
+        { query: "PSD PNL coalition negotiation Romania 2026", category: "news", rationale: "Understand current state of coalition talks between major parties", priority: 2 },
+        { query: "Romania parliament confidence vote schedule", category: "official", rationale: "Confirm timeline constraints for parliamentary confidence vote", priority: 3 }
+      ]
+    }),
     "",
     "Output final JSON only."
   ].join("\n");

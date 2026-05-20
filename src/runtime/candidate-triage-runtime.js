@@ -260,6 +260,17 @@ function buildPrompt({ candidates, context, settings, riskDocPath, candidatesPat
       "- candidate_assessments",
       "- clusters",
       "- research_gaps",
+      "",
+      "示例输出（仅展示格式和质量标准）：",
+      JSON.stringify({
+        candidate_assessments: [
+          { marketId: "123456", marketSlug: "will-candidate-a-win-primary", recommended_action: "prioritize", priority_score: 0.82, researchability: "high", information_advantage: "medium", cluster: "us-primary-elections", rationale: "地方初选信息分散且覆盖不均，可通过筹款、背书和地方网络做信息综合", evidence_gaps: ["candidate filing status", "fundraising disclosures", "endorsements from major in-state actors"] },
+          { marketId: "789012", marketSlug: "will-crypto-hit-x-price", recommended_action: "reject", priority_score: 0.12, researchability: "low", information_advantage: "low", cluster: "crypto-price-targets", rationale: "短期价格触达纯粹是路径问题，缺乏可重复的信息优势", evidence_gaps: [] }
+        ],
+        clusters: [{ name: "us-primary-elections", marketIds: ["123456"], rationale: "地方选举初选市场，信息覆盖不均匀" }],
+        research_gaps: ["candidate filing status", "fundraising disclosures", "endorsements from major in-state actors"]
+      }),
+      "",
       "只输出最终 JSON。"
     ].join("\n");
   }
@@ -304,6 +315,17 @@ function buildPrompt({ candidates, context, settings, riskDocPath, candidatesPat
     "- candidate_assessments",
     "- clusters",
     "- research_gaps",
+    "",
+    "Example output (showing format and quality standard only):",
+    JSON.stringify({
+      candidate_assessments: [
+        { marketId: "123456", marketSlug: "will-candidate-a-win-primary", recommended_action: "prioritize", priority_score: 0.82, researchability: "high", information_advantage: "medium", cluster: "us-primary-elections", rationale: "Local primary information is fragmented; fundraising, endorsements, and local networks can be synthesized for edge", evidence_gaps: ["candidate filing status", "fundraising disclosures", "endorsements from major in-state actors"] },
+        { marketId: "789012", marketSlug: "will-crypto-hit-x-price", recommended_action: "reject", priority_score: 0.12, researchability: "low", information_advantage: "low", cluster: "crypto-price-targets", rationale: "Short-term price target is purely a path problem with no repeatable information advantage", evidence_gaps: [] }
+      ],
+      clusters: [{ name: "us-primary-elections", marketIds: ["123456"], rationale: "Local election primaries with uneven information coverage" }],
+      research_gaps: ["candidate filing status", "fundraising disclosures", "endorsements from major in-state actors"]
+    }),
+    "",
     "Output final JSON only."
   ].join("\n");
 }

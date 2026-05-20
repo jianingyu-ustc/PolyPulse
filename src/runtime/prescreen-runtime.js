@@ -98,6 +98,12 @@ function buildPreScreenPrompt({ candidates, settings }) {
       "或",
       "SKIP|market_slug|一句话原因",
       "",
+      "示例输出：",
+      "TRADE|will-the-next-pm-of-country-x-be-from-party-a|组阁题可通过议会算术、联盟谈判和宪政流程推演产生认知优势",
+      "SKIP|will-btc-dip-to-50k-may-2026|短期触价事件本质上是高波动路径问题，缺乏可重复的信息优势",
+      "TRADE|dota2-team-a-vs-team-b-2026-05-21|电竞 BO3 可结合队伍近期状态、对位和地图池做出比市场更细的判断",
+      "SKIP|nba-team-x-team-y-spread-10pt5|NBA 让分盘是最成熟市场之一，临场信息也会被迅速消化",
+      "",
       "候选市场：",
       ...candidateLines
     ].join("\n");
@@ -112,6 +118,12 @@ function buildPreScreenPrompt({ candidates, settings }) {
     "TRADE|market_slug|one-line reason",
     "or",
     "SKIP|market_slug|one-line reason",
+    "",
+    "Example output:",
+    "TRADE|will-the-next-pm-of-country-x-be-from-party-a|Coalition arithmetic and constitutional procedure analysis can produce edge over market",
+    "SKIP|will-btc-dip-to-50k-may-2026|Short-term price-path event driven by volatility, no repeatable information advantage",
+    "TRADE|dota2-team-a-vs-team-b-2026-05-21|Esports BO3 allows finer judgment via recent team form, head-to-head, and map pool analysis",
+    "SKIP|nba-team-x-team-y-spread-10pt5|NBA spread is among the most efficiently priced markets, in-game info absorbed rapidly",
     "",
     "Candidates:",
     ...candidateLines

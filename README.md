@@ -109,8 +109,8 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~概率估算 prompt 增加显式 base rate 推理步骤~~：已实现。prompt 要求 AI 输出 `base_rate`（0-1，历史/结构性先验）、`base_rate_source`（来源说明）、`evidence_adjustment`（-1 到 1，证据调整量），`ai_probability` 应逻辑上约等于 base_rate + evidence_adjustment。JSON Schema 和 ProbabilityEstimator 已扩展支持这些字段（可选，向后兼容）。
 - [x] ~~跨 Runtime 上下文传递~~：已实现。scheduler 在 `runEvidenceResearch()` 中保存 `ai_research`（`key_findings`、`evidence_sufficiency`、`evidence_assessment`）到 candidate.summary，与已有的 `ai_triage`（`rationale`、`information_advantage`、`researchability`）一起组装为 `upstreamContext`，注入概率估算 prompt。`ProbabilityEstimator` → `CodexProbabilityProvider`/`ClaudeProbabilityProvider` → `buildPrompt()` 全链路透传，概率估算 AI 可直接利用上游 triage 和 research 阶段的分析结论，消除信息断层。
 - [x] ~~所有 AI runtime prompt 注入当前日期和时间上下文~~：已实现。5 个 AI runtime（概率估算、预筛、候选 triage、证据研究、话题发现）均在 prompt 开头注入 `当前时间：YYYY-MM-DD HH:MM:SS UTC`，AI 可据此判断证据新鲜度、到期紧迫性和时效性事件。Topic Discovery 额外通过 DuckDuckGo 抓取最近 24h 新闻标题（最多 20 条，8s 超时，失败不阻断），注入 prompt 供 AI 发现时效性话题。
-- [ ] 每个 AI runtime 增加 1-2 个 few-shot golden example：当前所有 prompt 只有规则描述无输出示例，AI 对格式和质量标准的理解全靠指令遵循；增加高质量示例（从历史 runtime-artifacts 中挑选成功预测的真实输出）可显著提升输出一致性和推理深度。
-- [ ] 多选项市场（Multi-Outcome）联合建模改进：
+- [x] ~~每个 AI runtime 增加 1-2 个 few-shot golden example~~：已实现。6 个 AI runtime prompt（prescreen、candidate-triage、evidence-research、单市场概率估算、事件组联合概率估算、topic-discovery）均在指令末尾注入 1 个高质量输出示例，示例基于真实成功预测的输出格式，双语（zh/en）各一份。示例展示格式规范、推理深度标准和字段质量要求，显著提升输出一致性。
+- [x] 多选项市场（Multi-Outcome）联合建模改进：
 
   **背景**：在 Polymarket 上，多选项话题（如 "SC Governor Republican Primary Winner"）的每个候选人都是一个独立的二元子市场（"Will Ralph Norman win?" Yes/No），所有子市场共享同一个 `eventId`。当前系统对每个子市场独立评估，存在以下核心缺陷：
 
@@ -265,9 +265,14 @@ approvedUsd = min(
 `buildCandidates()` 对每个扫描到的市场执行两项去重检查，确保不会对同一话题重复开仓：
 
 1. **`tradedByMonitor`** — 检查 `monitorState.tradedMarkets`，即本轮 monitor 生命周期内已经交易过的市场。命中时标记 `already_traded_market_or_event`，跳过。
-2. **`heldInPortfolio`** — 检查当前组合中是否已持有同 `marketId`、`marketSlug`、`eventId` 或 `eventSlug` 的仓位。命中时标记 `existing_position_market_or_event`，跳过。
+2. **`heldInPortfolio`** — 检查当前组合中是否已持有相同市场的仓位。命中时标记 `existing_position_market_or_event`，跳过。
 
-匹配粒度是 **event 级别**：同一事件下的不同子市场（outcome token）也会被跳过（通过 `eventId`/`eventSlug` 匹配）。被标记的候选 `selected: false`，不进入后续 prescreen、triage、prediction 和下单流程。
+**匹配粒度区分 negRisk 市场**（Phase 5 改进）：
+
+- **非 negRisk 市场**：匹配 `marketId`、`marketSlug`、`eventId` 或 `eventSlug` 任一命中即跳过（event 级别去重）。
+- **negRisk 市场**（多选项事件）：仅匹配 `marketId` 或 `marketSlug`，**不按 `eventId`/`eventSlug` 去重**。同一事件的不同子市场可以同时进入候选池和下单流程，由 `RiskEngine` 的 `maxEventExposurePct` 事件级敞口约束和互斥方向成本上限替代硬去重。
+
+这允许在同一多选项事件内同时持有多个正 EV 头寸（如同时买入最被低估的候选人 Yes + 做空最被高估的候选人），只要总事件敞口不超过限额。
 
 ### 一次性验收 vs 持续 Monitor
 
@@ -527,7 +532,7 @@ header 字段含义：
 
 ### Codex live runtime 提示词
 
-执行一次完整 `monitor run` pipeline，AI provider 会被调用 **5 类提示词**（每类对应一个 runtime）：
+执行一次完整 `monitor run` pipeline，AI provider 会被调用 **6 类提示词**（每类对应一个 runtime）：
 
 | 序号 | Runtime | 提示词用途 | 调用次数/轮 |
 | --- | --- | --- | --- |
@@ -535,12 +540,13 @@ header 字段含义：
 | 2 | `prescreen-runtime.js` | AI pre-screen：对候选池做 TRADE/SKIP 信息优势预判（含结算规则摘要） | 1 次（批量） |
 | 3 | `candidate-triage-runtime.js` | AI candidate triage：语义聚类、可研究性、证据缺口 | 1 次（批量） |
 | 4 | `evidence-research-runtime.js` | AI 证据研究：评估证据充分性、指导定向搜索 | N 次（每个选中候选 1 次） |
-| 5 | `codex-runtime.js` | AI 概率估算：估算事件发生概率 | N 次（每个选中候选 1 次） |
+| 5 | `codex-runtime.js`（单市场） | AI 概率估算：估算单个市场事件发生概率 | N 次（每个非事件组候选 1 次） |
+| 6 | `codex-runtime.js`（事件组联合） | AI 联合概率估算：对同一 negRisk 事件的 ≥2 个兄弟子市场输出联合概率分布（概率之和=1） | M 次（每个事件组 1 次） |
 
 `predict` 和 `trade once` 只调用第 4、5 步（单市场：证据研究 + 概率估算 = 2 次 AI 调用）。
 
-每个 runtime 文件顶部的 JSDoc 注释包含完整的中文提示词模板示例。具体参见对应文件。
-所有 prompt 由各 runtime 的 `buildPrompt()` 函数动态生成，支持 `CODEX_SKILL_LOCALE=zh|en` 双语切换。实际命令形态：
+所有 6 个 runtime 的 prompt 均包含 few-shot golden example（高质量输出示例），展示格式规范、推理深度和字段质量标准，双语（zh/en）各一份。
+每个 runtime 文件的 `buildPrompt()` 函数动态生成 prompt，支持 `CODEX_SKILL_LOCALE=zh|en` 双语切换。实际命令形态：
 
 ```bash
 codex exec \
