@@ -216,7 +216,11 @@ function buildProbabilityEstimateSchema() {
       "key_evidence",
       "counter_evidence",
       "uncertainty_factors",
-      "freshness_score"
+      "freshness_score",
+      "base_rate",
+      "base_rate_source",
+      "evidence_adjustment",
+      "deviation_justification"
     ],
     properties: {
       ai_probability: { type: "number", minimum: 0, maximum: 1 },

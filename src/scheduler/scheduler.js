@@ -1555,10 +1555,12 @@ export class Scheduler {
             try {
               return await this.predictCandidateNoCache(candidate);
             } catch (error) {
-              accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${error instanceof Error ? error.message : String(error)}`);
+              const fullMsg = error instanceof Error ? error.message : String(error);
+              accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${fullMsg}`);
+              const firstLine = fullMsg.split("\n")[0].slice(0, 200);
               ledger.recordSkippedCandidate({
                 market: candidate.market,
-                reason: `prediction_failed: ${error instanceof Error ? error.message : String(error)}`,
+                reason: `prediction_failed: ${firstLine}`,
                 phase: "prediction"
               });
               return null;
