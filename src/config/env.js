@@ -159,6 +159,14 @@ export const DEFAULTS = {
   PULSE_MIN_NET_EDGE: null,
   // 低置信度时的最低 netEdge 要求 (0-1)。confidence=low 时取 max(minNetEdge, 此值)。
   PULSE_LOW_CONFIDENCE_MIN_EDGE: null,
+  // Uninformed prior 检测阈值：aiProb 距 0.5 多近算"near half" (0-0.2)。
+  PULSE_UNINFORMED_PRIOR_THRESHOLD: null,
+  // 套利执行开关。设为 false 禁用自动套利执行。
+  ARBITRAGE_ENABLED: null,
+  // 套利最低利润率 (0-1)。低于此值不执行。
+  ARBITRAGE_MIN_PROFIT: null,
+  // 单个套利子腿最大下单金额 (USD)。
+  ARBITRAGE_MAX_TRADE_USD: null,
   // 校准后概率下限 (0-0.5)。防止极端概率被 clamp 到不合理的值。
   PULSE_PROBABILITY_CLAMP_MIN: null,
   // 校准后概率上限 (0.5-1)。
@@ -491,7 +499,13 @@ export async function loadEnvConfig(options = {}) {
       fetchDimensions: parseList(values.PULSE_FETCH_DIMENSIONS),
       requireEvidenceGuard: String(values.PULSE_REQUIRE_EVIDENCE_GUARD ?? "false").toLowerCase() === "true",
       minNetEdge: Math.max(0, readNumber(values, "PULSE_MIN_NET_EDGE", 0.02)),
-      lowConfidenceMinEdge: Math.max(0, readNumber(values, "PULSE_LOW_CONFIDENCE_MIN_EDGE", 0.05))
+      lowConfidenceMinEdge: Math.max(0, readNumber(values, "PULSE_LOW_CONFIDENCE_MIN_EDGE", 0.05)),
+      uninformedPriorThreshold: Math.max(0, Math.min(0.2, readNumber(values, "PULSE_UNINFORMED_PRIOR_THRESHOLD", 0.05)))
+    },
+    arbitrage: {
+      enabled: String(values.ARBITRAGE_ENABLED ?? "true").toLowerCase() !== "false",
+      minProfit: Math.max(0, readNumber(values, "ARBITRAGE_MIN_PROFIT", 0.05)),
+      maxTradeUsd: Math.max(0, readNumber(values, "ARBITRAGE_MAX_TRADE_USD", 5))
     },
     monitor: {
       intervalSeconds: Math.max(1, Math.floor(readNumber(values, "MONITOR_INTERVAL_SECONDS", 7200))),

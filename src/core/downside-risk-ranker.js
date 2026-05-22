@@ -39,6 +39,19 @@ function eventKey(market) {
   return market?.eventId ?? market?.eventSlug ?? market?.marketId ?? "unknown";
 }
 
+const CATEGORY_PRIORITY_MAP = {
+  politics: 1.3,
+  geopolitics: 1.3,
+  economics: 1.2,
+  weather: 1.1,
+  tech: 1.0,
+  finance: 1.0,
+  culture: 1.0,
+  crypto: 0.9,
+  sports: 0.7,
+  mentions: 0.6
+};
+
 /**
  * Compute downside risk score for a single opportunity.
  * Higher score = more risky downside.
@@ -167,7 +180,8 @@ function computeRiskAdjustedScore({
   quarterKellyPct = 0,
   confidence,
   downsideScore,
-  allocationPenalty
+  allocationPenalty,
+  categoryPriorityMultiplier = 1.0
 }) {
   // Upside components (normalized to 0-1 range)
   const returnScore = clamp(monthlyReturn / 0.5, 0, 1); // 50% monthly = max
@@ -183,9 +197,9 @@ function computeRiskAdjustedScore({
     4
   );
 
-  // Risk-adjusted = upside * (1 - downside) * (1 - allocation_penalty)
+  // Risk-adjusted = upside * (1 - downside) * (1 - allocation_penalty) * category_priority
   const riskAdjusted = round(
-    upsideComposite * (1 - downsideScore * 0.7) * (1 - allocationPenalty * 0.5),
+    upsideComposite * (1 - downsideScore * 0.7) * (1 - allocationPenalty * 0.5) * categoryPriorityMultiplier,
     4
   );
 
@@ -193,7 +207,8 @@ function computeRiskAdjustedScore({
     riskAdjustedScore: riskAdjusted,
     upsideScore: upsideComposite,
     downsideDiscount: round(downsideScore * 0.7, 4),
-    allocationDiscount: round(allocationPenalty * 0.5, 4)
+    allocationDiscount: round(allocationPenalty * 0.5, 4),
+    categoryPriorityMultiplier
   };
 }
 
@@ -238,14 +253,22 @@ export class DownsideRiskRanker {
         totalEquityUsd
       });
 
-      // Risk-adjusted score
+      // Risk-adjusted score with category priority
+      const cat = categoryOf(market);
+      const daysLeft = analysis.daysToResolution ?? 30;
+      let categoryPriorityMultiplier = CATEGORY_PRIORITY_MAP[cat] ?? 0.8;
+      if (cat === "sports" && daysLeft < 3) {
+        categoryPriorityMultiplier *= 0.5;
+      }
+
       const riskAdjusted = computeRiskAdjustedScore({
         monthlyReturn: analysis.monthlyReturn ?? 0,
         netEdge: analysis.netEdge ?? 0,
         quarterKellyPct: analysis.quarterKellyPct ?? 0,
         confidence: analysis.confidence,
         downsideScore: downside.score,
-        allocationPenalty: allocation.penalty
+        allocationPenalty: allocation.penalty,
+        categoryPriorityMultiplier
       });
 
       return {
@@ -273,5 +296,6 @@ export const downsideRiskInternals = {
   computeAllocationPenalty,
   computeRiskAdjustedScore,
   categoryOf,
-  eventKey
+  eventKey,
+  CATEGORY_PRIORITY_MAP
 };

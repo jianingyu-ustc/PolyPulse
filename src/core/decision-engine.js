@@ -1,5 +1,6 @@
 import { assertSchema } from "../domain/schemas.js";
 import { buildPulseTradePlan, isPulseDirectStrategy, calculateMultiArmKelly } from "./pulse-strategy.js";
+import { detectUninformedPrior } from "./uninformed-prior-detector.js";
 
 const FEE_ALLOWANCE = 0.005;
 const SLIPPAGE_ALLOWANCE = 0.005;
@@ -76,7 +77,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   const insufficientEvidence = estimate.confidence === "low"
     || (estimate.uncertainty_factors ?? []).includes("insufficient_evidence")
     || (estimate.freshness_score ?? 0) < 0.4;
-  const isUninformedPrior = estimate.confidence === "low" && Math.abs(aiProbability - 0.5) <= 0.02;
+  const { isUninformed: isUninformedPrior } = detectUninformedPrior(estimate, { aiProbability });
   const noTradeReason = isUninformedPrior
     ? "uninformed_prior"
     : insufficientEvidence
@@ -140,7 +141,10 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
   });
   const notional = plan.suggestedNotionalUsd;
   const expectedValue = round(plan.netEdge * notional, 4);
-  const noTradeReason = plan.action === "open" ? null : (plan.skipReason ?? "quarter_kelly_not_positive");
+  const { isUninformed: pulseUninformedPrior } = detectUninformedPrior(estimate, { aiProbability });
+  const noTradeReason = pulseUninformedPrior
+    ? "uninformed_prior"
+    : plan.action === "open" ? null : (plan.skipReason ?? "quarter_kelly_not_positive");
 
   return assertSchema("TradeCandidate", {
     marketId: market.marketId,

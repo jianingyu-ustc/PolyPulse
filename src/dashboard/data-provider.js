@@ -84,6 +84,7 @@ function formatClosedTrade(trade) {
     closeReason: trade.closeReason ?? "",
     aiProbability: trade.lastDecision?.aiProbability ?? null,
     marketProbability: trade.lastDecision?.marketProbability ?? null,
+    exitMarketProb: trade.currentPrice ?? null,
     edge: trade.lastDecision?.edge ?? trade.lastDecision?.grossEdge ?? null,
     netEdge: trade.lastDecision?.netEdge ?? null,
     feeImpact: trade.lastDecision?.edge != null && trade.lastDecision?.netEdge != null

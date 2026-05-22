@@ -1,3 +1,5 @@
+import { detectUninformedPrior } from "./uninformed-prior-detector.js";
+
 /**
  * ProbabilityCalibrationLayer
  *
@@ -37,6 +39,7 @@ const DEFAULT_CALIBRATION_CONFIG = {
   unjustifiedModerateDeviationShrinkage: 0.15,
   deviationLargeThreshold: 0.25,
   deviationModerateThreshold: 0.15,
+  uninformedPriorShrinkage: 0.5,
   // Thresholds
   lowLiquidityThresholdUsd: 10000,
   sparseEvidenceThreshold: 2,
@@ -85,7 +88,8 @@ export class ProbabilityCalibrationLayer {
     evidence = [],
     triageAssessment = null,
     prescreenResult = null,
-    deviationJustification = null
+    deviationJustification = null,
+    estimate = null
   }) {
     if (!this.enabled) {
       return {
@@ -170,6 +174,15 @@ export class ProbabilityCalibrationLayer {
       }
     }
 
+    // 10. Uninformed prior detection — shrink toward market price when AI has no real information
+    if (estimate) {
+      const { isUninformed, signals } = detectUninformedPrior(estimate, { aiProbability: rawProbability });
+      if (isUninformed && marketImplied != null) {
+        calibrated = shrinkToward(calibrated, marketImplied, this.params.uninformedPriorShrinkage);
+        reasons.push(`uninformed_prior_detected (${signals[0]}): heavy shrink ${this.params.uninformedPriorShrinkage} toward market ${marketImplied}`);
+      }
+    }
+
     calibrated = clampProbability(calibrated, this.params.probabilityClampMin, this.params.probabilityClampMax);
 
     return {
@@ -188,7 +201,8 @@ export class ProbabilityCalibrationLayer {
         prescreenSuitable: prescreenResult?.suitable ?? null,
         marketImpliedProbability: marketImplied,
         deviationFromMarket: marketImplied != null ? Number(Math.abs(rawProbability - marketImplied).toFixed(4)) : null,
-        hasDeviationJustification: typeof deviationJustification === "string" && deviationJustification.trim().length > 20
+        hasDeviationJustification: typeof deviationJustification === "string" && deviationJustification.trim().length > 20,
+        uninformedPriorDetected: estimate ? detectUninformedPrior(estimate, { aiProbability: rawProbability }).isUninformed : false
       }
     };
   }

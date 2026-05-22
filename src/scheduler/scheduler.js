@@ -649,7 +649,8 @@ export class Scheduler {
           evidence,
           triageAssessment: candidate?.summary?.ai_triage ?? null,
           prescreenResult: candidate?.summary?.ai_prescreen ?? null,
-          deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null
+          deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null,
+          estimate
         });
         oe.calibratedProbability = cal.calibratedProbability;
       }
@@ -703,7 +704,8 @@ export class Scheduler {
       evidence,
       triageAssessment: triage,
       prescreenResult: prescreen,
-      deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null
+      deviationJustification: estimate.deviation_justification ?? estimate.deviationJustification ?? null,
+      estimate
     });
   }
 
@@ -1014,6 +1016,13 @@ export class Scheduler {
       }
     } else {
       for (const position of [...ledger.positions]) {
+        if (position.arbitrage) {
+          await ledger.log("position.review_skipped", {
+            market: position.marketSlug,
+            reason: "arbitrage_position"
+          });
+          continue;
+        }
         const reviewInterval = this._positionReviewInterval(position);
         if (this._monitorRoundCount % reviewInterval !== 0) {
           await ledger.log("position.review_deferred", {
@@ -1089,6 +1098,121 @@ export class Scheduler {
       open_positions: ledger.positions.length,
       closed_positions: ledger.closedTrades.length
     });
+  }
+
+  async _executeArbitrageOpportunities({ opportunities, ledger, accumulator }) {
+    const arbConfig = this.config.arbitrage ?? {};
+    if (arbConfig.enabled === false) return;
+
+    const minProfit = arbConfig.minProfit ?? 0.05;
+    const maxTradeUsd = arbConfig.maxTradeUsd ?? 5;
+
+    for (const arb of opportunities) {
+      if (arb.profit < minProfit) {
+        await ledger.log("arbitrage.skipped", {
+          eventId: arb.eventId,
+          profit: arb.profit,
+          reason: `profit_below_min (${arb.profit} < ${minProfit})`
+        });
+        continue;
+      }
+
+      for (const sibling of arb.siblings) {
+        const side = arb.type === "buy_all_yes" ? "yes" : "no";
+        const outcomeIndex = side === "yes" ? 0 : 1;
+        const outcome = sibling.outcomes?.find((o) => (o.label ?? "").toLowerCase() === side)
+          ?? sibling.outcomes?.[outcomeIndex];
+        if (!outcome || !outcome.tokenId) continue;
+
+        const price = outcome.bestAsk ?? outcome.lastPrice ?? 0;
+        if (price <= 0) continue;
+
+        const syntheticDecision = {
+          marketId: sibling.marketId,
+          tokenId: outcome.tokenId,
+          side: "BUY",
+          action: "open",
+          suggested_side: side,
+          suggestedSide: side,
+          aiProbability: arb.type === "buy_all_yes" ? 0.99 : 0.01,
+          marketProbability: price,
+          market_implied_probability: price,
+          netEdge: arb.profit / arb.siblings.length,
+          grossEdge: arb.profit / arb.siblings.length,
+          edge: arb.profit / arb.siblings.length,
+          confidence: "high",
+          noTradeReason: null
+        };
+
+        const syntheticRisk = {
+          allow: true,
+          allowed: true,
+          reasons: [],
+          blocked_reasons: [],
+          blockedReasons: [],
+          warnings: [],
+          applied_limits: {},
+          appliedLimits: {},
+          adjusted_notional: maxTradeUsd,
+          adjustedNotional: maxTradeUsd,
+          approvedUsd: maxTradeUsd,
+          order: {
+            orderId: `arb-${randomUUID()}`,
+            marketId: sibling.marketId,
+            tokenId: outcome.tokenId,
+            side: "BUY",
+            amountUsd: maxTradeUsd
+          }
+        };
+
+        const syntheticEstimate = {
+          confidence: "high",
+          reasoning_summary: `Structural arbitrage: ${arb.type} on event ${arb.eventId}. Guaranteed profit ${(arb.profit * 100).toFixed(2)}%.`,
+          uncertainty_factors: [],
+          freshness_score: 1.0
+        };
+
+        const order = await ledger.openPosition({
+          market: sibling,
+          decision: syntheticDecision,
+          risk: syntheticRisk,
+          estimate: syntheticEstimate
+        });
+
+        if (order.status === "filled") {
+          await ledger.log("arbitrage.executed", {
+            type: arb.type,
+            eventId: arb.eventId,
+            market: sibling.marketSlug,
+            side,
+            filledUsd: order.filledUsd,
+            profit: arb.profit
+          });
+          const pos = ledger.positions.find((p) =>
+            p.marketId === sibling.marketId && p.openedAt && !p.arbitrage
+          );
+          if (pos) {
+            pos.arbitrage = true;
+            pos.arbitrageType = arb.type;
+            pos.arbitrageEventId = arb.eventId;
+          }
+        } else {
+          await ledger.log("arbitrage.blocked", {
+            type: arb.type,
+            eventId: arb.eventId,
+            market: sibling.marketSlug,
+            reason: order.reason
+          });
+        }
+
+        accumulator.orders.push({
+          marketId: sibling.marketId,
+          marketSlug: sibling.marketSlug,
+          ...order,
+          type: "arbitrage"
+        });
+      }
+    }
   }
 
   async evaluateAndMaybeSimulatedOrder({ prediction, confirmation, maxAmountUsd, runId, orderCount, filledUsdThisRun, side = null }) {
@@ -1904,6 +2028,7 @@ export class Scheduler {
             siblings: arb.siblings.map((m) => m.marketSlug)
           });
         }
+        await this._executeArbitrageOpportunities({ opportunities: arbitrageOpportunities, ledger, accumulator });
         let orderCount = 0;
         let filledUsdThisRun = 0;
         for (const { prediction } of rankedPredictions) {
