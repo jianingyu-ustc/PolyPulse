@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { inferCategorySlug } from "../core/pulse-strategy.js";
 import { closeSignal } from "../core/close-signals.js";
+import { DEFAULTS, redactSecrets } from "../config/env.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -85,6 +86,11 @@ export class SimulatedMonitorLedger {
   async ensureLog() {
     if (this.logReady) return;
     await mkdir(path.dirname(this.logPath), { recursive: true });
+    const envLines = Object.keys(DEFAULTS).map((key) => {
+      const value = this.config._loadedEnvValues?.[key] ?? "(unset)";
+      const redacted = redactSecrets({ [key]: value });
+      return `  ${key}=${redacted[key]}`;
+    });
     await appendFile(this.logPath, [
       "",
       "================================================================================",
@@ -93,6 +99,9 @@ export class SimulatedMonitorLedger {
       `initial_cash_usd=${this.initialCashUsd}`,
       `market_source=${this.config.marketSource}`,
       `gamma=${this.config.polymarketGammaHost}`,
+      "--- loaded env ---",
+      ...envLines,
+      "--- end env ---",
       "================================================================================",
       ""
     ].join("\n"), "utf8");

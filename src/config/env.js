@@ -433,7 +433,10 @@ export async function loadEnvConfig(options = {}) {
     process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
   }
 
+  const _loadedEnvValues = Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, values[k] ?? null]));
+
   return {
+    _loadedEnvValues,
     repoRoot,
     envFilePath,
     executionMode: normalizeExecutionMode(values.POLYPULSE_EXECUTION_MODE),

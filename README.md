@@ -331,6 +331,16 @@ winRate = wins / (wins + losses)
 
 两种模式的唯一区别是 `paper` 模式额外追加写入 `MONITOR_LOG_PATH` 人类可读日志（含仓位、PnL、胜率等内存账本状态）。
 
+`logs/` 与 `runtime-artifacts/` 的区别：
+
+| | `logs/`（`MONITOR_LOG_PATH`） | `runtime-artifacts/`（`ARTIFACT_DIR`） |
+|---|---|---|
+| 格式 | 单文件追加的人类可读纯文本日志 | 结构化 JSON 文件，按 per-round 目录组织 |
+| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计和 dashboard 数据源 |
+| 生命周期 | 持续追加，不自动清理 | 受 `ARTIFACT_RETENTION_DAYS` 和 `ARTIFACT_MAX_RUNS` 控制自动清理 |
+| 内容 | session header（含加载的环境变量）、事件流（round.start/end、prediction、open/close、performance report 等） | markets.json、candidates.json、candidate-triage.json、decisions.json、risk.json、orders.json、summary.md、provider runtime 日志 |
+| 模式差异 | `paper` 模式写入完整内存账本状态；`live` 模式同样写入 | 两种模式生成完全相同的结构化 artifact |
+
 ### Monitor Log 格式（paper / live 通用）
 
 `MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 `trade once` 或 `monitor run` 都会先写入 session header：
@@ -342,6 +352,11 @@ execution_mode=paper
 initial_cash_usd=1000
 market_source=polymarket
 gamma=https://gamma-api.polymarket.com
+--- loaded env ---
+  MONITOR_LOG_PATH=logs/polypulse-monitor.log
+  PRIVATE_KEY=[REDACTED]
+  ...（所有 DEFAULTS 中注册的环境变量）
+--- end env ---
 ================================================================================
 ```
 
@@ -353,6 +368,7 @@ header 字段含义：
 | `initial_cash_usd` | 本次进程内内存账本的初始现金，来自真实钱包余额。 |
 | `market_source` | 市场源；当前只支持 `polymarket`。 |
 | `gamma` | 当前读取真实 Polymarket market metadata 的 Gamma API host。 |
+| `--- loaded env ---` | 启动时打印所有 `DEFAULTS` 注册的环境变量实际值，用于确认 `.env` 是否正确加载。含敏感 key（PRIVATE_KEY、API_KEY、SECRET、TOKEN 等）会被 redact 为 `[REDACTED]`。 |
 
 普通日志行格式：
 
