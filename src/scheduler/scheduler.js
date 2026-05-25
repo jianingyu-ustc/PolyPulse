@@ -22,6 +22,7 @@ import { OrderExecutor } from "../execution/order-executor.js";
 import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js";
 import { DashboardServer } from "../dashboard/dashboard-server.js";
 import { createPaperDataProvider, createLiveDataProvider } from "../dashboard/data-provider.js";
+import { closeSignal } from "../core/close-signals.js";
 
 function applyBatchCapToRanked(rankedPredictions, bankrollUsd, batchCapPct) {
   if (!batchCapPct || batchCapPct >= 1 || bankrollUsd <= 0) return rankedPredictions;
@@ -980,124 +981,162 @@ export class Scheduler {
     return { decision: boundedDecision, risk, order };
   }
 
-  async reviewSimulatedPositions({ runId, accumulator }) {
+  async reviewPositions({ runId, accumulator, confirmation = null }) {
+    const simulated = !!this.simulatedLedger;
     const ledger = this.simulatedLedger;
-    await ledger.markToMarket({ markets: accumulator.scan.markets ?? [], marketSource: this.marketSource });
-    const signalClosed = await ledger.closeBySignals();
-    for (const closed of signalClosed) {
-      accumulator.orders.push({
-        marketId: closed.marketId,
-        marketSlug: closed.marketSlug,
-        orderId: `sim-close-${closed.positionId}`,
-        status: "filled",
-        requestedUsd: 0,
-        filledUsd: closed.proceedsUsd,
-        avgPrice: closed.currentPrice,
-        reason: closed.closeReason,
-        paper: true,
-        type: "close"
-      });
-      this.predictionTracker.recordOutcome({
-        marketId: closed.marketId,
-        marketSlug: closed.marketSlug,
-        outcome: closed.realizedPnlUsd > 0,
-        realizedPnlUsd: closed.realizedPnlUsd,
-        returnPct: closed.returnPct ?? 0,
-        closeReason: closed.closeReason
-      });
+    const markets = accumulator.scan.markets ?? [];
+
+    if (simulated) {
+      await ledger.markToMarket({ markets, marketSource: this.marketSource });
+    } else {
+      await this.stateStore.markToMarket(markets);
+    }
+
+    const positions = simulated
+      ? [...ledger.positions]
+      : (await this.stateStore.getPortfolio()).positions ?? [];
+
+    for (const position of positions) {
+      const signal = closeSignal(position, this.config);
+      if (!signal) continue;
+      if (simulated) {
+        const closed = await ledger.closePosition(position.positionId, signal);
+        if (closed) {
+          accumulator.orders.push({
+            marketId: closed.marketId, marketSlug: closed.marketSlug,
+            orderId: `close-${closed.positionId}`, status: "filled",
+            requestedUsd: 0, filledUsd: closed.proceedsUsd,
+            avgPrice: closed.currentPrice, reason: closed.closeReason,
+            paper: true, type: "close"
+          });
+          this.predictionTracker.recordOutcome({
+            marketId: closed.marketId, marketSlug: closed.marketSlug,
+            outcome: closed.realizedPnlUsd > 0, realizedPnlUsd: closed.realizedPnlUsd,
+            returnPct: closed.returnPct ?? 0, closeReason: closed.closeReason
+          });
+        }
+      } else {
+        const order = { orderId: `close-${position.positionId}`, tokenId: position.tokenId, side: "SELL", amountUsd: position.size, marketId: position.marketId };
+        const result = await this.liveBroker.submit(order, { marketId: position.marketId }, confirmation);
+        accumulator.orders.push({
+          marketId: position.marketId, marketSlug: position.marketSlug,
+          orderId: result.orderId, status: result.status,
+          requestedUsd: position.size, filledUsd: result.filledUsd ?? 0,
+          avgPrice: result.avgPrice, reason: signal, type: "close"
+        });
+        if (result.status === "filled") {
+          const closed = await this.stateStore.closePosition(position.positionId, { proceedsUsd: result.filledUsd });
+          await this.stateStore.recordMonitorCloseProceeds(result.filledUsd);
+          if (closed) {
+            this.predictionTracker.recordOutcome({
+              marketId: closed.marketId, marketSlug: closed.marketSlug,
+              outcome: closed.realizedPnlUsd > 0, realizedPnlUsd: closed.realizedPnlUsd,
+              returnPct: closed.costUsd > 0 ? Number((closed.realizedPnlUsd / closed.costUsd).toFixed(6)) : 0,
+              closeReason: signal
+            });
+          }
+        }
+      }
     }
 
     if (this.config.monitor?.holdUntilSettlement) {
-      for (const position of [...ledger.positions]) {
-        await ledger.log("position.review_skipped", {
-          market: position.marketSlug,
-          reason: "hold_until_settlement"
-        });
+      const remaining = simulated ? ledger.positions : (await this.stateStore.getPortfolio()).positions ?? [];
+      for (const position of remaining) {
+        if (simulated) {
+          await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "hold_until_settlement" });
+        }
       }
     } else {
-      for (const position of [...ledger.positions]) {
+      const remaining = simulated ? [...ledger.positions] : (await this.stateStore.getPortfolio()).positions ?? [];
+      for (const position of remaining) {
         if (position.arbitrage) {
-          await ledger.log("position.review_skipped", {
-            market: position.marketSlug,
-            reason: "arbitrage_position"
-          });
+          if (simulated) await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "arbitrage_position" });
           continue;
         }
         const reviewInterval = this._positionReviewInterval(position);
         if (this._monitorRoundCount % reviewInterval !== 0) {
-          await ledger.log("position.review_deferred", {
-            market: position.marketSlug,
-            round: this._monitorRoundCount,
-            interval: reviewInterval,
-            next_review_round: Math.ceil(this._monitorRoundCount / reviewInterval) * reviewInterval
-          });
+          if (simulated) await ledger.log("position.review_deferred", { market: position.marketSlug, round: this._monitorRoundCount, interval: reviewInterval, next_review_round: Math.ceil(this._monitorRoundCount / reviewInterval) * reviewInterval });
           continue;
         }
         const market = await this.marketSource.getMarket(position.marketId || position.marketSlug, { noCache: true });
         if (!market) {
-          await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
+          if (simulated) await ledger.log("position.review_skipped", { market: position.marketSlug, reason: "market_not_found" });
           continue;
         }
         const prediction = await this.predictCandidateNoCache({ market });
-        const portfolio = ledger.portfolio();
+        const portfolio = simulated ? ledger.portfolio() : await this.stateStore.getPortfolio();
         const dynamicFeeParamsReview = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
         const analysis = this.decisionEngine.analyze({
-          market: prediction.market,
-          estimate: prediction.estimate,
-          portfolio,
-          amountUsd: this.config.risk.minTradeUsd,
-          dynamicFeeParams: dynamicFeeParamsReview
+          market: prediction.market, estimate: prediction.estimate,
+          portfolio, amountUsd: this.config.risk.minTradeUsd, dynamicFeeParams: dynamicFeeParamsReview
         });
         const chosenSide = analysis.suggested_side ?? position.side ?? "yes";
         const decision = this.decisionEngine.decide({
-          market: prediction.market,
-          estimate: prediction.estimate,
-          side: chosenSide,
-          amountUsd: this.config.risk.minTradeUsd,
-          portfolio,
-          dynamicFeeParams: dynamicFeeParamsReview
+          market: prediction.market, estimate: prediction.estimate,
+          side: chosenSide, amountUsd: this.config.risk.minTradeUsd,
+          portfolio, dynamicFeeParams: dynamicFeeParamsReview
         });
         prediction.decision = decision;
         prediction.phase = "position-review";
         accumulator.predictions.push(prediction);
         accumulator.decisions.push({
-          marketId: prediction.market.marketId,
-          marketSlug: prediction.market.marketSlug,
-          question: prediction.market.question,
-          phase: "position-review",
-          ...decision
+          marketId: prediction.market.marketId, marketSlug: prediction.market.marketSlug,
+          question: prediction.market.question, phase: "position-review", ...decision
         });
-        await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "position-review" });
-        const closed = await ledger.closeOnDecision({ position, decision });
-        if (closed) {
+        if (simulated) await ledger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision, phase: "position-review" });
+
+        const shouldClose = decision.action !== "open"
+          || decision.tokenId !== position.tokenId
+          || Number(decision.netEdge ?? 0) <= 0;
+        if (!shouldClose) {
+          if (simulated) await ledger.log("hold", { market: position.marketSlug, outcome: position.outcome, current_price: position.currentPrice, unrealized_pnl_usd: position.unrealizedPnlUsd, reason: "edge_still_supports_position" });
+          continue;
+        }
+
+        if (simulated) {
+          const closed = await ledger.closePosition(position.positionId, "edge_reversal_or_no_trade");
+          if (closed) {
+            accumulator.orders.push({
+              marketId: closed.marketId, marketSlug: closed.marketSlug,
+              orderId: `close-${closed.positionId}`, status: "filled",
+              requestedUsd: 0, filledUsd: closed.proceedsUsd,
+              avgPrice: closed.currentPrice, reason: closed.closeReason,
+              paper: true, type: "close"
+            });
+            this.predictionTracker.recordOutcome({
+              marketId: closed.marketId, marketSlug: closed.marketSlug,
+              outcome: closed.realizedPnlUsd > 0, realizedPnlUsd: closed.realizedPnlUsd,
+              returnPct: closed.returnPct ?? 0, closeReason: closed.closeReason
+            });
+          }
+        } else {
+          const order = { orderId: `close-${position.positionId}`, tokenId: position.tokenId, side: "SELL", amountUsd: position.size, marketId: position.marketId };
+          const result = await this.liveBroker.submit(order, { marketId: position.marketId }, confirmation);
           accumulator.orders.push({
-            marketId: closed.marketId,
-            marketSlug: closed.marketSlug,
-            orderId: `sim-close-${closed.positionId}`,
-            status: "filled",
-            requestedUsd: 0,
-            filledUsd: closed.proceedsUsd,
-            avgPrice: closed.currentPrice,
-            reason: closed.closeReason,
-            paper: true,
-            type: "close"
+            marketId: position.marketId, marketSlug: position.marketSlug,
+            orderId: result.orderId, status: result.status,
+            requestedUsd: position.size, filledUsd: result.filledUsd ?? 0,
+            avgPrice: result.avgPrice, reason: "edge_reversal_or_no_trade", type: "close"
           });
-          this.predictionTracker.recordOutcome({
-            marketId: closed.marketId,
-            marketSlug: closed.marketSlug,
-            outcome: closed.realizedPnlUsd > 0,
-            realizedPnlUsd: closed.realizedPnlUsd,
-            returnPct: closed.returnPct ?? 0,
-            closeReason: closed.closeReason
-          });
+          if (result.status === "filled") {
+            const closed = await this.stateStore.closePosition(position.positionId, { proceedsUsd: result.filledUsd });
+            await this.stateStore.recordMonitorCloseProceeds(result.filledUsd);
+            if (closed) {
+              this.predictionTracker.recordOutcome({
+                marketId: closed.marketId, marketSlug: closed.marketSlug,
+                outcome: closed.realizedPnlUsd > 0, realizedPnlUsd: closed.realizedPnlUsd,
+                returnPct: closed.costUsd > 0 ? Number((closed.realizedPnlUsd / closed.costUsd).toFixed(6)) : 0,
+                closeReason: "edge_reversal_or_no_trade"
+              });
+            }
+          }
         }
       }
     }
-    await ledger.log("positions.reviewed", {
-      run_id: runId,
-      open_positions: ledger.positions.length,
-      closed_positions: ledger.closedTrades.length
-    });
+
+    if (simulated) {
+      await ledger.log("positions.reviewed", { run_id: runId, open_positions: ledger.positions.length, closed_positions: ledger.closedTrades.length });
+    }
   }
 
   async _executeArbitrageOpportunities({ opportunities, ledger, accumulator }) {
@@ -1330,7 +1369,7 @@ export class Scheduler {
           errors: []
         };
         await ledger.logScan(accumulator.scan);
-        await this.reviewSimulatedPositions({ runId, accumulator });
+        await this.reviewPositions({ runId, accumulator });
         accumulator.candidates = [candidateSummary(market, true, [])];
         await ledger.log("candidate", {
           market: market.marketSlug,
@@ -1518,7 +1557,7 @@ export class Scheduler {
         }
         if (simulated) {
           await ledger.logScan(accumulator.scan);
-          await this.reviewSimulatedPositions({ runId, accumulator });
+          await this.reviewPositions({ runId, accumulator });
         }
 
         stages.scan = {
@@ -1863,6 +1902,10 @@ export class Scheduler {
 
   async runSimulatedMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     await this._ensureLedgerCash();
+    try {
+      const rs = await this.stateStore.getRiskState();
+      this.simulatedLedger.setRiskStatus(rs?.status);
+    } catch { /* stateStore unavailable in test */ }
     this._monitorRoundCount += 1;
     const runId = monitorRunId();
     const startedAt = nowIso();
@@ -1892,7 +1935,7 @@ export class Scheduler {
         });
         await ledger.logScan(accumulator.scan);
         await this.applyTopicDiscovery({ accumulator, ledger });
-        await this.reviewSimulatedPositions({ runId, accumulator });
+        await this.reviewPositions({ runId, accumulator });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
           monitorState: ledger.monitorState(),
@@ -2120,6 +2163,7 @@ export class Scheduler {
     if (this.simulatedLedger) {
       return await this.runSimulatedMonitorRound({ confirmation, limit, maxAmountUsd });
     }
+    this._monitorRoundCount += 1;
     const runId = monitorRunId();
     const startedAt = nowIso();
     const recoveredRun = await this.stateStore.recoverMonitorRun();
@@ -2167,6 +2211,7 @@ export class Scheduler {
     try {
       await withTimeout(async () => {
         accumulator.scan = await this.marketSource.scan(limit == null ? {} : { limit });
+        await this.reviewPositions({ runId, accumulator, confirmation });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
           monitorState: await this.stateStore.getMonitorState(),

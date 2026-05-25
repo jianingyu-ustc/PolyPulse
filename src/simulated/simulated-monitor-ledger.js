@@ -2,6 +2,7 @@ import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { inferCategorySlug } from "../core/pulse-strategy.js";
+import { closeSignal } from "../core/close-signals.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -134,9 +135,13 @@ export class SimulatedMonitorLedger {
 
   riskState() {
     return {
-      status: "active",
+      status: this._riskStatus ?? "active",
       highWaterMarkUsd: this.highWaterMarkUsd
     };
+  }
+
+  setRiskStatus(status) {
+    this._riskStatus = status;
   }
 
   liveBalance() {
@@ -366,17 +371,7 @@ export class SimulatedMonitorLedger {
   }
 
   closeSignal(position) {
-    if (position.marketClosed) return "market_closed";
-    if (this.config.monitor?.holdUntilSettlement) return null;
-    if (position.currentPrice >= 0.99) return "near_full_value";
-    if (position.currentPrice <= 0.01) return "near_zero_value";
-    const lossPct = position.costUsd > 0
-      ? (position.costUsd - position.currentValueUsd) / position.costUsd
-      : 0;
-    if (lossPct >= this.config.risk.maxPositionLossPct) {
-      return "stop_loss";
-    }
-    return null;
+    return closeSignal(position, this.config);
   }
 
   async closePosition(positionId, reason) {

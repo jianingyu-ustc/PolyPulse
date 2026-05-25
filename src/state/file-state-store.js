@@ -144,6 +144,14 @@ function positionPrice(position, markets) {
   return Number(position.avgPrice ?? 0);
 }
 
+function positionMarket(position, markets) {
+  for (const market of markets) {
+    const outcome = (market.outcomes ?? []).find((item) => item.tokenId === position.tokenId);
+    if (outcome) return market;
+  }
+  return null;
+}
+
 function dedupeKeys(market) {
   if (market.negRisk) {
     return [
@@ -253,15 +261,36 @@ export class FileStateStore {
     const state = await this.readState();
     state.portfolio.positions = (state.portfolio.positions ?? []).map((position) => {
       const price = positionPrice(position, markets);
+      const market = positionMarket(position, markets);
+      const currentValueUsd = roundUsd(Number(position.size) * price);
       return {
         ...position,
-        currentValueUsd: roundUsd(Number(position.size) * price),
+        currentPrice: price,
+        currentValueUsd,
+        unrealizedPnlUsd: roundUsd(currentValueUsd - Number(position.costUsd ?? 0)),
+        marketClosed: market ? Boolean(market.closed) : Boolean(position.marketClosed),
         updatedAt: nowIso()
       };
     });
     this.updatePortfolioTotals(state);
     await this.writeState(state);
     return state.portfolio;
+  }
+
+  async closePosition(positionId, { proceedsUsd = 0 } = {}) {
+    const state = await this.readState();
+    const idx = (state.portfolio.positions ?? []).findIndex((p) => p.positionId === positionId);
+    if (idx < 0) return null;
+    const [position] = state.portfolio.positions.splice(idx, 1);
+    state.portfolio.cashUsd = roundUsd((state.portfolio.cashUsd ?? 0) + proceedsUsd);
+    this.updatePortfolioTotals(state);
+    await this.writeState(state);
+    return {
+      ...position,
+      closedAt: nowIso(),
+      proceedsUsd,
+      realizedPnlUsd: roundUsd(proceedsUsd - Number(position.costUsd ?? 0))
+    };
   }
 
   async recordOrder(orderResult) {
