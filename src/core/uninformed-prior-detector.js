@@ -44,9 +44,10 @@ const UNINFORMED_KEYWORDS = [
 const UNINFORMED_UNCERTAINTY_FACTORS = [
   "no_specific_knowledge",
   "insufficient_evidence",
-  "no_independent_edge",
-  "market_price_anchored"
+  "no_independent_edge"
 ];
+
+const BIAS_ANCHORED_FACTOR = "market_price_anchored";
 
 export function detectUninformedPrior(estimate, { aiProbability, rawAiProbability, threshold = 0.05 } = {}) {
   if (!estimate || aiProbability == null) {
@@ -91,12 +92,15 @@ export function detectUninformedPrior(estimate, { aiProbability, rawAiProbabilit
     }
   }
 
-  // If not near 0.5 and no raw-near-half signal, check remaining signals
+  // If not near 0.5 and no raw-near-half signal, check remaining signals.
+  // When probability is far from 0.5, "market_price_anchored" alone is NOT uninformed —
+  // it indicates the favorite-longshot bias correction was applied, which is a deliberate strategy.
   if (!nearHalf && !rawNearHalf && signals.length === 0) {
-    // Still check uncertainty factors for explicit market-anchoring signals
     const factors = estimate.uncertainty_factors ?? estimate.uncertaintyFactors ?? [];
     for (const factor of factors) {
-      if (UNINFORMED_UNCERTAINTY_FACTORS.includes(String(factor).toLowerCase())) {
+      const normalized = String(factor).toLowerCase();
+      if (normalized === BIAS_ANCHORED_FACTOR) continue;
+      if (UNINFORMED_UNCERTAINTY_FACTORS.includes(normalized)) {
         signals.push(`uncertainty_factor:${factor}`);
       }
     }
@@ -104,10 +108,11 @@ export function detectUninformedPrior(estimate, { aiProbability, rawAiProbabilit
     return { isUninformed, signals };
   }
 
-  // Signal 1: uncertainty_factors
+  // Signal 1: uncertainty_factors (near-0.5 branch: include market_price_anchored)
   const factors = estimate.uncertainty_factors ?? estimate.uncertaintyFactors ?? [];
   for (const factor of factors) {
-    if (UNINFORMED_UNCERTAINTY_FACTORS.includes(String(factor).toLowerCase())) {
+    const normalized = String(factor).toLowerCase();
+    if (UNINFORMED_UNCERTAINTY_FACTORS.includes(normalized) || normalized === BIAS_ANCHORED_FACTOR) {
       signals.push(`uncertainty_factor:${factor}`);
     }
   }
