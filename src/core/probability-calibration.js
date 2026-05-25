@@ -39,7 +39,7 @@ const DEFAULT_CALIBRATION_CONFIG = {
   unjustifiedModerateDeviationShrinkage: 0.15,
   deviationLargeThreshold: 0.25,
   deviationModerateThreshold: 0.15,
-  uninformedPriorShrinkage: 0.5,
+  uninformedPriorShrinkage: 0.9,
   // Thresholds
   lowLiquidityThresholdUsd: 10000,
   sparseEvidenceThreshold: 2,

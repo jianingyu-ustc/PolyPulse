@@ -77,7 +77,7 @@ export function buildTradeCandidate({ market, estimate, side = "yes", portfolio 
   const insufficientEvidence = estimate.confidence === "low"
     || (estimate.uncertainty_factors ?? []).includes("insufficient_evidence")
     || (estimate.freshness_score ?? 0) < 0.4;
-  const { isUninformed: isUninformedPrior } = detectUninformedPrior(estimate, { aiProbability });
+  const { isUninformed: isUninformedPrior } = detectUninformedPrior(estimate, { aiProbability, rawAiProbability });
   const noTradeReason = isUninformedPrior
     ? "uninformed_prior"
     : insufficientEvidence
@@ -141,7 +141,7 @@ export function buildPulseTradeCandidate({ market, estimate, side = "yes", portf
   });
   const notional = plan.suggestedNotionalUsd;
   const expectedValue = round(plan.netEdge * notional, 4);
-  const { isUninformed: pulseUninformedPrior } = detectUninformedPrior(estimate, { aiProbability });
+  const { isUninformed: pulseUninformedPrior } = detectUninformedPrior(estimate, { aiProbability, rawAiProbability });
   const noTradeReason = pulseUninformedPrior
     ? "uninformed_prior"
     : plan.action === "open" ? null : (plan.skipReason ?? "quarter_kelly_not_positive");
