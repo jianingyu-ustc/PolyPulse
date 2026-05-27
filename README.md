@@ -39,6 +39,22 @@ PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Pre
 
 后续每轮 position-review 重新评估 edge，确认仍为正（netEdge=0.015）→ `hold_until_settlement`。
 
+#### 多选项市场（Multi-Outcome）联合建模链路
+
+在 Polymarket 上，多选项话题（如 "SC Governor Republican Primary Winner"）的每个候选人都是一个独立的二元子市场（"Will Ralph Norman win?" Yes/No），所有子市场共享同一个 `eventId`。系统对 `negRisk=true` 的事件启用联合建模流程：
+
+| Step | 阶段 | 与单市场链路的差异 |
+|------|------|-------------------|
+| 1 | **Scan** | 同。扫描后为 `negRisk=true` 子市场挂 `eventGroup` 字段（`eventId \|\| eventSlug`），下游全链路透传 |
+| 2 | **Pre-screen / Triage** | 同。各子市场独立预筛和 triage |
+| 3 | **Evidence** | 同。各子市场独立收集证据 |
+| 4 | **Prediction** | **联合估计**：同 `eventGroup` 的子市场合并为一次 AI 调用（`estimateEventGroup`），prompt 变为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"，输出 `{outcomes: [{market_slug, probability}]}`，后处理归一化至 Σ=1 |
+| 4.5 | **约束传播** | 当联合估计不可用时，用已有高信度兄弟估计约束当前市场概率上限（如兄弟 A 已估 55%，则当前市场上限 45%） |
+| 5 | **Decision** | **组内最优选择**：`analyzeEventGroup` 基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优 1-2 个交易 |
+| 5.5 | **套利检测** | 在执行前对全量扫描市场（非仅已筛选候选）按 `eventId` 分组计算 `Σ(yes_bestAsk)`；> 1 则全买 No，< 1 则全买 Yes |
+| 6 | **Risk** | 去掉"交易一个即锁死整个事件"的硬去重，替换为事件级组合约束（`maxEventExposurePct`）；同事件内允许持有多个头寸 |
+| 6.5 | **Kelly sizing** | **多臂 Kelly**：同事件内多个入选交易用互斥结果 Kelly 公式联合优化仓位分配 |
+| 7 | **Execution** | 同 |
 
 ### 与 Predict-Raven 的关系和当前差距
 
@@ -112,33 +128,6 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~跨 Runtime 上下文传递~~：已实现。scheduler 在 `runEvidenceResearch()` 中保存 `ai_research`（`key_findings`、`evidence_sufficiency`、`evidence_assessment`）到 candidate.summary，与已有的 `ai_triage`（`rationale`、`information_advantage`、`researchability`）一起组装为 `upstreamContext`，注入概率估算 prompt。`ProbabilityEstimator` → `CodexProbabilityProvider`/`ClaudeProbabilityProvider` → `buildPrompt()` 全链路透传，概率估算 AI 可直接利用上游 triage 和 research 阶段的分析结论，消除信息断层。
 - [x] ~~所有 AI runtime prompt 注入当前日期和时间上下文~~：已实现。5 个 AI runtime（概率估算、预筛、候选 triage、证据研究、话题发现）均在 prompt 开头注入 `当前时间：YYYY-MM-DD HH:MM:SS UTC`，AI 可据此判断证据新鲜度、到期紧迫性和时效性事件。Topic Discovery 额外通过 DuckDuckGo 抓取最近 24h 新闻标题（最多 20 条，8s 超时，失败不阻断），注入 prompt 供 AI 发现时效性话题。
 - [x] ~~每个 AI runtime 增加 1-2 个 few-shot golden example~~：已实现。6 个 AI runtime prompt（prescreen、candidate-triage、evidence-research、单市场概率估算、事件组联合概率估算、topic-discovery）均在指令末尾注入 1 个高质量输出示例，示例基于真实成功预测的输出格式，双语（zh/en）各一份。示例展示格式规范、推理深度标准和字段质量要求，显著提升输出一致性。
-- [x] 多选项市场（Multi-Outcome）联合建模改进：
-
-  **背景**：在 Polymarket 上，多选项话题（如 "SC Governor Republican Primary Winner"）的每个候选人都是一个独立的二元子市场（"Will Ralph Norman win?" Yes/No），所有子市场共享同一个 `eventId`。当前系统对每个子市场独立评估，存在以下核心缺陷：
-
-  1. **概率不归一化**：AI 独立估计每个子市场概率，不保证同一事件下所有候选人 Σ(P) = 1（如 5 人分别估 40%/35%/30%/25%/20% = 150%）
-  2. **忽略结构性套利**：当所有 Yes 价格之和 > 1 + fees 时存在无风险利润（全买 No），当 < 1 - fees 时可全买 Yes；当前未检测
-  3. **事件锁定过于粗暴**：`dedupeKeys` 导致交易一个子市场后整个事件永久排除，错过同事件内多个正 EV 机会
-  4. **跨子市场信息浪费**：对候选人 A 高信度估计 60% 隐含其余所有人总概率 ≤ 40%，但此约束被丢弃
-
-  **当前已有的隐式事件关联机制**（通过 `eventId`/`eventSlug`）：
-  - `dedupeKeys()`：交易一个子市场后标记整个事件为已交易
-  - `heldInPortfolio()`：持有同事件任一仓位时排除所有兄弟市场
-  - `RiskEngine` 事件敞口上限：`maxEventExposurePct` 限制同事件总暴露
-  - `DownsideRiskRanker` 事件惩罚：同事件已有持仓时施加 0.8 penalty
-  - `SemanticDiscoveryRuntime.deduplicateByEvent()`：按事件合并重复推荐
-  - `negRisk` 字段：Polymarket 对多选项事件标记，当前仅用于费率计算
-
-  **改进路线图**：
-
-  - [x] Phase 0 — 结构性套利检测（纯代码，~30 行）｜**对应 Step: Ranking → Execution 之间**：在 `scheduler.js` 排序后、执行前，对 `negRisk=true` 的事件按 `eventId` 分组，计算 `Σ(yes_bestAsk)`；若 > 1 则标记为无风险套利机会（全买 No，type=`buy_all_no`），若 < 1 则全买 Yes（type=`buy_all_yes`）；检测结果记录到 `accumulator.arbitrage` 并通过 ledger 日志输出（`arbitrage.detected` 事件），返回值中包含 `arbitrage` 计数。negRisk 事件费率为 0，阈值直接使用 1。
-  - [x] Phase 1 — 事件分组透传（纯代码，~5 行）｜**对应 Step: Scan → Candidate Building**：在 `buildCandidates()` 和 `candidateSummary()` 中为 `negRisk=true` 的子市场挂 `eventGroup` 字段（值为 `eventId || eventSlug`），下游全链路透传。候选对象（`candidateEntry`）和候选摘要（`candidateSummary`）均包含此字段，供后续 Phase 使用。
-  - [x] Phase 2 — 联合概率估计 Prompt（Prompt + 代码）｜**对应 Step: Prediction**：`ProbabilityEstimator` 新增批量入口 `estimateEventGroup(markets[])`，同 `eventGroup` 的子市场合并为一次 AI 调用；prompt 从"评估这个市场的 Yes 概率"改为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"；AI 能看到完整竞争格局，估计更准确。
-  - [x] Phase 3 — 归一化概率分布 Schema（Prompt + Schema + 代码）｜**对应 Step: Prediction（输出层）**：输出 schema 从 `{ai_probability: number}` 扩展为 `{outcomes: [{label, market_slug, probability}], distribution_confidence}`，prompt 强制"概率之和必须等于 1"约束；代码层后处理做归一化修正（按比例缩放至 sum=1），并校验偏离度（AI 原始 sum 与 1 的偏差 > 20% 时记录 warning）。
-  - [x] Phase 4 — 组内最优选择（纯代码，~40-60 行）｜**对应 Step: Decision（DecisionEngine.analyze）**：`DecisionEngine` 新增 `analyzeEventGroup(candidates[], jointProbabilities[])` 方法，基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优的 1-2 个交易（如同时做多最被低估的候选人 + 做空最被高估的候选人）。
-  - [x] Phase 5 — 放松事件锁定 + 组合约束（纯代码，~20 行）｜**对应 Step: Risk（RiskEngine.evaluate）+ Candidate Building（dedupeKeys）**：去掉"交易一个即锁死整个事件"的硬去重，替换为 `RiskEngine` 中的事件级组合约束——同一事件最大总敞口 ≤ `maxEventExposurePct`；同一事件内互斥方向（如同时买 A-Yes 和 B-Yes，若 A、B 互斥）的总成本不超过 1 份本金；允许在风控约束内同时持有多个同事件头寸。
-  - [x] Phase 6 — 跨子市场约束传播（纯代码，~15 行）｜**对应 Step: Prediction → Decision 之间（Calibration 层）**：当 Phase 2 联合估计不可用时（如部分子市场单独到达），用已有高信度兄弟估计约束当前市场 edge 范围——若兄弟 A 已估 55%（高信度），则当前市场的 AI 概率上限为 45%（减去其他已知兄弟概率），避免逻辑矛盾（"A 有 10% edge，B 也有 10% edge，但 A+B 概率已超 100%"）。
-  - [x] Phase 7 — 多臂 Kelly 组合优化（纯代码，~30 行）｜**对应 Step: Decision（Kelly sizing）**：对同一事件内多个入选交易，用互斥结果 Kelly 公式联合优化仓位分配，替代逐个独立 quarter-Kelly 后再被 `maxEventExposurePct` 粗暴截断。
 
 ### 已知问题
 
@@ -913,11 +902,17 @@ systemctl stop polypulse-monitor.service; pkill -9 -f 'polypulse.js'
 ```
 
 ```bash
-# 写入 monitor stop 状态，用于暂停持续运行。
+# 写入 monitor stop 状态，用于暂停持续运行。注意：stop 会完全停止循环，不再维护已开仓市场。
 node ./bin/polypulse.js monitor stop --env-file .env --reason manual_stop
 
 # 清除 stop 状态，允许 monitor 再次运行。
 node ./bin/polypulse.js monitor resume --env-file .env
+
+# 暂停开仓但继续维护已有仓位（mark-to-market、止盈止损、到期平仓仍正常执行）。
+node ./bin/polypulse.js risk pause --env-file .env --reason manual_pause
+
+# 恢复开仓（解除 risk pause）。
+node ./bin/polypulse.js risk resume --env-file .env
 
 # 查看 monitor 状态、最近运行和最近错误。
 node ./bin/polypulse.js monitor status --env-file .env
