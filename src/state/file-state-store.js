@@ -44,10 +44,12 @@ function emptyRiskState(portfolio, now = nowIso()) {
 
 function emptyMonitorState(now = nowIso()) {
   return {
-    status: "active",
-    stopReason: null,
-    stoppedAt: null,
-    resumedAt: null,
+    opensPaused: false,
+    opensPausedAt: null,
+    opensPauseReason: null,
+    maintenancePaused: false,
+    maintenancePausedAt: null,
+    maintenancePauseReason: null,
     updatedAt: now,
     lastRunId: null,
     lastStartedAt: null,
@@ -206,20 +208,7 @@ export class FileStateStore {
     return (await this.readState()).riskState;
   }
 
-  async pauseRisk(reason = "manual_pause") {
-    const state = await this.readState();
-    const now = nowIso();
-    state.riskState = {
-      ...state.riskState,
-      status: "paused",
-      pausedAt: now,
-      pauseReason: reason,
-      updatedAt: now
-    };
-    return (await this.writeState(state)).riskState;
-  }
-
-  async haltRisk(reason = "manual_halt") {
+  async haltRisk(reason = "drawdown") {
     const state = await this.readState();
     const now = nowIso();
     state.riskState = {
@@ -232,18 +221,6 @@ export class FileStateStore {
     return (await this.writeState(state)).riskState;
   }
 
-  async resumeRisk() {
-    const state = await this.readState();
-    const now = nowIso();
-    state.riskState = {
-      ...state.riskState,
-      status: "active",
-      resumedAt: now,
-      pauseReason: null,
-      updatedAt: now
-    };
-    return (await this.writeState(state)).riskState;
-  }
 
   updatePortfolioTotals(state) {
     const positionsValue = (state.portfolio.positions ?? [])
@@ -353,7 +330,6 @@ export class FileStateStore {
   async startMonitorRun({ runId }) {
     const state = await this.readState();
     const now = nowIso();
-    state.monitorState.status = state.monitorState.status === "stopped" ? "stopped" : "active";
     state.monitorState.lastRunId = runId;
     state.monitorState.lastStartedAt = now;
     state.monitorState.inFlightRun = { runId, startedAt: now };
@@ -412,23 +388,45 @@ export class FileStateStore {
     await this.writeState(state);
   }
 
-  async stopMonitor(reason = "manual_stop") {
+  async pauseOpens(reason = "manual") {
     const state = await this.readState();
     const now = nowIso();
-    state.monitorState.status = "stopped";
-    state.monitorState.stopReason = reason;
-    state.monitorState.stoppedAt = now;
+    state.monitorState.opensPaused = true;
+    state.monitorState.opensPausedAt = now;
+    state.monitorState.opensPauseReason = reason;
     state.monitorState.updatedAt = now;
     await this.writeState(state);
     return state.monitorState;
   }
 
-  async resumeMonitor() {
+  async resumeOpens() {
     const state = await this.readState();
     const now = nowIso();
-    state.monitorState.status = "active";
-    state.monitorState.stopReason = null;
-    state.monitorState.resumedAt = now;
+    state.monitorState.opensPaused = false;
+    state.monitorState.opensPausedAt = null;
+    state.monitorState.opensPauseReason = null;
+    state.monitorState.updatedAt = now;
+    await this.writeState(state);
+    return state.monitorState;
+  }
+
+  async pauseMaintenance(reason = "manual") {
+    const state = await this.readState();
+    const now = nowIso();
+    state.monitorState.maintenancePaused = true;
+    state.monitorState.maintenancePausedAt = now;
+    state.monitorState.maintenancePauseReason = reason;
+    state.monitorState.updatedAt = now;
+    await this.writeState(state);
+    return state.monitorState;
+  }
+
+  async resumeMaintenance() {
+    const state = await this.readState();
+    const now = nowIso();
+    state.monitorState.maintenancePaused = false;
+    state.monitorState.maintenancePausedAt = null;
+    state.monitorState.maintenancePauseReason = null;
     state.monitorState.updatedAt = now;
     await this.writeState(state);
     return state.monitorState;

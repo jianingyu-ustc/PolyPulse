@@ -9,57 +9,6 @@
  * guides the evidence collection process rather than passively receiving
  * whatever adapters find.
  *
- * 提示词模板（zh locale 示例，由 buildPrompt() 动态生成）：
- * ─────────────────────────────────────────────────────────────────
- * 你是 PolyPulse 的 AI 证据研究运行时。
- * 当前 provider：codex
- * 必须先阅读这些 skill 文件，再进行研究分析：
- * - <skill id>: <skill SKILL.md path>
- *
- * 必须先阅读这份风险控制文档：
- * - <repoRoot>/docs/specs/risk-controls.md
- *
- * 只允许阅读上面列出的 skill 文件、这份风险文档、输入 JSON 文件和下面给出的结构化上下文。
- * 不要扫描无关仓库文件，不要运行测试，不要做代码修改，不要尝试下单，不要抓取外部网页。
- *
- * 输入文件：
- * - Market JSON: <tempDir>/market.json
- * - Evidence JSON: <tempDir>/evidence.json
- *
- * 市场快照：
- * <market JSON>
- *
- * 已收集的证据：
- * <evidence summary JSON>
- *
- * Triage 评估：
- * <triage JSON 或 "无">
- *
- * 任务：
- * 1. 评估已收集证据的质量、相关性、新鲜度和充分性，用于估算该市场结算概率。
- * 2. 识别具体信息缺口——如果填补这些缺口，能显著改善概率估算。
- * 3. 对每个缺口，提出一个具体的网络搜索查询，能找到相关且可信的信息。
- * 4. 评定证据整体充分性："sufficient"（足够进行置信估算）、"needs_more"（可以估算但不确定性高）或 "critical_gap"（缺少关键信息，可能大幅改变估算）。
- * 5. 总结现有证据中与概率估算最相关的关键发现。
- *
- * 硬规则：
- * 1. 只能输出合法 JSON，不要输出 markdown 代码块。
- * 2. 不允许编造证据或搜索结果。
- * 3. 不允许估算概率——概率由后续的概率估算运行时负责。
- * 4. 不允许输出交易指令、token 改写、仓位金额或 broker 参数。
- * 5. directed_searches 必须是具体可执行的搜索查询，不能是模糊主题。
- * 6. 最多 5 个定向搜索，按预期信息价值排优先级（1=最高优先级）。
- * 7. 每个搜索必须包含清晰的 rationale，说明搜索什么信息以及为什么重要。
- *
- * 输出字段：
- * - research_strategy: 研究策略和思路（简述）
- * - evidence_assessment: 对现有证据的整体评价
- * - evidence_sufficiency: sufficient | needs_more | critical_gap
- * - key_findings: 现有证据中最相关的关键发现列表
- * - directed_searches: 定向搜索列表，每项含 query, category, rationale, priority
- * 只输出最终 JSON。
- * ─────────────────────────────────────────────────────────────────
- *
  * Key properties:
  * - AI assesses quality, relevance, freshness, sufficiency of collected evidence
  * - AI identifies specific information gaps that would improve probability estimation

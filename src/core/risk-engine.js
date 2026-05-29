@@ -121,14 +121,22 @@ export class RiskEngine {
       : requestedUsdRaw;
     const tokenIds = new Set((market.outcomes ?? []).map((outcome) => outcome.tokenId).filter(Boolean));
 
-    const riskState = systemState ?? (this.stateStore ? await this.stateStore.getRiskState() : { status: "active", highWaterMarkUsd: portfolioEquityUsd });
+    let riskState;
+    if (systemState) {
+      riskState = systemState;
+    } else if (this.stateStore) {
+      const [rs, ms] = await Promise.all([this.stateStore.getRiskState(), this.stateStore.getMonitorState()]);
+      riskState = { ...rs, opensPaused: ms.opensPaused ?? false };
+    } else {
+      riskState = { status: "active", highWaterMarkUsd: portfolioEquityUsd, opensPaused: false };
+    }
     warnings.push(...positionLossWarnings(portfolio, this.config.risk.maxPositionLossPct));
 
-    if (riskState.status === "paused") {
-      blockedReasons.push("system_paused");
+    if (riskState.opensPaused) {
+      blockedReasons.push("opens_paused");
     }
     if (riskState.status === "halted") {
-      blockedReasons.push("system_halted_requires_explicit_resume");
+      blockedReasons.push("system_halted_drawdown");
     }
     const highWaterMark = Number(riskState.highWaterMarkUsd ?? portfolioEquityUsd);
     if (highWaterMark > 0) {

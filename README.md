@@ -2,6 +2,7 @@
 
 ## 项目概览
 
+### 简要说明
 PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。统一使用真实钱包，通过 `POLYPULSE_EXECUTION_MODE` 控制最后一步是否真正下单：
 
 - `paper`：连接真实钱包，走完整链路（live preflight、AI provider、RiskEngine），但最后一步不提交真实订单；用内存账本按真实市场价格追踪仓位和 PnL，追加人类可读日志。
@@ -27,34 +28,52 @@ PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Pre
 
 以真实 paper 模式运行记录为例（市场：`will-the-democratic-party-win-the-ok-02-house-seat`，"民主党会赢得 Oklahoma 第 2 选区众议院席位吗？"）：
 
-| Step | 阶段 | 实际执行 |
-|------|------|---------|
-| 1 | **Scan** | 从 Polymarket Gamma 拉取 200 个市场，按流动性/volume/规则过滤为 20 个候选 |
-| 2 | **Pre-screen** | 轻量 AI 判定 `TRADE`（prompt 含结算规则摘要）："可通过选区基本面和历史共和党优势验证 7% 定价合理性" |
-| 3 | **Triage** | AI 语义 triage：score=0.2, researchability=medium, information_advantage=low；识别证据缺口（partisan lean, incumbency, polling, wave indicators, order book depth） |
-| 4 | **Evidence** | 收集证据：Polymarket 页面结算规则/评论、CLOB order book 深度、resolution source 验证、领域适配器、AI Evidence Research 定向搜索 |
-| 5 | **Prediction** | AI 估算 `ai_probability=0.05`（民主党仅 5% 概率赢），confidence=low；代码计算 No 侧 market_probability=0.935, grossEdge=0.015, 扣 fee 后 netEdge=0.015, quarterKellyPct=5.8%, monthlyReturn=0.26% |
-| 6 | **Risk** | RiskEngine 批准：allowed=true, approvedUsd=$10（warning: ai_confidence_below_minimum）；daily limit/exposure/slippage 均未触发阻断 |
-| 7 | **Execution** | 买入 No @ $0.935, size=10.695 shares, cost=$10；paper 模式写入内存账本，不提交真实订单 |
+| Step | 阶段 | AI Runtime | 实际执行 |
+|------|------|-----------|---------|
+| 0 | **Topic Discovery** | `topic-discovery-runtime.js`（1次/轮） | AI 基于外部信号发现被规则遗漏的话题，输出 Polymarket 搜索关键词；SemanticDiscovery 做 token 匹配后加入候选池 |
+| 1 | **Scan** | 无 AI | 从 Polymarket Gamma 拉取 200 个市场，按流动性/volume/规则过滤为 20 个候选 |
+| 2 | **Pre-screen** | `prescreen-runtime.js`（1次/轮，批量） | 轻量 AI 判定 `TRADE`/`SKIP`（prompt 含市场标题、分类、价格、到期日、流动性和结算规则摘要前 200 字）："可通过选区基本面和历史共和党优势验证 7% 定价合理性" |
+| 3 | **Triage** | `candidate-triage-runtime.js`（1次/轮，批量） | AI 语义 triage：score=0.2, researchability=medium, information_advantage=low；识别证据缺口（partisan lean, incumbency, polling, wave indicators, order book depth） |
+| 4 | **Evidence** | `evidence-research-runtime.js`（N次，每候选1次） | 规则适配器收集基础证据（Polymarket 页面结算规则/评论、CLOB order book 深度、resolution source 验证、领域适配器）→ AI 评估证据充分性、识别信息缺口、输出最多 5 个定向搜索查询 → 代码执行搜索合并 |
+| 5 | **Prediction** | `codex-runtime.js` `buildPrompt`（N次，每候选1次） | AI 估算 `ai_probability=0.05`（民主党仅 5% 概率赢），confidence=low；代码计算 No 侧 market_probability=0.935, grossEdge=0.015, 扣 fee 后 netEdge=0.015, quarterKellyPct=5.8%, monthlyReturn=0.26% |
+| 6 | **Risk** | 无 AI | RiskEngine 批准：allowed=true, approvedUsd=$10（warning: ai_confidence_below_minimum）；daily limit/exposure/slippage 均未触发阻断 |
+| 7 | **Execution** | 无 AI | 买入 No @ $0.935, size=10.695 shares, cost=$10；paper 模式写入内存账本，不提交真实订单 |
 
 后续每轮 position-review 重新评估 edge，确认仍为正（netEdge=0.015）→ `hold_until_settlement`。
+
+`predict` 和 `trade once` 只调用第 4、5 步（单市场：证据研究 + 概率估算 = 2 次 AI 调用）。所有 runtime 的 prompt 均包含 few-shot golden example（双语 zh/en），由 `buildPrompt()` 动态生成，支持 `CODEX_SKILL_LOCALE=zh|en` 切换。实际命令形态：
+
+```bash
+codex exec \
+  --skip-git-repo-check \
+  -C <repoRoot> \
+  -s read-only \
+  --output-schema <tempDir>/<schema>.json \
+  -o <tempDir>/provider-output.json \
+  --color never \
+  [-m <CODEX_MODEL>] \
+  -
+```
+
+最后的 `-` 表示 prompt 通过 stdin 传入。Codex 的输出必须写成对应 JSON schema，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
 
 #### 多选项市场（Multi-Outcome）联合建模链路
 
 在 Polymarket 上，多选项话题（如 "SC Governor Republican Primary Winner"）的每个候选人都是一个独立的二元子市场（"Will Ralph Norman win?" Yes/No），所有子市场共享同一个 `eventId`。系统对 `negRisk=true` 的事件启用联合建模流程：
 
-| Step | 阶段 | 与单市场链路的差异 |
-|------|------|-------------------|
-| 1 | **Scan** | 同。扫描后为 `negRisk=true` 子市场挂 `eventGroup` 字段（`eventId \|\| eventSlug`），下游全链路透传 |
-| 2 | **Pre-screen / Triage** | 同。各子市场独立预筛和 triage |
-| 3 | **Evidence** | 同。各子市场独立收集证据 |
-| 4 | **Prediction** | **联合估计**：同 `eventGroup` 的子市场合并为一次 AI 调用（`estimateEventGroup`），prompt 变为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"，输出 `{outcomes: [{market_slug, probability}]}`，后处理归一化至 Σ=1 |
-| 4.5 | **约束传播** | 当联合估计不可用时，用已有高信度兄弟估计约束当前市场概率上限（如兄弟 A 已估 55%，则当前市场上限 45%） |
-| 5 | **Decision** | **组内最优选择**：`analyzeEventGroup` 基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优 1-2 个交易 |
-| 5.5 | **套利检测** | 在执行前对全量扫描市场（非仅已筛选候选）按 `eventId` 分组计算 `Σ(yes_bestAsk)`；> 1 则全买 No，< 1 则全买 Yes |
-| 6 | **Risk** | 去掉"交易一个即锁死整个事件"的硬去重，替换为事件级组合约束（`maxEventExposurePct`）；同事件内允许持有多个头寸 |
-| 6.5 | **Kelly sizing** | **多臂 Kelly**：同事件内多个入选交易用互斥结果 Kelly 公式联合优化仓位分配 |
-| 7 | **Execution** | 同 |
+| Step | 阶段 | AI Runtime | 与单市场链路的差异 |
+|------|------|-----------|-------------------|
+| 0 | **Topic Discovery** | `topic-discovery-runtime.js` | 同 |
+| 1 | **Scan** | 无 AI | 同。扫描后为 `negRisk=true` 子市场挂 `eventGroup` 字段（`eventId \|\| eventSlug`），下游全链路透传 |
+| 2 | **Pre-screen / Triage** | `prescreen-runtime.js` + `candidate-triage-runtime.js` | 同。各子市场独立预筛和 triage |
+| 3 | **Evidence** | `evidence-research-runtime.js`（每子市场1次） | 同。各子市场独立收集证据 |
+| 4 | **Prediction** | `codex-runtime.js` `buildEventGroupPrompt`（每事件组1次） | **联合估计**：同 `eventGroup` 的子市场合并为一次 AI 调用（`estimateEventGroup`），prompt 变为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"，输出 `{outcomes: [{market_slug, probability}]}`，后处理归一化至 Σ=1 |
+| 4.5 | **约束传播** | 无 AI | 当联合估计不可用时，用已有高信度兄弟估计约束当前市场概率上限（如兄弟 A 已估 55%，则当前市场上限 45%） |
+| 5 | **Decision** | 无 AI | **组内最优选择**：`analyzeEventGroup` 基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优 1-2 个交易 |
+| 5.5 | **套利检测** | 无 AI | 在执行前对全量扫描市场（非仅已筛选候选）按 `eventId` 分组计算 `Σ(yes_bestAsk)`；> 1 则全买 No，< 1 则全买 Yes |
+| 6 | **Risk** | 无 AI | 去掉"交易一个即锁死整个事件"的硬去重，替换为事件级组合约束（`maxEventExposurePct`）；同事件内允许持有多个头寸 |
+| 6.5 | **Kelly sizing** | 无 AI | **多臂 Kelly**：同事件内多个入选交易用互斥结果 Kelly 公式联合优化仓位分配 |
+| 7 | **Execution** | 无 AI | 同 |
 
 ### 与 Predict-Raven 的关系和当前差距
 
@@ -548,38 +567,6 @@ header 字段含义：
 - `docs/ROADMAP.md`
 - `docs/memory/POLYPULSE_MEMORY.md`
 
-### Codex live runtime 提示词
-
-执行一次完整 `monitor run` pipeline，AI provider 会被调用 **6 类提示词**（每类对应一个 runtime）：
-
-| 序号 | Runtime | 提示词用途 | 调用次数/轮 |
-| --- | --- | --- | --- |
-| 1 | `topic-discovery-runtime.js` | AI 话题发现：从外部信号发现被规则遗漏的话题 | 1 次 |
-| 2 | `prescreen-runtime.js` | AI pre-screen：对候选池做 TRADE/SKIP 信息优势预判（含结算规则摘要） | 1 次（批量） |
-| 3 | `candidate-triage-runtime.js` | AI candidate triage：语义聚类、可研究性、证据缺口 | 1 次（批量） |
-| 4 | `evidence-research-runtime.js` | AI 证据研究：评估证据充分性、指导定向搜索 | N 次（每个选中候选 1 次） |
-| 5 | `codex-runtime.js`（单市场） | AI 概率估算：估算单个市场事件发生概率 | N 次（每个非事件组候选 1 次） |
-| 6 | `codex-runtime.js`（事件组联合） | AI 联合概率估算：对同一 negRisk 事件的 ≥2 个兄弟子市场输出联合概率分布（概率之和=1） | M 次（每个事件组 1 次） |
-
-`predict` 和 `trade once` 只调用第 4、5 步（单市场：证据研究 + 概率估算 = 2 次 AI 调用）。
-
-所有 6 个 runtime 的 prompt 均包含 few-shot golden example（高质量输出示例），展示格式规范、推理深度和字段质量标准，双语（zh/en）各一份。
-每个 runtime 文件的 `buildPrompt()` 函数动态生成 prompt，支持 `CODEX_SKILL_LOCALE=zh|en` 双语切换。实际命令形态：
-
-```bash
-codex exec \
-  --skip-git-repo-check \
-  -C <repoRoot> \
-  -s read-only \
-  --output-schema <tempDir>/<schema>.json \
-  -o <tempDir>/provider-output.json \
-  --color never \
-  [-m <CODEX_MODEL>] \
-  -
-```
-
-最后的 `-` 表示 prompt 通过 stdin 传入。Codex 的输出必须写成对应 JSON schema，并由代码解析、校验和归一化。Codex 不生成订单、不选择 broker 参数、不直接改写 token 或下单金额；交易方向、fee、net edge、quarter Kelly、monthly return、排序、batch cap 和最终风控都由代码计算。
-
 ## 使用方法
 
 ### Clone 与解密
@@ -883,7 +870,7 @@ Monitor 行为：
 - `paper` 模式下风控允许时在内存账本开仓；`live` 模式下提交真实订单。已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
 - 每一步都会追加到 `MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
 - `trade once` 和 `monitor run` 共用同一套日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留仓位。
-- `paper` 模式下程序退出后不保留仓位、现金或交易状态（内存账本随进程消亡）；持久保留的有：`MONITOR_LOG_PATH` 人类可读日志和 `runtime-artifacts/` 下的 per-round 结构化 artifact。需要停止 monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程，而不是依赖 `monitor stop` 的持久状态。
+- `paper` 模式下程序退出后不保留仓位、现金或交易状态（内存账本随进程消亡）；持久保留的有：`MONITOR_LOG_PATH` 人类可读日志和 `runtime-artifacts/` 下的 per-round 结构化 artifact。需要停止 monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程。
 
 Codex 提示词版本：
 
@@ -897,47 +884,45 @@ Codex 提示词版本：
 ### Monitor 管理
 
 ```bash
+# 停止开仓新的市场
+node ./bin/polypulse.js monitor pause-opens --env-file .env --reason manual
+
+# 继续开仓新的市场
+node ./bin/polypulse.js monitor resume-opens --env-file .env
+
+# 停止维护已开仓市场（AI重估、止盈止损、提前平仓；不影响到期关仓和市场价格更新）
+# 优先级低于环境变量 POSITION_HOLD_UNTIL_SETTLEMENT
+node ./bin/polypulse.js monitor pause-maintenance --env-file .env --reason manual
+
+# 继续维护已开仓市场
+node ./bin/polypulse.js monitor resume-maintenance --env-file .env
+
+# 查看 monitor 状态
+node ./bin/polypulse.js monitor status --env-file .env
+
+# 终止 monitor 进程（systemd 部署）
+systemctl stop polypulse-monitor.service
+
 # 终止服务器上本项目的所有进程
 systemctl stop polypulse-monitor.service; pkill -9 -f 'polypulse.js'
 ```
 
-```bash
-# 写入 monitor stop 状态，用于暂停持续运行。注意：stop 会完全停止循环，不再维护已开仓市场。
-node ./bin/polypulse.js monitor stop --env-file .env --reason manual_stop
+`monitor status` 输出字段说明：
 
-# 清除 stop 状态，允许 monitor 再次运行。
-node ./bin/polypulse.js monitor resume --env-file .env
+| 字段 | 含义 |
+| --- | --- |
+| `willOpenNewPositions` | `true` = 会开仓新市场（opensPaused=false 且无 drawdown halt） |
+| `willMaintainExistingPositions` | `true` = 会维护已有仓位（AI重估、止盈止损、提前平仓） |
+| `opensPaused` | 是否已暂停开仓 |
+| `maintenancePaused` | 是否已暂停维护 |
 
-# 暂停开仓但继续维护已有仓位（mark-to-market、止盈止损、到期平仓仍正常执行）。
-node ./bin/polypulse.js risk pause --env-file .env --reason manual_pause
-
-# 恢复开仓（解除 risk pause）。
-node ./bin/polypulse.js risk resume --env-file .env
-
-# 查看 monitor 状态、最近运行和最近错误。
-node ./bin/polypulse.js monitor status --env-file .env
-
-# 查看系统级风控状态。
-node ./bin/polypulse.js risk status --env-file .env
-
-# 终止 monitor 进程（前台运行时直接 Ctrl+C；后台运行时用以下方式）。
-# 如果是 pm2 托管：
-pm2 stop polypulse-monitor
-pm2 delete polypulse-monitor
-
-# 如果是 nohup/& 后台运行：
-pkill -f "polypulse.js monitor run"
-
-# 如果是 systemd 服务：
-systemctl stop polypulse-monitor
-```
+暂停状态不影响：mark-to-market 价格更新（dashboard 始终显示最新价格）、到期市场自动关仓（`market_closed`）。
 
 Codex 提示词版本：
 
 ```text
-1. 请根据需要执行 monitor stop 或 resume，并说明 stop/resume 状态。
-2. 请查看 monitor status，汇总最近运行、最近错误、暂停状态和 stop/resume 状态。
-3. 请查看 risk status，说明当前是否允许继续运行以及阻断原因。
+1. 请查看 monitor status，汇总当前开仓/维护暂停状态、最近运行和最近错误。
+2. 如需暂停开仓，请执行 monitor pause-opens；如需暂停仓位维护，请执行 monitor pause-maintenance。
 ```
 
 ### 服务器部署

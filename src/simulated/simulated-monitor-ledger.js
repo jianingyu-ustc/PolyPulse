@@ -134,7 +134,8 @@ export class SimulatedMonitorLedger {
 
   monitorState() {
     return {
-      status: "active",
+      opensPaused: this._opensPaused ?? false,
+      maintenancePaused: false,
       dailyTradeUsd: this.dailyTradeUsd,
       tradedMarkets: {},
       watchlist: [],
@@ -145,12 +146,17 @@ export class SimulatedMonitorLedger {
   riskState() {
     return {
       status: this._riskStatus ?? "active",
+      opensPaused: this._opensPaused ?? false,
       highWaterMarkUsd: this.highWaterMarkUsd
     };
   }
 
   setRiskStatus(status) {
     this._riskStatus = status;
+  }
+
+  setOpensPaused(value) {
+    this._opensPaused = !!value;
   }
 
   liveBalance() {

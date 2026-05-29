@@ -389,53 +389,47 @@ async function commandMonitor(args) {
   }
   if (args[1] === "status") {
     const state = await context.stateStore.getMonitorState();
+    const riskState = await context.stateStore.getRiskState();
+    const riskHalted = riskState.status === "halted";
     print({
       ok: true,
-      status: state.status,
+      willOpenNewPositions: !state.opensPaused && !riskHalted,
+      willMaintainExistingPositions: !state.maintenancePaused,
+      opensPaused: state.opensPaused ?? false,
+      opensPauseReason: state.opensPauseReason ?? null,
+      maintenancePaused: state.maintenancePaused ?? false,
+      maintenancePauseReason: state.maintenancePauseReason ?? null,
       lastRunId: state.lastRunId,
       lastStartedAt: state.lastStartedAt,
       lastCompletedAt: state.lastCompletedAt,
       dailyTradeUsd: state.dailyTradeUsd,
       tradedMarketKeys: Object.keys(state.tradedMarkets ?? {}).length,
-      watchlist: state.watchlist,
-      blocklist: state.blocklist,
       inFlightRun: state.inFlightRun?.runId ?? null,
       lastError: state.lastError
     });
     return;
   }
-  if (args[1] === "stop") {
-    const state = await context.stateStore.stopMonitor(option(args, "--reason", "manual_stop"));
-    print({ ok: true, status: state.status, stopReason: state.stopReason, updatedAt: state.updatedAt });
+  if (args[1] === "pause-opens") {
+    const state = await context.stateStore.pauseOpens(option(args, "--reason", "manual"));
+    print({ ok: true, opensPaused: state.opensPaused, opensPauseReason: state.opensPauseReason, updatedAt: state.updatedAt });
     return;
   }
-  if (args[1] === "resume") {
-    const state = await context.stateStore.resumeMonitor();
-    print({ ok: true, status: state.status, resumedAt: state.resumedAt, updatedAt: state.updatedAt });
+  if (args[1] === "resume-opens") {
+    const state = await context.stateStore.resumeOpens();
+    print({ ok: true, opensPaused: state.opensPaused, updatedAt: state.updatedAt });
+    return;
+  }
+  if (args[1] === "pause-maintenance") {
+    const state = await context.stateStore.pauseMaintenance(option(args, "--reason", "manual"));
+    print({ ok: true, maintenancePaused: state.maintenancePaused, maintenancePauseReason: state.maintenancePauseReason, updatedAt: state.updatedAt });
+    return;
+  }
+  if (args[1] === "resume-maintenance") {
+    const state = await context.stateStore.resumeMaintenance();
+    print({ ok: true, maintenancePaused: state.maintenancePaused, updatedAt: state.updatedAt });
     return;
   }
   throw new Error(`Unknown monitor command: ${args.join(" ")}`);
-}
-
-async function commandRisk(args) {
-  const context = await createContext(args);
-  if (args[1] === "status") {
-    print({ ok: true, riskState: await context.stateStore.getRiskState() });
-    return;
-  }
-  if (args[1] === "pause") {
-    print({ ok: true, riskState: await context.stateStore.pauseRisk(option(args, "--reason", "manual_pause")) });
-    return;
-  }
-  if (args[1] === "halt") {
-    print({ ok: true, riskState: await context.stateStore.haltRisk(option(args, "--reason", "manual_halt")) });
-    return;
-  }
-  if (args[1] === "resume") {
-    print({ ok: true, riskState: await context.stateStore.resumeRisk() });
-    return;
-  }
-  throw new Error(`Unknown risk command: ${args.join(" ")}`);
 }
 
 function help() {
@@ -455,9 +449,10 @@ function help() {
       "polypulse predict --market <market-id-or-slug>",
       "polypulse risk evaluate --market <market-id-or-slug> --max-amount 1 --env-file <path>",
       "polypulse trade once --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
-      "polypulse risk status|pause|halt|resume",
       "polypulse monitor run --env-file <path> --confirm LIVE --rounds 1",
-      "polypulse monitor status|stop|resume"
+      "polypulse monitor status",
+      "polypulse monitor pause-opens|resume-opens",
+      "polypulse monitor pause-maintenance|resume-maintenance"
     ]
   };
 }
@@ -478,7 +473,6 @@ export async function main(args = []) {
   if (group === "predict") return await commandPredict(args);
   if (group === "risk" && command === "evaluate") return await commandRiskEvaluate(args);
   if (group === "trade" && command === "once") return await commandTradeOnce(args);
-  if (group === "risk") return await commandRisk(args);
   if (group === "monitor") return await commandMonitor(args);
   throw new Error(`Unknown command: ${args.join(" ")}`);
 }

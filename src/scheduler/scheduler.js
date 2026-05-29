@@ -981,7 +981,7 @@ export class Scheduler {
     return { decision: boundedDecision, risk, order };
   }
 
-  async reviewPositions({ runId, accumulator, confirmation = null }) {
+  async reviewPositions({ runId, accumulator, confirmation = null, maintenancePaused = false }) {
     const simulated = !!this.simulatedLedger;
     const ledger = this.simulatedLedger;
     const markets = accumulator.scan.markets ?? [];
@@ -999,6 +999,7 @@ export class Scheduler {
     for (const position of positions) {
       const signal = closeSignal(position, this.config);
       if (!signal) continue;
+      if (maintenancePaused && signal !== "market_closed") continue;
       if (simulated) {
         const closed = await ledger.closePosition(position.positionId, signal);
         if (closed) {
@@ -1039,7 +1040,9 @@ export class Scheduler {
       }
     }
 
-    if (this.config.monitor?.holdUntilSettlement) {
+    if (maintenancePaused) {
+      if (simulated) await ledger.log("position.review_skipped_all", { reason: "maintenance_paused" });
+    } else if (this.config.monitor?.holdUntilSettlement) {
       const remaining = simulated ? ledger.positions : (await this.stateStore.getPortfolio()).positions ?? [];
       for (const position of remaining) {
         if (simulated) {
@@ -1500,17 +1503,6 @@ export class Scheduler {
       await ledger.beginRound({ runId, limit: marketId ? 1 : limit, maxAmountUsd: amountUsd });
     } else {
       accumulator.recoveredRun = await this.stateStore.recoverMonitorRun();
-      const monitorState = await this.stateStore.getMonitorState();
-      if (monitorState.status === "stopped") {
-        return {
-          ok: true,
-          status: "stopped",
-          runId,
-          reason: monitorState.stopReason ?? "monitor_stopped",
-          stages,
-          artifact: null
-        };
-      }
       await this.stateStore.startMonitorRun({ runId });
     }
 
@@ -1902,9 +1894,13 @@ export class Scheduler {
 
   async runSimulatedMonitorRound({ confirmation = null, limit = null, maxAmountUsd = null } = {}) {
     await this._ensureLedgerCash();
+    let maintenancePaused = false;
     try {
       const rs = await this.stateStore.getRiskState();
+      const monState = await this.stateStore.getMonitorState();
       this.simulatedLedger.setRiskStatus(rs?.status);
+      this.simulatedLedger.setOpensPaused(monState.opensPaused ?? false);
+      maintenancePaused = monState.maintenancePaused ?? false;
     } catch { /* stateStore unavailable in test */ }
     this._monitorRoundCount += 1;
     const runId = monitorRunId();
@@ -1935,7 +1931,7 @@ export class Scheduler {
         });
         await ledger.logScan(accumulator.scan);
         await this.applyTopicDiscovery({ accumulator, ledger });
-        await this.reviewPositions({ runId, accumulator });
+        await this.reviewPositions({ runId, accumulator, maintenancePaused });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
           monitorState: ledger.monitorState(),
@@ -2168,14 +2164,7 @@ export class Scheduler {
     const startedAt = nowIso();
     const recoveredRun = await this.stateStore.recoverMonitorRun();
     const monitorState = await this.stateStore.getMonitorState();
-    if (monitorState.status === "stopped") {
-      return {
-        ok: true,
-        status: "stopped",
-        reason: monitorState.stopReason ?? "monitor_stopped",
-        artifact: null
-      };
-    }
+    const maintenancePaused = monitorState.maintenancePaused ?? false;
 
     await this.stateStore.startMonitorRun({ runId });
     const accumulator = {
@@ -2211,7 +2200,7 @@ export class Scheduler {
     try {
       await withTimeout(async () => {
         accumulator.scan = await this.marketSource.scan(limit == null ? {} : { limit });
-        await this.reviewPositions({ runId, accumulator, confirmation });
+        await this.reviewPositions({ runId, accumulator, confirmation, maintenancePaused });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
           monitorState: await this.stateStore.getMonitorState(),
@@ -2352,13 +2341,6 @@ export class Scheduler {
     const results = [];
     let completed = 0;
     while (rounds == null || completed < rounds) {
-      const state = this.simulatedLedger ? { status: "active" } : await this.stateStore.getMonitorState();
-      if (!this.simulatedLedger && state.status === "stopped") {
-        const result = { ok: true, status: "stopped", reason: state.stopReason ?? "monitor_stopped", artifact: null };
-        results.push(result);
-        if (onRound) await onRound(result);
-        break;
-      }
       const result = await this.monitorRun({ confirmation, limit, maxAmountUsd });
       results.push(result);
       if (onRound) await onRound(result);
