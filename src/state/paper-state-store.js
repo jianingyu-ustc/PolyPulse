@@ -169,6 +169,26 @@ export class PaperStateStore {
     await this.writeState(state);
   }
 
+  async getMonitorState() {
+    return {
+      opensPaused: false,
+      opensPauseReason: null,
+      maintenancePaused: false,
+      maintenancePauseReason: null,
+      lastRunId: null,
+      lastStartedAt: null,
+      lastCompletedAt: null,
+      dailyTradeUsd: { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 },
+      tradedMarkets: {},
+      inFlightRun: null,
+      lastError: null
+    };
+  }
+
+  async getRiskState() {
+    return { status: "active", opensPaused: false, highWaterMarkUsd: 0 };
+  }
+
   async syncFromLedger(ledger) {
     const state = await this.readState();
     state.initialCashUsd = roundUsd(ledger.initialCashUsd);
