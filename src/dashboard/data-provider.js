@@ -7,10 +7,10 @@ function round(value, digits = 4) {
 const CATEGORY_SLUG_PATTERNS = [
   [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat|governor/, "politics"],
   [/econ|fed |inflation|gdp|cpi|interest.rate|tariff|employment|jobs|non.?farm|central.bank|reserve.bank/, "economics"],
-  [/sport|\bnba\b|\bnfl\b|\bmlb\b|\bnhl\b|soccer|football|tennis|\bf1\b|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-|fifwc|atp|wta|bra2-|exact.score|world.cup|-draw$/, "sports"],
+  [/sport|\bnba\b|\bnfl\b|\bmlb\b|\bnhl\b|soccer|football|tennis|wimbledon|\bf1\b|ufc|boxing|rugby|cricket|golf|memorial.tournament|pga|total-\dpt5|spread-home|spread-away|btts|-win-on-|halftime|epl-|mls-|lol-|cs2-|\bfif\b|fifwc|atp|wta|bra2-|exact.score|world.cup|-draw\b/, "sports"],
   [/crypto|bitcoin|ethereum|solana|xrp|defi|etf/, "crypto"],
   [/tech|\bai\b|openai|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk|neuralink/, "tech"],
-  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold|valuation/, "finance"],
+  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold|valuation|googl|alphabet/, "finance"],
   [/weather|climate|hurricane|temperature/, "weather"],
   [/culture|entertain|movie|music|oscar|survivor|eurovision|tweet|mrbeast|youtube|video.*views/, "culture"],
   [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military|diplomat|lebanon|israel/, "geopolitics"],
@@ -153,7 +153,12 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
           } else if (eventType === "order.blocked") {
             const kv = parseKeyValuePairs(kvString);
             if (kv.market) {
-              phaseInfo.set(kv.market, { phase: "risk", reason: kv.reason || null, timestamp });
+              const existing = phaseInfo.get(kv.market);
+              if (existing && existing.phase === "ranking") {
+                existing.timestamp = timestamp;
+              } else {
+                phaseInfo.set(kv.market, { phase: "risk", reason: kv.reason || null, timestamp });
+              }
             }
           } else if (eventType === "candidate") {
             const kv = parseKeyValuePairs(kvString);
@@ -175,9 +180,9 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
             }
           }
         }
-        // Also add markets blocked at risk/order phase that passed candidate selection
+        // Also add markets blocked at risk/ranking phase that passed candidate selection
         for (const [market, pInfo] of phaseInfo) {
-          if (pInfo.phase === "risk" && !skippedMap.has(market)) {
+          if ((pInfo.phase === "risk" || pInfo.phase === "ranking") && !skippedMap.has(market)) {
             const info = candidateInfo.get(market) || {};
             skippedMap.set(market, {
               marketId: market,
@@ -185,7 +190,7 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
               marketSlug: market,
               category: inferCategory({ marketSlug: market, question: info.question }),
               liquidityUsd: info.liquidityUsd ?? null,
-              phase: "risk",
+              phase: pInfo.phase,
               reason: pInfo.reason || null,
               skippedAt: pInfo.timestamp || null
             });
