@@ -548,6 +548,7 @@ export class Scheduler {
               await this.stateStore.writeState({
                 initialCashUsd: this.simulatedLedger.initialCashUsd,
                 cashUsd: this.simulatedLedger.cashUsd,
+                totalEquityUsd: this.simulatedLedger.initialCashUsd,
                 highWaterMarkUsd: this.simulatedLedger.highWaterMarkUsd,
                 maxDrawdownUsd: this.simulatedLedger.maxDrawdownUsd,
                 positions: this.simulatedLedger.positions,
