@@ -127,14 +127,14 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
           const [, timestamp, eventType, kvString] = match;
           if (eventType === "candidate") {
             const kv = parseKeyValuePairs(kvString);
-            if (kv.selected === "false" && kv.reason && kv.market) {
+            if (kv.selected === "false" && (kv.reasons || kv.reason) && kv.market) {
               if (!skippedMap.has(kv.market)) {
                 skippedMap.set(kv.market, {
                   market: kv.market,
                   category: kv.category || null,
                   liquidity: kv.liq ? Number(kv.liq) : null,
                   stage: null,
-                  reason: kv.reason,
+                  reason: kv.reasons || kv.reason,
                   timestamp
                 });
               }
@@ -175,13 +175,10 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
 function parseKeyValuePairs(kvString) {
   const result = {};
   if (!kvString) return result;
-  let current = kvString.trim();
-  while (current.length > 0) {
-    const match = current.match(/^(\w+)=(.+?)(?:\s+(\w+)=|$)/);
-    if (!match) break;
-    const [, key, value, rest] = match;
-    result[key] = decodeValue(value.trim());
-    current = rest || "";
+  const re = /(\w+)=((?:"[^"]*"|[^\s])+)/g;
+  let m;
+  while ((m = re.exec(kvString)) !== null) {
+    result[m[1]] = decodeValue(m[2]);
   }
   return result;
 }
