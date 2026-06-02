@@ -121,24 +121,74 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
         const lines = logContent.split("\n");
         const recentLines = lines.slice(-5000);
         const skippedMap = new Map();
+        const candidateInfo = new Map();
+        const phaseInfo = new Map();
         for (const line of recentLines) {
           const match = line.match(/^\[([^\]]+)\]\s+([a-z._]+)\s*\|?\s*(.*)$/);
           if (!match) continue;
           const [, timestamp, eventType, kvString] = match;
-          if (eventType === "candidate") {
+          if (eventType === "topics.candidate") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.market) {
+              candidateInfo.set(kv.market, {
+                question: kv.question || null,
+                liquidityUsd: kv.liq ? Number(kv.liq) : null
+              });
+            }
+          } else if (eventType === "candidate.prescreen") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.market && kv.action === "SKIP") {
+              phaseInfo.set(kv.market, { phase: "prescreen", reason: kv.reason || null });
+            }
+          } else if (eventType === "candidate.triage") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.market && kv.action === "reject") {
+              phaseInfo.set(kv.market, { phase: "triage", reason: kv.reason || null });
+            }
+          } else if (eventType === "candidate.ranked") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.market && kv.action === "skip") {
+              phaseInfo.set(kv.market, { phase: "ranking", reason: kv.reason || null });
+            }
+          } else if (eventType === "order.blocked") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.market) {
+              phaseInfo.set(kv.market, { phase: "risk", reason: kv.reason || null });
+            }
+          } else if (eventType === "candidate") {
             const kv = parseKeyValuePairs(kvString);
             if (kv.selected === "false" && (kv.reasons || kv.reason) && kv.market) {
               if (!skippedMap.has(kv.market)) {
+                const info = candidateInfo.get(kv.market) || {};
+                const pInfo = phaseInfo.get(kv.market) || {};
                 skippedMap.set(kv.market, {
-                  market: kv.market,
-                  category: kv.category || null,
-                  liquidity: kv.liq ? Number(kv.liq) : null,
-                  stage: null,
-                  reason: kv.reasons || kv.reason,
-                  timestamp
+                  marketId: kv.market,
+                  question: info.question || null,
+                  marketSlug: kv.market,
+                  category: inferCategory({ marketSlug: kv.market, question: info.question }),
+                  liquidityUsd: info.liquidityUsd ?? null,
+                  phase: pInfo.phase || null,
+                  reason: pInfo.reason || kv.reasons || kv.reason,
+                  skippedAt: timestamp
                 });
               }
             }
+          }
+        }
+        // Also add markets blocked at risk/order phase that passed candidate selection
+        for (const [market, pInfo] of phaseInfo) {
+          if (pInfo.phase === "risk" && !skippedMap.has(market)) {
+            const info = candidateInfo.get(market) || {};
+            skippedMap.set(market, {
+              marketId: market,
+              question: info.question || null,
+              marketSlug: market,
+              category: inferCategory({ marketSlug: market, question: info.question }),
+              liquidityUsd: info.liquidityUsd ?? null,
+              phase: "risk",
+              reason: pInfo.reason || null,
+              skippedAt: null
+            });
           }
         }
         logSkipped = Array.from(skippedMap.values()).slice(-100).reverse();
