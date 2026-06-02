@@ -535,6 +535,30 @@ export class Scheduler {
       } catch {
         // state load failed — ledger starts with defaults
       }
+      // Sync initialCashUsd from real account balance if state has no positions yet
+      if (this.simulatedLedger.positions.length === 0 && this.simulatedLedger.closedTrades?.length === 0) {
+        try {
+          const balance = await this.liveBroker.getBalance();
+          const cashUsd = Number(balance.collateralBalance) || 0;
+          if (cashUsd > 0) {
+            this.simulatedLedger.initialCashUsd = Number(cashUsd.toFixed(4));
+            this.simulatedLedger.cashUsd = this.simulatedLedger.initialCashUsd;
+            this.simulatedLedger.highWaterMarkUsd = this.simulatedLedger.initialCashUsd;
+            if (this.stateStore.writeState) {
+              await this.stateStore.writeState({
+                initialCashUsd: this.simulatedLedger.initialCashUsd,
+                cashUsd: this.simulatedLedger.cashUsd,
+                highWaterMarkUsd: this.simulatedLedger.highWaterMarkUsd,
+                maxDrawdownUsd: this.simulatedLedger.maxDrawdownUsd,
+                positions: this.simulatedLedger.positions,
+                closedTrades: this.simulatedLedger.closedTrades
+              });
+            }
+          }
+        } catch {
+          // balance fetch failed — keep persisted/default values
+        }
+      }
     } else {
       try {
         const balance = await this.liveBroker.getBalance();
