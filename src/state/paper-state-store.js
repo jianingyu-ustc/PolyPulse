@@ -170,23 +170,59 @@ export class PaperStateStore {
   }
 
   async getMonitorState() {
-    return {
-      opensPaused: false,
-      opensPauseReason: null,
-      maintenancePaused: false,
-      maintenancePauseReason: null,
-      lastRunId: null,
-      lastStartedAt: null,
-      lastCompletedAt: null,
-      dailyTradeUsd: { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 },
-      tradedMarkets: {},
-      inFlightRun: null,
-      lastError: null
-    };
+    if (!this._monitorState) {
+      this._monitorState = {
+        opensPaused: false,
+        opensPauseReason: null,
+        maintenancePaused: false,
+        maintenancePauseReason: null,
+        lastRunId: null,
+        lastStartedAt: null,
+        lastCompletedAt: null,
+        dailyTradeUsd: { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 },
+        tradedMarkets: {},
+        inFlightRun: null,
+        lastError: null,
+        updatedAt: nowIso()
+      };
+    }
+    return this._monitorState;
   }
 
   async getRiskState() {
     return { status: "active", opensPaused: false, highWaterMarkUsd: 0 };
+  }
+
+  async pauseOpens(reason = "manual") {
+    const ms = await this.getMonitorState();
+    ms.opensPaused = true;
+    ms.opensPauseReason = reason;
+    ms.updatedAt = nowIso();
+    return ms;
+  }
+
+  async resumeOpens() {
+    const ms = await this.getMonitorState();
+    ms.opensPaused = false;
+    ms.opensPauseReason = null;
+    ms.updatedAt = nowIso();
+    return ms;
+  }
+
+  async pauseMaintenance(reason = "manual") {
+    const ms = await this.getMonitorState();
+    ms.maintenancePaused = true;
+    ms.maintenancePauseReason = reason;
+    ms.updatedAt = nowIso();
+    return ms;
+  }
+
+  async resumeMaintenance() {
+    const ms = await this.getMonitorState();
+    ms.maintenancePaused = false;
+    ms.maintenancePauseReason = null;
+    ms.updatedAt = nowIso();
+    return ms;
   }
 
   async syncFromLedger(ledger) {
