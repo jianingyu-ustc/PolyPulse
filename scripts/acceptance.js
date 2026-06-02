@@ -17,6 +17,7 @@ import path from "node:path";
 import { loadEnvConfig, redactSecrets, summarizeEnvConfig, validateEnvConfig } from "../src/config/env.js";
 import { PolymarketMarketSource } from "../src/adapters/polymarket-market-source.js";
 import { FileStateStore } from "../src/state/file-state-store.js";
+import { PaperStateStore } from "../src/state/paper-state-store.js";
 import { ArtifactWriter } from "../src/artifacts/artifact-writer.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 
@@ -110,7 +111,9 @@ try {
     throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
   }
 
-  const stateStore = new FileStateStore(config);
+  const stateStore = config.executionMode === "paper"
+    ? new PaperStateStore(config)
+    : new FileStateStore(config);
   const artifactWriter = new ArtifactWriter(config);
   const marketSource = new PolymarketMarketSource(config, stateStore);
   const scheduler = new Scheduler({ config, stateStore, artifactWriter, marketSource });
