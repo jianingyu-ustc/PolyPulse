@@ -225,10 +225,18 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
 function parseKeyValuePairs(kvString) {
   const result = {};
   if (!kvString) return result;
-  const re = /(\w+)=((?:"[^"]*"|[^\s])+)/g;
-  let m;
-  while ((m = re.exec(kvString)) !== null) {
-    result[m[1]] = decodeValue(m[2]);
+  const keyPositions = [];
+  const keyRe = /(?:^|\s)(\w+)=/g;
+  let km;
+  while ((km = keyRe.exec(kvString)) !== null) {
+    const keyStart = km[0].startsWith(" ") ? km.index + 1 : km.index;
+    keyPositions.push({ key: km[1], valueStart: keyStart + km[1].length + 1 });
+  }
+  for (let i = 0; i < keyPositions.length; i++) {
+    const { key, valueStart } = keyPositions[i];
+    const valueEnd = i + 1 < keyPositions.length ? keyPositions[i + 1].valueStart - keyPositions[i + 1].key.length - 2 : kvString.length;
+    const raw = kvString.slice(valueStart, valueEnd).trim();
+    result[key] = decodeValue(raw);
   }
   return result;
 }
