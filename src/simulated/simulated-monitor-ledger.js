@@ -227,7 +227,7 @@ export class SimulatedMonitorLedger {
       total_fetched: scan.totalFetched ?? 0,
       risk_flags: (scan.riskFlags ?? []).join(",") || "none"
     });
-    for (const [index, market] of (scan.markets ?? []).slice(0, 5).entries()) {
+    for (const [index, market] of (scan.markets ?? []).entries()) {
       await this.log("topics.candidate", {
         rank: index + 1,
         market: market.marketSlug,
