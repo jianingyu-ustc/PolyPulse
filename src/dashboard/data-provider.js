@@ -6,14 +6,14 @@ function round(value, digits = 4) {
 
 const CATEGORY_SLUG_PATTERNS = [
   [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat|governor/, "politics"],
-  [/sport|nba|nfl|mlb|nhl|soccer|football|tennis|f1|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-|fifwc|atp|wta/, "sports"],
+  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff|employment|jobs|non.?farm|central.bank|reserve.bank/, "economics"],
+  [/sport|\bnba\b|\bnfl\b|\bmlb\b|\bnhl\b|soccer|football|tennis|\bf1\b|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-|fifwc|atp|wta|bra2-|exact.score|world.cup|-draw$/, "sports"],
   [/crypto|bitcoin|ethereum|solana|xrp|defi|etf/, "crypto"],
-  [/tech| ai |openai|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk/, "tech"],
-  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold/, "finance"],
-  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff|employment|jobs|non.?farm/, "economics"],
+  [/tech|\bai\b|openai|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk|neuralink/, "tech"],
+  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold|valuation/, "finance"],
   [/weather|climate|hurricane|temperature/, "weather"],
-  [/culture|entertain|movie|music|oscar|survivor|eurovision|tweet/, "culture"],
-  [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military/, "geopolitics"],
+  [/culture|entertain|movie|music|oscar|survivor|eurovision|tweet|mrbeast|youtube|video.*views/, "culture"],
+  [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military|diplomat|lebanon|israel/, "geopolitics"],
   [/mention/, "mentions"]
 ];
 
