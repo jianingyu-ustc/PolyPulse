@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 function round(value, digits = 4) {
   return Number((Number(value) || 0).toFixed(digits));
 }
@@ -95,15 +97,57 @@ function formatClosedTrade(trade) {
   };
 }
 
-export function createPaperDataProvider(scheduler) {
-  return () => {
+export function createPaperDataProvider(scheduler, { stateStore, logPath } = {}) {
+  return async () => {
     const ledger = scheduler.simulatedLedger;
     if (!ledger) {
-      return { error: "no_ledger", startedAt: null, executionMode: "paper", summary: {}, openPositions: [], closedPositions: [] };
+      return { error: "no_ledger", startedAt: null, executionMode: "paper", summary: {}, openPositions: [], closedPositions: [], skippedCandidates: [] };
     }
     const stats = ledger.statistics();
     const startedAt = scheduler._startedAt ?? new Date().toISOString();
     const returns = computeReturns(ledger.initialCashUsd, stats.totalEquityUsd, startedAt);
+
+    let allClosedTrades = [];
+    let logSkipped = [];
+
+    if (stateStore && logPath) {
+      try {
+        const paperState = await stateStore.readState();
+        allClosedTrades = paperState.closedTrades || [];
+      } catch {}
+
+      try {
+        const logContent = await readFile(logPath, "utf8");
+        const lines = logContent.split("\n");
+        const recentLines = lines.slice(-5000);
+        const skippedMap = new Map();
+        for (const line of recentLines) {
+          const match = line.match(/^\[([^\]]+)\]\s+([a-z._]+)\s*\|?\s*(.*)$/);
+          if (!match) continue;
+          const [, timestamp, eventType, kvString] = match;
+          if (eventType === "candidate") {
+            const kv = parseKeyValuePairs(kvString);
+            if (kv.selected === "false" && kv.reason && kv.market) {
+              if (!skippedMap.has(kv.market)) {
+                skippedMap.set(kv.market, {
+                  market: kv.market,
+                  category: kv.category || null,
+                  liquidity: kv.liq ? Number(kv.liq) : null,
+                  stage: null,
+                  reason: kv.reason,
+                  timestamp
+                });
+              }
+            }
+          }
+        }
+        logSkipped = Array.from(skippedMap.values()).slice(-100).reverse();
+      } catch {}
+    }
+
+    const ledgerClosedTrades = ledger.closedTrades.map(formatClosedTrade);
+    const stateClosedTrades = allClosedTrades.map(formatClosedTrade);
+    const allClosed = mergeClosedTrades(stateClosedTrades, ledgerClosedTrades);
 
     return {
       startedAt,
@@ -115,17 +159,47 @@ export function createPaperDataProvider(scheduler) {
         unrealizedPnlUsd: stats.unrealizedPnlUsd,
         realizedPnlUsd: stats.realizedPnlUsd,
         winRate: stats.winRate,
-        closedTrades: stats.closedTrades,
+        closedTrades: allClosed.length,
         wins: stats.wins,
         losses: stats.losses,
         maxDrawdownUsd: stats.maxDrawdownUsd,
         ...returns
       },
       openPositions: ledger.positions.map(formatPosition),
-      closedPositions: ledger.closedTrades.slice(-100).reverse().map(formatClosedTrade),
-      skippedCandidates: (ledger.skippedCandidates ?? []).slice(-500).reverse()
+      closedPositions: allClosed,
+      skippedCandidates: logSkipped
     };
   };
+}
+
+function parseKeyValuePairs(kvString) {
+  const result = {};
+  if (!kvString) return result;
+  let current = kvString.trim();
+  while (current.length > 0) {
+    const match = current.match(/^(\w+)=(.+?)(?:\s+(\w+)=|$)/);
+    if (!match) break;
+    const [, key, value, rest] = match;
+    result[key] = decodeValue(value.trim());
+    current = rest || "";
+  }
+  return result;
+}
+
+function decodeValue(value) {
+  if (!value) return value;
+  if (value === "none" || value === "n/a") return null;
+  if (value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1);
+  if (value.startsWith("{") || value.startsWith("[")) {
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  return value;
+}
+
+function mergeClosedTrades(stateTrades, ledgerTrades) {
+  const seen = new Set(stateTrades.map(t => t.marketId || t.positionId));
+  const uniqueLedger = ledgerTrades.filter(t => !seen.has(t.marketId || t.positionId));
+  return [...stateTrades, ...uniqueLedger].slice(-200).reverse();
 }
 
 export function createLiveDataProvider(stateStore, scheduler) {

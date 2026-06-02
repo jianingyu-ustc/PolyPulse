@@ -518,7 +518,7 @@ export class Scheduler {
     this.dashboardServer = null;
     if (config.dashboard?.enabled) {
       const dataProvider = this.simulatedLedger
-        ? createPaperDataProvider(this)
+        ? createPaperDataProvider(this, { stateStore: this.stateStore, logPath: config.monitorLogPath })
         : createLiveDataProvider(this.stateStore, this);
       this.dashboardServer = new DashboardServer({ config, dataProvider });
       this.dashboardServer.start();
@@ -527,17 +527,27 @@ export class Scheduler {
 
   async _ensureLedgerCash() {
     if (!this.simulatedLedger || this._ledgerInitialized) return;
-    try {
-      const balance = await this.liveBroker.getBalance();
-      const cashUsd = Number(balance.collateralBalance) || 0;
-      this.simulatedLedger.initialCashUsd = Number(cashUsd.toFixed(4));
-      this.simulatedLedger.cashUsd = this.simulatedLedger.initialCashUsd;
-      this.simulatedLedger.highWaterMarkUsd = this.simulatedLedger.initialCashUsd;
-      if (this.liveBroker.client?.setBalance) {
-        this.liveBroker.client.setBalance(cashUsd);
+
+    if (this.config.executionMode === "paper" && this.stateStore) {
+      try {
+        const paperState = await this.stateStore.getInitialState();
+        this.simulatedLedger.loadPersistedState(paperState);
+      } catch {
+        // state load failed — ledger starts with defaults
       }
-    } catch {
-      // balance fetch failed — ledger starts with 0
+    } else {
+      try {
+        const balance = await this.liveBroker.getBalance();
+        const cashUsd = Number(balance.collateralBalance) || 0;
+        this.simulatedLedger.initialCashUsd = Number(cashUsd.toFixed(4));
+        this.simulatedLedger.cashUsd = this.simulatedLedger.initialCashUsd;
+        this.simulatedLedger.highWaterMarkUsd = this.simulatedLedger.initialCashUsd;
+        if (this.liveBroker.client?.setBalance) {
+          this.liveBroker.client.setBalance(cashUsd);
+        }
+      } catch {
+        // balance fetch failed — ledger starts with 0
+      }
     }
     this._ledgerInitialized = true;
   }
@@ -2124,6 +2134,9 @@ export class Scheduler {
         await this.predictionTracker.emitReport(ledger);
       }
       await ledger.endRound({ runId, status: "completed", errors: accumulator.errors });
+      if (this.config.executionMode === "paper" && this.stateStore?.syncFromLedger) {
+        await this.stateStore.syncFromLedger(ledger);
+      }
       return {
         ok: true,
         status: "completed",

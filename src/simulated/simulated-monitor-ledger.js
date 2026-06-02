@@ -116,6 +116,16 @@ export class SimulatedMonitorLedger {
     await appendFile(this.logPath, `[${nowIso()}] ${message}${suffix}\n`, "utf8");
   }
 
+  loadPersistedState(state) {
+    if (!state) return;
+    this.initialCashUsd = state.initialCashUsd ?? this.initialCashUsd;
+    this.cashUsd = state.cashUsd ?? this.cashUsd;
+    this.highWaterMarkUsd = state.highWaterMarkUsd ?? this.highWaterMarkUsd;
+    this.maxDrawdownUsd = state.maxDrawdownUsd ?? this.maxDrawdownUsd;
+    this.positions = state.positions ?? [];
+    this.closedTrades = state.closedTrades ?? [];
+  }
+
   recordSkippedCandidate({ market, reason, phase }) {
     this.skippedCandidates.push({
       marketSlug: market.marketSlug ?? market.marketId,

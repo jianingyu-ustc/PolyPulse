@@ -59,6 +59,8 @@ codex exec \
 
 #### 多选项市场（Multi-Outcome）联合建模链路
 
+**单/多选项市场识别原理**：Polymarket Gamma API 对互斥多选项事件（如"谁会赢得 XX 选举"）使用 negative risk 架构，每个候选人是一个独立的 Yes/No 二元子市场，共享同一个 `eventId`，API 返回 `negRisk=true`。普通二元市场（如"BTC 会到 10 万吗？"）的 `negRisk=false`。系统通过 `market-normalizer.js` 读取该字段（`negRisk: asBoolean(row.negRisk)`），在 `buildCandidates` 中为 `negRisk=true` 的市场设置 `eventGroup = market.eventId || market.eventSlug`，`negRisk=false` 的市场 `eventGroup = null`。`groupCandidatesByEvent` 按 `eventGroup` 分组：同组 ≥ 2 个候选走联合建模（`predictEventGroup`），仅 1 个候选降级为单市场预测。
+
 在 Polymarket 上，多选项话题（如 "SC Governor Republican Primary Winner"）的每个候选人都是一个独立的二元子市场（"Will Ralph Norman win?" Yes/No），所有子市场共享同一个 `eventId`。系统对 `negRisk=true` 的事件启用联合建模流程：
 
 | Step | 阶段 | AI Runtime | 与单市场链路的差异 |
@@ -67,7 +69,7 @@ codex exec \
 | 1 | **Scan** | 无 AI | 同。扫描后为 `negRisk=true` 子市场挂 `eventGroup` 字段（`eventId \|\| eventSlug`），下游全链路透传 |
 | 2 | **Pre-screen / Triage** | `prescreen-runtime.js` + `candidate-triage-runtime.js` | 同。各子市场独立预筛和 triage |
 | 3 | **Evidence** | `evidence-research-runtime.js`（每子市场1次） | 同。各子市场独立收集证据 |
-| 4 | **Prediction** | `codex-runtime.js` `buildEventGroupPrompt`（每事件组1次） | **联合估计**：同 `eventGroup` 的子市场合并为一次 AI 调用（`estimateEventGroup`），prompt 变为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"，输出 `{outcomes: [{market_slug, probability}]}`，后处理归一化至 Σ=1 |
+| 4 | **Prediction** | `codex-runtime.js` `buildEventGroupPrompt`（每事件组1次） | **联合估计**：同 `eventGroup` 的子市场合并为一次 AI 调用（`estimateEventGroup`），prompt 变为"以下是同一事件的 N 个候选人及各自盘口价格，请给出联合概率分布"，输出 `{outcomes: [{market_slug, probability}]}`，后处理对 **Yes 概率**归一化至 Σ=1。前提：`negRisk=true` 的定义是 Yes outcomes 互斥（只有一个结果为真），No outcomes 不互斥（多个"不发生"可同时为真，Σ(No)>1 是正确的）；系统仅对 Yes 侧归一化，No 概率逐市场独立计算 `1 - Yes_normalized` |
 | 4.5 | **约束传播** | 无 AI | 当联合估计不可用时，用已有高信度兄弟估计约束当前市场概率上限（如兄弟 A 已估 55%，则当前市场上限 45%） |
 | 5 | **Decision** | 无 AI | **组内最优选择**：`analyzeEventGroup` 基于联合概率向量一次性计算所有子市场 Yes/No 双方向的 edge/Kelly/monthlyReturn，返回组内全局最优 1-2 个交易 |
 | 5.5 | **套利检测** | 无 AI | 在执行前对全量扫描市场（非仅已筛选候选）按 `eventId` 分组计算 `Σ(yes_bestAsk)`；> 1 则全买 No，< 1 则全买 Yes |
@@ -302,7 +304,8 @@ approvedUsd = min(
 | 维度 | 一次性验收 | 持续 Monitor |
 | --- | --- | --- |
 | 轮次 | 1 轮，运行后退出 | 无限循环或 N 轮，间隔 `MONITOR_INTERVAL_SECONDS` |
-| 仓位持久性 | 不持久，round 结束即丢 | 内存账本跨轮持久：开仓、持有、平仓都在同一进程内存中累积 |
+| 仓位持久性（live） | 不持久 | `live-state.json` 跨进程持久：已开仓、已关仓均保存 |
+| 仓位持久性（paper） | 不持久 | `paper-state.json` 跨进程持久：已开仓、已关仓均保存，Dashboard 显示全部历史 |
 | 仓位复核 | 仅对已有仓位做一次 mark-to-market | 每轮对所有持仓做 mark-to-market + 重新预测，决定 hold/reduce/close |
 | 胜率计算 | 无（单轮无平仓结算） | 有：`wins / (wins + losses)`，每次平仓时更新 |
 | 输出 | `runtime-artifacts/acceptance-runs/<ts>/step1-7.stdout.log` + `summary.json` | 追加写入 `MONITOR_LOG_PATH` + per-round `runtime-artifacts/monitor/<date>/<run-slug>/` |
@@ -348,17 +351,23 @@ winRate = wins / (wins + losses)
 - `runtime-artifacts/codex-runtime/<ts>/runtime-log.md` — 每次 AI 调用的完整 prompt/output 归档
 - 每个候选的 `predictions/<market-slug>/evidence.json, estimate.json, decision.json`
 
-两种模式的唯一区别是 `paper` 模式额外追加写入 `MONITOR_LOG_PATH` 人类可读日志（含仓位、PnL、胜率等内存账本状态）。
+两种模式的持久化差异：
+
+| 模式 | 状态持久化 | Dashboard 数据源 |
+|---|---|---|
+| `paper` | `{STATE_DIR}/paper-state.json`（已开仓、已关仓、highWaterMark）+ log 追加 | paper-state.json（全部已关仓）+ log（最近 100 笔跳过）+ 内存（当前仓位） |
+| `live` | `{STATE_DIR}/live-state.json`（完整状态）+ log 追加 | live-state.json（全部数据） |
+
+**Paper 模式持久化**：进程重启后会从 `paper-state.json` 恢复已开仓市场和历史已关仓记录，Dashboard 可显示跨会话的历史数据。log 文件仅用于解析最近跳过的市场（最近 100 笔）。
 
 `logs/` 与 `runtime-artifacts/` 的区别：
 
-| | `logs/`（`MONITOR_LOG_PATH`） | `runtime-artifacts/`（`ARTIFACT_DIR`） |
-|---|---|---|
-| 格式 | 单文件追加的人类可读纯文本日志 | 结构化 JSON 文件，按 per-round 目录组织 |
-| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计和 dashboard 数据源 |
-| 生命周期 | 持续追加，不自动清理 | 受 `ARTIFACT_RETENTION_DAYS` 和 `ARTIFACT_MAX_RUNS` 控制自动清理 |
-| 内容 | session header（含加载的环境变量）、事件流（round.start/end、prediction、open/close、performance report 等） | markets.json、candidates.json、candidate-triage.json、decisions.json、risk.json、orders.json、summary.md、provider runtime 日志 |
-| 模式差异 | `paper` 模式写入完整内存账本状态；`live` 模式同样写入 | 两种模式生成完全相同的结构化 artifact |
+| | `logs/`（`MONITOR_LOG_PATH`） | `runtime-artifacts/`（`ARTIFACT_DIR`） | `{STATE_DIR}/paper-state.json` | `{STATE_DIR}/live-state.json` |
+|---|---|---|---|---|
+| 格式 | 单文件追加的人类可读纯文本日志 | 结构化 JSON 文件，按 per-round 目录组织 | JSON 状态文件 | JSON 状态文件 |
+| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计 | Paper 模式持久化（已开仓、已关仓） | Live 模式完整状态 |
+| 生命周期 | 持续追加，不自动清理 | 受 `ARTIFACT_RETENTION_DAYS` 和 `ARTIFACT_MAX_RUNS` 控制自动清理 | 持续更新 | 持续更新 |
+| 模式差异 | `paper` / `live` 均写入 | 两种模式生成完全相同的结构化 artifact | 仅 paper 模式使用 | 仅 live 模式使用 |
 
 ### Monitor Log 格式（paper / live 通用）
 

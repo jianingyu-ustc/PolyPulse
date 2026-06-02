@@ -43,7 +43,15 @@ async function createContext(args, overrides = {}) {
   if (config.marketSource !== "polymarket") {
     throw new Error(`unsupported_market_source: ${config.marketSource}; only polymarket is supported`);
   }
-  const stateStore = new FileStateStore(config);
+
+  let stateStore;
+  if (config.executionMode === "paper") {
+    const { PaperStateStore } = await import("./state/paper-state-store.js");
+    stateStore = new PaperStateStore(config);
+  } else {
+    stateStore = new FileStateStore(config);
+  }
+
   const artifactWriter = new ArtifactWriter(config);
   const marketSource = new PolymarketMarketSource(config, stateStore);
   return { config, stateStore, artifactWriter, marketSource };
