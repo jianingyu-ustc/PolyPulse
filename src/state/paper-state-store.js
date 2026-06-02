@@ -18,10 +18,10 @@ function emptyPaperState(now = nowIso()) {
   return {
     version: 1,
     mode: "paper",
-    initialCashUsd: 1000,
-    cashUsd: 1000,
-    totalEquityUsd: 1000,
-    highWaterMarkUsd: 1000,
+    initialCashUsd: 0,
+    cashUsd: 0,
+    totalEquityUsd: 0,
+    highWaterMarkUsd: 0,
     maxDrawdownUsd: 0,
     positions: [],
     closedTrades: [],
@@ -84,17 +84,17 @@ export class PaperStateStore {
 
   async savePosition(position) {
     const state = await this.readState();
-    const positionsValue = state.positions.reduce((sum, p) => sum + (p.currentValueUsd || 0), 0);
-    state.cashUsd = state.initialCashUsd - state.positions.reduce((sum, p) => sum + (p.costUsd || 0), 0);
-    state.totalEquityUsd = roundUsd(state.cashUsd + positionsValue);
-    state.highWaterMarkUsd = Math.max(roundUsd(state.highWaterMarkUsd), roundUsd(state.totalEquityUsd));
-    state.maxDrawdownUsd = Math.max(roundUsd(state.maxDrawdownUsd), roundUsd(state.highWaterMarkUsd - state.totalEquityUsd));
     const existingIndex = state.positions.findIndex((p) => p.positionId === position.positionId);
     if (existingIndex >= 0) {
       state.positions[existingIndex] = position;
     } else {
       state.positions.push(position);
     }
+    state.cashUsd = roundUsd(state.initialCashUsd - state.positions.reduce((sum, p) => sum + (p.costUsd || 0), 0));
+    const positionsValue = state.positions.reduce((sum, p) => sum + (p.currentValueUsd || 0), 0);
+    state.totalEquityUsd = roundUsd(state.cashUsd + positionsValue);
+    state.highWaterMarkUsd = Math.max(roundUsd(state.highWaterMarkUsd), roundUsd(state.totalEquityUsd));
+    state.maxDrawdownUsd = Math.max(roundUsd(state.maxDrawdownUsd), roundUsd(state.highWaterMarkUsd - state.totalEquityUsd));
     await this.writeState(state);
     return state;
   }
@@ -171,9 +171,10 @@ export class PaperStateStore {
 
   async syncFromLedger(ledger) {
     const state = await this.readState();
+    state.initialCashUsd = roundUsd(ledger.initialCashUsd);
     state.positions = ledger.positions;
     state.closedTrades = ledger.closedTrades;
-    state.cashUsd = ledger.cashUsd;
+    state.cashUsd = roundUsd(ledger.cashUsd);
     const positionsValue = ledger.positions.reduce((sum, p) => sum + (p.currentValueUsd || 0), 0);
     state.totalEquityUsd = roundUsd(state.cashUsd + positionsValue);
     state.highWaterMarkUsd = roundUsd(ledger.highWaterMarkUsd);
