@@ -198,7 +198,7 @@ function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 function marketLink(p){
   var url = p.marketUrl;
   if(!url && p.marketId){
-    url = 'https://polymarket.com/event/' + encodeURIComponent(p.marketId);
+    url = 'https://polymarket.com/market/' + encodeURIComponent(p.marketId);
   }
   var label = (p.question || p.marketSlug || p.marketId || '-');
   if(label.length > 40) label = label.slice(0,38) + '..';
