@@ -5,15 +5,15 @@ function round(value, digits = 4) {
 }
 
 const CATEGORY_SLUG_PATTERNS = [
-  [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat/, "politics"],
-  [/sport|nba|nfl|mlb|nhl|soccer|football|tennis|f1|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-/, "sports"],
+  [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat|governor/, "politics"],
+  [/sport|nba|nfl|mlb|nhl|soccer|football|tennis|f1|ufc|boxing|rugby|cricket|total-\dpt5|spread-home|btts|-win-on-|epl-|mls-|lol-|cs2-|fifwc|atp|wta/, "sports"],
   [/crypto|bitcoin|ethereum|solana|xrp|defi|etf/, "crypto"],
-  [/tech| ai |openai|apple|google|nvidia|microsoft/, "tech"],
-  [/finance|stock|spy|s&p/, "finance"],
-  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff/, "economics"],
+  [/tech| ai |openai|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk/, "tech"],
+  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold/, "finance"],
+  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff|employment|jobs|non.?farm/, "economics"],
   [/weather|climate|hurricane|temperature/, "weather"],
-  [/culture|entertain|movie|music|oscar|survivor|eurovision/, "culture"],
-  [/geopolitic|war|conflict|iran|russia|china|sanction/, "geopolitics"],
+  [/culture|entertain|movie|music|oscar|survivor|eurovision|tweet/, "culture"],
+  [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military/, "geopolitics"],
   [/mention/, "mentions"]
 ];
 
@@ -153,7 +153,7 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
           } else if (eventType === "order.blocked") {
             const kv = parseKeyValuePairs(kvString);
             if (kv.market) {
-              phaseInfo.set(kv.market, { phase: "risk", reason: kv.reason || null });
+              phaseInfo.set(kv.market, { phase: "risk", reason: kv.reason || null, timestamp });
             }
           } else if (eventType === "candidate") {
             const kv = parseKeyValuePairs(kvString);
@@ -187,7 +187,7 @@ export function createPaperDataProvider(scheduler, { stateStore, logPath } = {})
               liquidityUsd: info.liquidityUsd ?? null,
               phase: "risk",
               reason: pInfo.reason || null,
-              skippedAt: null
+              skippedAt: pInfo.timestamp || null
             });
           }
         }

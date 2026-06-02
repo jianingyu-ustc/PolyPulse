@@ -365,7 +365,7 @@ winRate = wins / (wins + losses)
 | | `logs/`（`MONITOR_LOG_PATH`） | `runtime-artifacts/`（`ARTIFACT_DIR`） | `{STATE_DIR}/paper-state.json` | `{STATE_DIR}/live-state.json` |
 |---|---|---|---|---|
 | 格式 | 单文件追加的人类可读纯文本日志 | 结构化 JSON 文件，按 per-round 目录组织 | JSON 状态文件 | JSON 状态文件 |
-| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计 | Paper 模式持久化（已开仓、已关仓） | Live 模式完整状态 |
+| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计 | Paper 模式持久化：initialCashUsd / cashUsd / totalEquityUsd、highWaterMarkUsd / maxDrawdownUsd、positions 当前持仓、closedTrades 全量已关仓历史（含 realizedPnlUsd / returnPct / closeReason） | Live 模式完整状态：portfolio（cashUsd / totalEquityUsd / positions）、riskState（drawdown halt / highWaterMark）、monitorState（pause 状态 / runHistory / dailyTradeUsd / tradedMarkets / inFlightRun 崩溃恢复）、orders 全量历史、runs 调度历史 |
 | 生命周期 | 持续追加，不自动清理 | 受 `ARTIFACT_RETENTION_DAYS` 和 `ARTIFACT_MAX_RUNS` 控制自动清理 | 持续更新 | 持续更新 |
 | 模式差异 | `paper` / `live` 均写入 | 两种模式生成完全相同的结构化 artifact | 仅 paper 模式使用 | 仅 live 模式使用 |
 

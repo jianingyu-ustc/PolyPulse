@@ -344,7 +344,7 @@ function renderSkippedPage(){
   tbody.innerHTML=pageItems.map(function(c){return '<tr>'+
     '<td>'+marketLink(c)+'</td>'+
     '<td>'+(c.category||'-')+'</td>'+
-    '<td>$'+fmt(c.liquidityUsd,0)+'</td>'+
+    '<td>'+(c.liquidityUsd!=null?'$'+fmt(c.liquidityUsd,0):'-')+'</td>'+
     '<td>'+(c.phase||'-')+'</td>'+
     '<td style="white-space:normal;max-width:400px">'+esc(c.reason||'-')+'</td>'+
     '<td>'+ts(c.skippedAt)+'</td>'+
