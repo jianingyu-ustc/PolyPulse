@@ -1956,7 +1956,8 @@ export class Scheduler {
       recoveredRun: null
     };
 
-    await ledger.beginRound({ runId, limit, maxAmountUsd });
+    const effectiveMaxAmountUsd = maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd);
+    await ledger.beginRound({ runId, limit, maxAmountUsd: effectiveMaxAmountUsd });
 
     try {
       await withTimeout(async () => {
@@ -2048,7 +2049,7 @@ export class Scheduler {
         const baseRanked = rankPredictionsForExecution({
           predictions: validPredictions,
           portfolio: ledger.portfolio(),
-          amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
+          amountUsd: effectiveMaxAmountUsd,
           decisionEngine: this.decisionEngine,
           dynamicFeeParamsMap: dynamicFeeParamsMapSim
         });
@@ -2109,7 +2110,7 @@ export class Scheduler {
           const result = await this.evaluateAndMaybeSimulatedOrder({
             prediction,
             confirmation,
-            maxAmountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
+            maxAmountUsd: effectiveMaxAmountUsd,
             runId,
             orderCount,
             filledUsdThisRun

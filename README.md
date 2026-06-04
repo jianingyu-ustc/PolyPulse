@@ -135,6 +135,8 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~增加收益归因 artifact~~：已实现 `ReturnAttributionEngine`，将 P&L 分解为 prediction_error、market_price_change、fee_impact、slippage、position_size、holding_period 和 exit_decision 7 个因子。
 - [x] ~~进一步改进收益排序~~：已实现 `DownsideRiskRanker`，在 monthly return / net edge / Kelly 排序基础上加入下行风险评分（概率加权最大亏损、流动性风险、时间风险、价差风险、edge 质量）和跨轮资金分配惩罚（类别集中度、事件重复、可用资本），输出 risk-adjusted score 用于最终排序。
 - [x] ~~建立预测效果评估报表~~：已实现 `PredictionPerformanceTracker`，每 N 轮在 monitor log 中输出完整评估：hit rate、Brier score、校准偏差、按 confidence/category 分组胜率、edge 精度。
+- [ ] **[P0 阻断] AI confidence 始终为 low 导致系统完全停滞**：当前所有 AI 概率估算均返回 `confidence=low`，而 `MIN_AI_CONFIDENCE=medium`（risk-engine 中 `CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 }`，`confidenceBelow("low", "medium") → true → blocked`），导致所有 action=open 的市场均被 `ai_confidence_below_minimum` 阻断，系统不可能开出任何仓位。需排查：(1) 概率估算 prompt 中对 confidence 级别的定义是否过于严格（AI 可能认为只有 100% 确定才能给 medium）；(2) 考虑在 paper 模式下将 `MIN_AI_CONFIDENCE` 降为 `low`，或为 paper 模式设置单独的更宽松阈值；(3) 检查 few-shot example 中的 confidence 示例是否总是 low。
+- [ ] **[P1] confidence 评级 prompt 校准**：当前 AI 对所有市场（含有充分公开信息的政治/选举/体育市场）均给 `confidence=low`，说明 prompt 中的 confidence 定义过于保守。需调整：要求 AI 仅在"无法获取任何相关证据"时给 low，"有公开信息但不确定"给 medium，"有多个独立信息源交叉验证"给 high。同时更新 few-shot example 展示 medium/high confidence 的输出范例。
 - [ ] 将扫描结果升级为收益导向的 pulse snapshot：记录 `totalFetched`、`selectedCandidates`、category/tag 统计、过滤原因、risk flags、快照年龄，用于追踪哪些筛选条件提升命中率和收益率。
 - [ ] 优化候选筛选：用流动性、24h volume、spread、结束时间、category/tag、证据新鲜度、AI triage priority_score、pre-screen 分类和历史命中率过滤低质量市场，并记录每个过滤维度对收益率的贡献。
 - [ ] 把 order book 证据中的 spread、深度和滑点估算纳入 expected return 计算（当前 order book 只作为 AI 证据输入），避免正 edge 被交易成本吃掉；低于净收益阈值的机会应标记为 skip。
@@ -151,6 +153,29 @@ PolyPulse 当前没有实现的完整 Predict-Raven 能力：
 - [x] ~~每个 AI runtime 增加 1-2 个 few-shot golden example~~：已实现。6 个 AI runtime prompt（prescreen、candidate-triage、evidence-research、单市场概率估算、事件组联合概率估算、topic-discovery）均在指令末尾注入 1 个高质量输出示例，示例基于真实成功预测的输出格式，双语（zh/en）各一份。示例展示格式规范、推理深度标准和字段质量要求，显著提升输出一致性。
 
 ### 已知问题
+
+#### AI confidence 系统性偏低导致 paper 模式零交易
+
+**严重程度**：P0（系统完全停滞）
+
+**现象**：所有 AI 概率估算（6 轮共 50+ 市场）均返回 `confidence=low`，包括有充分公开信息的政治选举、体育赛事和 SpaceX IPO 等市场。配置 `MIN_AI_CONFIDENCE=medium` 使 RiskEngine 的 `ai_confidence_below_minimum` 对所有 `action=open` 的交易实施阻断（`CONFIDENCE_RANK.low(0) < CONFIDENCE_RANK.medium(1) → blocked`）。
+
+**影响**：
+- 5 个通过 edge 计算判断为 `action=open` 的市场全部被风控阻断：
+  - `will-anthony-constantino-be-the-republican-nominee-for-ny-21`（net_edge=17.5%）
+  - `highest-temperature-in-helsinki-on-june-4-2026-17corbelow`（net_edge=14.7%）
+  - `will-luca-pozzobon-win-the-2026-castelfranco-veneto-mayoral-election`（net_edge=11.5%）
+  - `highest-temperature-in-toronto-on-june-5-2026-20corbelow`（net_edge=7.7%）
+  - `will-spacex-ipo-by-june-15-2026-789-854`（net_edge=5.4%）
+- 其中天气市场被 `edge_skepticism_extreme_ratio` + `adjusted_notional_below_min_trade_usd` 额外合理阻断
+- SpaceX、Constantino、Pozzobon 仅被 confidence 阻断，属潜在误杀
+
+**根因分析**：
+- 概率估算 prompt 对 confidence 级别定义过于严格：AI 可能将 medium 理解为"非常确定"，而实际上应理解为"有公开可验证信息支撑推断"
+- Few-shot example 可能只展示了 `confidence=low` 的范例，未提供 medium/high 的对照
+- `pulse-direct` 模式下 `requireEvidenceGuard=false`（line 113），confidence 本应仅为 warning 而非 block —— 但当前配置 `this.config.pulse?.requireEvidenceGuard` 可能未正确设为 false
+
+**临时规避**：将 `.env` 中 `MIN_AI_CONFIDENCE=low`，或设置 `PULSE_REQUIRE_EVIDENCE_GUARD=false` 确保 confidence 检查为 warning 而非 block。
 
 #### 结构化套利检测存在漏洞
 

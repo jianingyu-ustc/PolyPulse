@@ -5,15 +5,15 @@ function round(value, digits = 4) {
 }
 
 const CATEGORY_SLUG_PATTERNS = [
-  [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat|governor/, "politics"],
-  [/econ|fed |inflation|gdp|cpi|interest.rate|tariff|employment|jobs|non.?farm|central.bank|reserve.bank/, "economics"],
-  [/sport|\bnba\b|\bnfl\b|\bmlb\b|\bnhl\b|soccer|football|tennis|wimbledon|\bf1\b|ufc|boxing|rugby|cricket|golf|memorial.tournament|pga|total-\dpt5|spread-home|spread-away|btts|-win-on-|halftime|epl-|mls-|lol-|cs2-|\bfif\b|fifwc|atp|wta|bra2-|exact.score|world.cup|-draw\b/, "sports"],
-  [/crypto|bitcoin|ethereum|solana|xrp|defi|etf/, "crypto"],
-  [/tech|\bai\b|openai|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk|neuralink/, "tech"],
-  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold|valuation|googl|alphabet/, "finance"],
+  [/politic|trump|election|democrat|republican|nominee|senate|parliament|president|vote|regulat|legislat|governor|\bmp\b/, "politics"],
+  [/econ|fed |inflation|gdp|cpi|ppi|interest.rate|tariff|employment|jobs|non.?farm|central.bank|reserve.bank/, "economics"],
+  [/sport|\bnba\b|\bnfl\b|\bmlb\b|\bnhl\b|soccer|football|tennis|wimbledon|roland.garros|\bf1\b|ufc|boxing|rugby|cricket|golf|memorial.tournament|pga|total-\dpt5|spread-home|spread-away|btts|-win-on-|halftime|epl-|mls-|lol-|cs2-|dota2-|\bfif\b|fif-|fifwc|atp|wta|bra2-|exact.score|world.cup|-draw\b|bkbbl-|j1100-|s-tier/, "sports"],
+  [/crypto|bitcoin|ethereum|solana|xrp|defi|etf|dogecoin|metamask/, "crypto"],
+  [/tech|\bai\b|openai|anthropic|apple|google|nvidia|microsoft|tesla|robotaxi|spacex|quantum|musk|neuralink/, "tech"],
+  [/finance|stock|spy|s&p|ipo|market.cap|silver|gold|valuation|googl|alphabet|\bwti\b|crude.oil|merger/, "finance"],
   [/weather|climate|hurricane|temperature/, "weather"],
   [/culture|entertain|movie|music|oscar|survivor|eurovision|tweet|mrbeast|youtube|video.*views/, "culture"],
-  [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military|diplomat|lebanon|israel/, "geopolitics"],
+  [/geopolitic|war|conflict|iran|russia|china|sanction|warship|hormuz|military|diplomat|lebanon|israel|netanyahu/, "geopolitics"],
   [/mention/, "mentions"]
 ];
 
