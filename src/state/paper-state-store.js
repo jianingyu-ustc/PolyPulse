@@ -14,6 +14,23 @@ function paperStateFilePath(config) {
   return path.join(config.stateDir, "paper-state.json");
 }
 
+function emptyMonitorState(now = nowIso()) {
+  return {
+    opensPaused: false,
+    opensPauseReason: null,
+    maintenancePaused: false,
+    maintenancePauseReason: null,
+    lastRunId: null,
+    lastStartedAt: null,
+    lastCompletedAt: null,
+    dailyTradeUsd: { date: now.slice(0, 10), amountUsd: 0, trades: 0 },
+    tradedMarkets: {},
+    inFlightRun: null,
+    lastError: null,
+    updatedAt: now
+  };
+}
+
 function emptyPaperState(now = nowIso()) {
   return {
     version: 1,
@@ -25,6 +42,7 @@ function emptyPaperState(now = nowIso()) {
     maxDrawdownUsd: 0,
     positions: [],
     closedTrades: [],
+    monitorState: emptyMonitorState(now),
     updatedAt: now
   };
 }
@@ -32,6 +50,8 @@ function emptyPaperState(now = nowIso()) {
 function normalizePaperState(value) {
   const base = emptyPaperState();
   const state = value && typeof value === "object" ? value : {};
+  const monitorRaw = state.monitorState && typeof state.monitorState === "object" ? state.monitorState : {};
+  const monitorBase = emptyMonitorState();
   return {
     ...base,
     ...state,
@@ -44,6 +64,7 @@ function normalizePaperState(value) {
     maxDrawdownUsd: roundUsd(state.maxDrawdownUsd ?? base.maxDrawdownUsd),
     positions: Array.isArray(state.positions) ? state.positions : [],
     closedTrades: Array.isArray(state.closedTrades) ? state.closedTrades : [],
+    monitorState: { ...monitorBase, ...monitorRaw },
     updatedAt: state.updatedAt ?? nowIso()
   };
 }
@@ -170,23 +191,8 @@ export class PaperStateStore {
   }
 
   async getMonitorState() {
-    if (!this._monitorState) {
-      this._monitorState = {
-        opensPaused: false,
-        opensPauseReason: null,
-        maintenancePaused: false,
-        maintenancePauseReason: null,
-        lastRunId: null,
-        lastStartedAt: null,
-        lastCompletedAt: null,
-        dailyTradeUsd: { date: nowIso().slice(0, 10), amountUsd: 0, trades: 0 },
-        tradedMarkets: {},
-        inFlightRun: null,
-        lastError: null,
-        updatedAt: nowIso()
-      };
-    }
-    return this._monitorState;
+    const state = await this.readState();
+    return state.monitorState;
   }
 
   async getRiskState() {
@@ -194,35 +200,39 @@ export class PaperStateStore {
   }
 
   async pauseOpens(reason = "manual") {
-    const ms = await this.getMonitorState();
-    ms.opensPaused = true;
-    ms.opensPauseReason = reason;
-    ms.updatedAt = nowIso();
-    return ms;
+    const state = await this.readState();
+    state.monitorState.opensPaused = true;
+    state.monitorState.opensPauseReason = reason;
+    state.monitorState.updatedAt = nowIso();
+    await this.writeState(state);
+    return state.monitorState;
   }
 
   async resumeOpens() {
-    const ms = await this.getMonitorState();
-    ms.opensPaused = false;
-    ms.opensPauseReason = null;
-    ms.updatedAt = nowIso();
-    return ms;
+    const state = await this.readState();
+    state.monitorState.opensPaused = false;
+    state.monitorState.opensPauseReason = null;
+    state.monitorState.updatedAt = nowIso();
+    await this.writeState(state);
+    return state.monitorState;
   }
 
   async pauseMaintenance(reason = "manual") {
-    const ms = await this.getMonitorState();
-    ms.maintenancePaused = true;
-    ms.maintenancePauseReason = reason;
-    ms.updatedAt = nowIso();
-    return ms;
+    const state = await this.readState();
+    state.monitorState.maintenancePaused = true;
+    state.monitorState.maintenancePauseReason = reason;
+    state.monitorState.updatedAt = nowIso();
+    await this.writeState(state);
+    return state.monitorState;
   }
 
   async resumeMaintenance() {
-    const ms = await this.getMonitorState();
-    ms.maintenancePaused = false;
-    ms.maintenancePauseReason = null;
-    ms.updatedAt = nowIso();
-    return ms;
+    const state = await this.readState();
+    state.monitorState.maintenancePaused = false;
+    state.monitorState.maintenancePauseReason = null;
+    state.monitorState.updatedAt = nowIso();
+    await this.writeState(state);
+    return state.monitorState;
   }
 
   async syncFromLedger(ledger) {
