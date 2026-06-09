@@ -90,6 +90,8 @@ export const DEFAULTS = {
   // ─── Pulse 策略设置 ────────────────────────────────────────────────────────
   // 策略模式。仅支持 "pulse-direct"（兼容 Predict-Raven）。
   PULSE_STRATEGY: null,
+  // 仅对单选项市场（negRisk=false）开仓（true/false）。
+  PULSE_BINARY_ONLY: null,
   // 候选市场最低流动性（美元）。
   PULSE_MIN_LIQUIDITY_USD: null,
   // 规则预筛后每轮最大候选数。
@@ -482,6 +484,7 @@ export async function loadEnvConfig(options = {}) {
     pulse: {
       strategy: values.PULSE_STRATEGY === "pulse-direct" ? "pulse-direct" : String(values.PULSE_STRATEGY ?? "pulse-direct").trim(),
       minLiquidityUsd: readNumber(values, "PULSE_MIN_LIQUIDITY_USD", 5000),
+      binaryOnly: String(values.PULSE_BINARY_ONLY ?? "false").toLowerCase() === "true",
       maxCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_MAX_CANDIDATES", 20))),
       reportCandidates: Math.max(1, Math.floor(readNumber(values, "PULSE_REPORT_CANDIDATES", 4))),
       batchCapPct: readNumber(values, "PULSE_BATCH_CAP_PCT", 0.2),

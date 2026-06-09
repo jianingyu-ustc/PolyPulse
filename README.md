@@ -712,6 +712,7 @@ Codex 提示词版本：
 - `monitor run` 链路：规则预筛 → AI pre-screen（TRADE/SKIP）→ AI candidate triage（语义聚类、可研究性、信息优势、证据缺口）→ 证据收集（page scrape、order book、resolution source、领域适配器、gap auto-fill）→ AI 概率估算 → 概率校准（静态 shrinkage + 动态 Brier score 反馈）→ downside risk ranking → 代码计算 fee/edge/Kelly/monthly return → RiskEngine → 执行。
 - `predict`、`trade once` 和 `monitor run` 输出包含 `edge`、`net_edge`、`entry_fee_pct`、`quarter_kelly_pct`、`monthly_return`，用于验证 Predict-Raven fee / Kelly / monthly return 口径。
 - `PULSE_REQUIRE_EVIDENCE_GUARD=false` 与 Predict-Raven pulse-direct 服务层分工一致：证据不足时 warning，不硬阻断；`live` 模式仍必须通过 confirm、env preflight、余额检查和 `RiskEngine`。
+- `PULSE_BINARY_ONLY=true` 时仅对单选项市场（`negRisk=false`）开仓，跳过多选项事件子市场。
 
 Codex 提示词版本：
 

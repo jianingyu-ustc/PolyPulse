@@ -141,7 +141,8 @@ export class PolymarketMarketSource {
     const pulseSelection = pulseCompatible
       ? applyPulseMarketSelection(filterPool, {
         maxCandidates: requestedLimit,
-        minLiquidityUsd: filters.minLiquidityUsd ?? this.config.pulse?.minLiquidityUsd ?? 0
+        minLiquidityUsd: filters.minLiquidityUsd ?? this.config.pulse?.minLiquidityUsd ?? 0,
+        binaryOnly: this.config.pulse?.binaryOnly ?? false
       })
       : null;
     const filtered = pulseSelection ? pulseSelection.markets : filterPool.slice(0, requestedLimit);

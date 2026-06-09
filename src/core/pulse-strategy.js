@@ -197,9 +197,18 @@ export function applyPulseMarketSelection(markets, options = {}) {
     missingClobTokenIds: 0,
     shortTermPrice: 0,
     shortTermDirection: 0,
-    lowLiquidity: 0
+    lowLiquidity: 0,
+    negRiskMultiOutcome: 0
   };
   let candidates = [...markets];
+
+  if (options.binaryOnly) {
+    candidates = candidates.filter((market) => {
+      const keep = !market.negRisk;
+      if (!keep) removed.negRiskMultiOutcome += 1;
+      return keep;
+    });
+  }
 
   const withClob = candidates.filter((market) => {
     const keep = hasClobTokenIds(market);
