@@ -354,6 +354,7 @@ async function commandTradeOnce(args) {
 
 async function commandMonitorRun(args) {
   const context = await createContext(args);
+  const initMode = option(args, "--init-mode", "resume");
   const scheduler = new Scheduler(context);
   const roundsOption = option(args, "--rounds");
   const parsedRounds = Number(roundsOption ?? "1");
@@ -383,6 +384,7 @@ async function commandMonitorRun(args) {
     rounds,
     limit: limit == null ? null : Number(limit),
     maxAmountUsd: maxAmountUsd == null ? null : Number(maxAmountUsd),
+    initMode,
     onRound: flag(args, "--loop") ? async (round) => print(compact(round)) : null
   });
   if (!flag(args, "--loop")) {
@@ -457,7 +459,7 @@ function help() {
       "polypulse predict --market <market-id-or-slug>",
       "polypulse risk evaluate --market <market-id-or-slug> --max-amount 1 --env-file <path>",
       "polypulse trade once --market <id> --max-amount 1 --env-file <path> --confirm LIVE",
-      "polypulse monitor run --env-file <path> --confirm LIVE --rounds 1",
+      "polypulse monitor run --env-file <path> --confirm LIVE --rounds 1 [--init-mode fresh|resume]",
       "polypulse monitor status",
       "polypulse monitor pause-opens|resume-opens",
       "polypulse monitor pause-maintenance|resume-maintenance"

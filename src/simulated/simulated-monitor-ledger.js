@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { inferCategorySlug } from "../core/pulse-strategy.js";
 import { closeSignal } from "../core/close-signals.js";
 import { DEFAULTS, redactSecrets } from "../config/env.js";
+import { MonitorLogger } from "../monitor/monitor-logger.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -81,39 +82,20 @@ export class SimulatedMonitorLedger {
     this.skippedCandidates = [];
     this.logPath = path.resolve(config.monitorLogPath ?? "logs/polypulse-monitor.log");
     this.logReady = false;
+    this._logger = new MonitorLogger(config);
   }
 
   async ensureLog() {
     if (this.logReady) return;
     await mkdir(path.dirname(this.logPath), { recursive: true });
-    const envLines = Object.keys(DEFAULTS).map((key) => {
-      const value = this.config._loadedEnvValues?.[key] ?? "(unset)";
-      const redacted = redactSecrets({ [key]: value });
-      return `  ${key}=${redacted[key]}`;
-    });
-    await appendFile(this.logPath, [
-      "",
-      "================================================================================",
-      `[${nowIso()}] monitor session started`,
-      `execution_mode=${this.config.executionMode}`,
-      `initial_cash_usd=${this.initialCashUsd}`,
-      `market_source=${this.config.marketSource}`,
-      `gamma=${this.config.polymarketGammaHost}`,
-      "--- loaded env ---",
-      ...envLines,
-      "--- end env ---",
-      "================================================================================",
-      ""
-    ].join("\n"), "utf8");
+    this.config._initialCashUsd = this.initialCashUsd;
+    await this._logger.ensureLog();
     this.logReady = true;
   }
 
   async log(message, fields = {}) {
     await this.ensureLog();
-    const suffix = Object.keys(fields).length > 0
-      ? ` | ${Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(" ")}`
-      : "";
-    await appendFile(this.logPath, `[${nowIso()}] ${message}${suffix}\n`, "utf8");
+    await this._logger.log(message, fields);
   }
 
   loadPersistedState(state) {

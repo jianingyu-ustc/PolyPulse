@@ -23,6 +23,7 @@ import { SimulatedMonitorLedger } from "../simulated/simulated-monitor-ledger.js
 import { DashboardServer } from "../dashboard/dashboard-server.js";
 import { createPaperDataProvider, createLiveDataProvider } from "../dashboard/data-provider.js";
 import { closeSignal } from "../core/close-signals.js";
+import { MonitorLogger } from "../monitor/monitor-logger.js";
 
 function applyBatchCapToRanked(rankedPredictions, bankrollUsd, batchCapPct) {
   if (!batchCapPct || batchCapPct >= 1 || bankrollUsd <= 0) return rankedPredictions;
@@ -479,23 +480,20 @@ export class Scheduler {
     this.stateStore = stateStore;
     this.artifactWriter = artifactWriter;
     this.evidenceCrawler = new EvidenceCrawler(config);
-    const probabilityConfig = config.executionMode === "paper"
-      ? { ...config, suppressProviderRuntimeArtifacts: true }
-      : config;
-    this.probabilityEstimator = new ProbabilityEstimator(probabilityConfig);
+    this.probabilityEstimator = new ProbabilityEstimator(config);
     this.calibrationLayer = new ProbabilityCalibrationLayer(config);
     this.candidateTriageProvider = config.pulse?.aiCandidateTriage
-      ? new CandidateTriageProvider(probabilityConfig)
+      ? new CandidateTriageProvider(config)
       : null;
     this.preScreenProvider = config.pulse?.aiPrescreen !== false
-      ? new PreScreenProvider(probabilityConfig)
+      ? new PreScreenProvider(config)
       : null;
     this.evidenceGapRuntime = new EvidenceGapRuntime(config);
     this.evidenceResearchProvider = config.pulse?.aiEvidenceResearch !== false
-      ? new EvidenceResearchProvider(probabilityConfig)
+      ? new EvidenceResearchProvider(config)
       : null;
     this.topicDiscoveryProvider = config.pulse?.aiTopicDiscovery !== false
-      ? new TopicDiscoveryProvider(probabilityConfig)
+      ? new TopicDiscoveryProvider(config)
       : null;
     this.semanticDiscovery = new SemanticDiscoveryRuntime(config);
     this.dynamicCalibration = new DynamicCalibrationStore(config);
@@ -515,6 +513,7 @@ export class Scheduler {
     this._ledgerInitialized = false;
     this._monitorRoundCount = 0;
     this._startedAt = new Date().toISOString();
+    this.monitorLogger = new MonitorLogger(config);
     this.dashboardServer = null;
     if (config.dashboard?.enabled) {
       const dataProvider = this.simulatedLedger
@@ -2206,6 +2205,9 @@ export class Scheduler {
     const maintenancePaused = monitorState.maintenancePaused ?? false;
 
     await this.stateStore.startMonitorRun({ runId });
+    const logger = this.monitorLogger;
+    const portfolio = await this.stateStore.getPortfolio();
+    await logger.logRoundStart({ runId, limit, maxAmountUsd, cashUsd: portfolio.cashUsd, openPositions: portfolio.positions?.length ?? 0 });
     const accumulator = {
       runId,
       startedAt,
@@ -2238,7 +2240,13 @@ export class Scheduler {
 
     try {
       await withTimeout(async () => {
-        accumulator.scan = await this.marketSource.scan(limit == null ? {} : { limit });
+        accumulator.scan = await this.marketSource.scan({
+          ...(limit == null ? {} : { limit }),
+          noCache: true
+        });
+        await logger.logScan(accumulator.scan);
+        const ledgerShim = { log: (msg, f) => logger.log(msg, f), recordSkippedCandidate: () => {} };
+        await this.applyTopicDiscovery({ accumulator, ledger: ledgerShim });
         await this.reviewPositions({ runId, accumulator, confirmation, maintenancePaused });
         const candidateEntries = buildCandidates({
           markets: accumulator.scan.markets ?? [],
@@ -2246,9 +2254,12 @@ export class Scheduler {
           portfolio: await this.stateStore.getPortfolio(),
           config: this.config
         });
-        await this.applyPreScreen({ candidateEntries, accumulator });
-        await this.applyCandidateTriage({ candidateEntries, accumulator });
+        await this.applyPreScreen({ candidateEntries, accumulator, ledger: ledgerShim });
+        await this.applyCandidateTriage({ candidateEntries, accumulator, ledger: ledgerShim });
         accumulator.candidates = candidateEntries.map((item) => item.summary);
+        for (const candidate of accumulator.candidates) {
+          await logger.logCandidate({ market: { marketSlug: candidate.marketSlug }, selected: candidate.selected, reasons: candidate.skipped_reasons });
+        }
         const selected = candidateEntries.filter((item) => item.summary.selected);
         const { groups: liveGroups, singletons: liveSingletons } = groupCandidatesByEvent(selected);
         const liveSingletonPredictions = await mapLimit(
@@ -2257,7 +2268,7 @@ export class Scheduler {
           this.config.monitor.backoffMs,
           async (candidate) => {
             try {
-              return await this.predictCandidate(candidate);
+              return await this.predictCandidateNoCache(candidate);
             } catch (error) {
               accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${error instanceof Error ? error.message : String(error)}`);
               return null;
@@ -2276,7 +2287,7 @@ export class Scheduler {
               this.config.monitor.concurrency,
               this.config.monitor.backoffMs,
               async (candidate) => {
-                try { return await this.predictCandidate(candidate); } catch (err) {
+                try { return await this.predictCandidateNoCache(candidate); } catch (err) {
                   accumulator.errors.push(`prediction_failed:${candidate.market.marketId}:${err.message ?? err}`);
                   return null;
                 }
@@ -2292,28 +2303,73 @@ export class Scheduler {
           const params = await this.dynamicFeeService.fetchDynamicFeeParams(prediction.market.marketId);
           if (params) dynamicFeeParamsMapLive.set(prediction.market.marketId, params);
         }
+        const effectiveMaxAmountUsd = maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd);
         const livePortfolio = await this.stateStore.getPortfolio();
+        const baseRanked = rankPredictionsForExecution({
+          predictions: accumulator.predictions,
+          portfolio: livePortfolio,
+          amountUsd: effectiveMaxAmountUsd,
+          decisionEngine: this.decisionEngine,
+          dynamicFeeParamsMap: dynamicFeeParamsMapLive
+        });
         const rankedPredictions = applyBatchCapToRanked(
-          rankPredictionsForExecution({
-            predictions: accumulator.predictions,
-            portfolio: livePortfolio,
-            amountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
-            decisionEngine: this.decisionEngine,
-            dynamicFeeParamsMap: dynamicFeeParamsMapLive
-          }),
+          this.config.pulse?.downsideRiskRanking !== false
+            ? this.downsideRiskRanker.rankWithDownsideRisk({
+              rankedPredictions: baseRanked,
+              portfolio: livePortfolio,
+              ledgerStatistics: { closedTrades: 0, wins: 0, losses: 0 }
+            })
+            : baseRanked,
           livePortfolio.totalEquityUsd ?? 0,
           this.config.pulse?.batchCapPct
         );
-        const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
+        for (const [index, ranked] of rankedPredictions.entries()) {
+          await logger.log("candidate.ranked", {
+            rank: index + 1,
+            market: ranked.prediction.market.marketSlug,
+            action: ranked.analysis.action,
+            confidence: ranked.analysis.confidence,
+            monthly_return: ranked.analysis.monthlyReturn ?? "n/a",
+            net_edge: ranked.analysis.netEdge ?? "n/a",
+            risk_adjusted_score: ranked.riskAdjusted?.riskAdjustedScore ?? "n/a",
+            downside_score: ranked.downsideRisk?.score ?? "n/a",
+            reason: ranked.analysis.noTradeReason ?? "none"
+          });
+          this.predictionTracker.recordPrediction({
+            marketId: ranked.prediction.market.marketId,
+            marketSlug: ranked.prediction.market.marketSlug,
+            category: ranked.prediction.market.category,
+            aiProbability: ranked.analysis.aiProbability,
+            marketProbability: ranked.analysis.marketProbability ?? ranked.analysis.marketImpliedProbability,
+            confidence: ranked.analysis.confidence,
+            netEdge: ranked.analysis.netEdge,
+            monthlyReturn: ranked.analysis.monthlyReturn,
+            quarterKellyPct: ranked.analysis.quarterKellyPct,
+            side: ranked.analysis.suggestedSide,
+            notionalUsd: ranked.analysis.suggestedNotionalUsd,
+            roundId: runId
+          });
+        }
         const arbitrageOpportunities = detectStructuralArbitrage(accumulator.scan.markets ?? []);
         accumulator.arbitrage = arbitrageOpportunities;
+        for (const arb of arbitrageOpportunities) {
+          await logger.log("arbitrage.detected", {
+            type: arb.type,
+            eventId: arb.eventId,
+            sumYesAsk: arb.sumYesAsk,
+            profit: arb.profit,
+            siblingCount: arb.siblings.length,
+            siblings: arb.siblings.map((m) => m.marketSlug)
+          });
+        }
+        const { liveBalance, liveBalanceError } = await this.getLiveBalanceContext({ confirmation });
         let orderCount = 0;
         let filledUsdThisRun = 0;
         for (const { prediction } of rankedPredictions) {
           const result = await this.evaluateAndMaybeOrder({
             prediction,
             confirmation,
-            maxAmountUsd: maxAmountUsd ?? (this.config.monitor.maxAmountUsd || this.config.risk.minTradeUsd),
+            maxAmountUsd: effectiveMaxAmountUsd,
             runId,
             orderCount,
             filledUsdThisRun,
@@ -2323,10 +2379,20 @@ export class Scheduler {
           prediction.decision = result.decision;
           prediction.risk = result.risk;
           prediction.order = result.order;
+          if (result.decision) {
+            await logger.logPrediction({ market: prediction.market, estimate: prediction.estimate, decision: result.decision });
+          }
+          if (result.risk) {
+            await logger.logRisk({ market: prediction.market, risk: result.risk });
+          }
+          if (result.order) {
+            await logger.logOrder(result.order.status === "filled" ? "open.filled" : "order.blocked", { market: prediction.market, order: result.order });
+          }
           accumulator.decisions.push({
             marketId: prediction.market.marketId,
             marketSlug: prediction.market.marketSlug,
             question: prediction.market.question,
+            phase: "open-scan",
             ...result.decision
           });
           accumulator.risks.push({
@@ -2344,7 +2410,13 @@ export class Scheduler {
             filledUsdThisRun += result.order.filledUsd;
           }
         }
+        await this.stateStore.markToMarket(accumulator.scan.markets ?? []);
       }, this.config.monitor.runTimeoutMs, "monitor_round");
+      if (this.predictionTracker.shouldEmitReport()) {
+        await this.predictionTracker.emitReport({ log: (msg, f) => logger.log(msg, f) });
+      }
+      const finalPortfolio = await this.stateStore.getPortfolio();
+      await logger.logRoundEnd({ runId, status: "completed", stats: { cashUsd: finalPortfolio.cashUsd, totalEquityUsd: finalPortfolio.totalEquityUsd, openPositions: finalPortfolio.positions?.length ?? 0 }, errors: accumulator.errors });
       const artifacts = await finish("completed");
       return {
         ok: true,
@@ -2361,6 +2433,7 @@ export class Scheduler {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       accumulator.errors.push(message);
+      await logger.logRoundEnd({ runId, status: "failed", stats: {}, errors: accumulator.errors });
       const artifacts = await finish("failed", message);
       return {
         ok: false,
@@ -2376,7 +2449,16 @@ export class Scheduler {
     return await this.runMonitorRound(options);
   }
 
-  async monitorLoop({ confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, onRound = null } = {}) {
+  async monitorLoop({ confirmation = null, rounds = 1, limit = null, maxAmountUsd = null, initMode = "resume", onRound = null } = {}) {
+    if (initMode === "fresh") {
+      await this.stateStore.reset();
+      if (this.simulatedLedger) {
+        const { writeFile } = await import("node:fs/promises");
+        try { await writeFile(this.simulatedLedger.logPath, "", "utf8"); } catch { /* ignore */ }
+        this.simulatedLedger.logReady = false;
+      }
+      this._ledgerInitialized = false;
+    }
     const results = [];
     let completed = 0;
     while (rounds == null || completed < rounds) {

@@ -175,6 +175,11 @@ export class FileStateStore {
     this.path = stateFilePath(config);
   }
 
+  async reset() {
+    const { unlink } = await import("node:fs/promises");
+    try { await unlink(this.path); } catch (e) { if (e?.code !== "ENOENT") throw e; }
+  }
+
   async readState() {
     try {
       const raw = await readFile(this.path, "utf8");

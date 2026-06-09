@@ -5,8 +5,10 @@
 ### 简要说明
 PolyPulse 是一个面向 Polymarket 的预测市场自主交易 Agent 框架。统一使用真实钱包，通过 `POLYPULSE_EXECUTION_MODE` 控制最后一步是否真正下单：
 
-- `paper`：连接真实钱包，走完整链路（live preflight、AI provider、RiskEngine），但最后一步不提交真实订单；用内存账本按真实市场价格追踪仓位和 PnL，追加人类可读日志。
-- `live`：连接真实钱包，走完整链路，风控允许后提交真实订单。
+- `paper`：连接真实钱包，走完整链路（Topic Discovery → Scan → Pre-screen → Triage → Evidence → Prediction → Risk → Execution），但最后一步不提交真实订单；用内存账本按真实市场价格追踪仓位和 PnL。
+- `live`：连接真实钱包，走完全相同的链路，风控允许后提交真实订单到 Polymarket CLOB。
+
+两种模式共享全部业务逻辑代码，唯一区别是下单客户端（`PaperOrderClient` vs `LivePolymarketClient`）、`--confirm LIVE` 要求和余额获取方式。日志、artifact、AI 调用、排序、风控完全一致。
 
 所有测试、验收和部署命令都必须使用 `.env`，并读取当前 Polymarket 真实市场。
 
@@ -18,7 +20,7 @@ Codex / Claude Code runtime 只允许输出 `CandidateTriage` 或 `ProbabilityEs
 
 PolyPulse 当前不是完整复刻 Predict-Raven 方法。当前实现借鉴 Predict-Raven 的职责分离、fee / edge / Kelly / monthly return 计算和 provider 输出边界。已对齐的 AI 使用边界是：provider 对候选池先做轻量信息优势 pre-screen（TRADE/SKIP），再输出语义 triage、可研究性、信息优势和证据缺口判断；证据收集阶段先由规则适配器抓取基础证据（Polymarket 页面结算规则/注释/评论、CLOB order book 深度、resolution source 实时验证、领域适配器），再由 AI Evidence Research runtime 评估证据充分性、识别信息缺口并主动指导定向搜索，对齐 Predict-Raven 的 AI 驱动研究流水线；provider 对单市场输出概率和证据质量判断；monitor 对一轮候选先生成 AI 概率，再由代码按收益指标排序和执行。
 
-主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；monitor artifact 中会包含 `candidate-triage.json`。`paper` 和 `live` 模式生成完全相同的结构化 artifact（per-round 目录和 provider runtime 日志）；`paper` 模式额外使用进程内内存账本，追加写入 `MONITOR_LOG_PATH` 人类可读日志记录仓位、PnL 和胜率。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
+主要 artifact 写入 `runtime-artifacts/`，包括 markets、predictions、runs、monitor、account、test-runs 和 provider runtime 日志；monitor artifact 中会包含 `candidate-triage.json`。`paper` 和 `live` 模式生成完全相同的结构化 artifact（per-round 目录和 provider runtime 日志）和完全相同格式的人类可读日志（`MONITOR_LOG_PATH`）；`paper` 模式的仓位和 PnL 由进程内内存账本追踪。所有 artifact 和日志写入前会做 secret redaction。不要把真实 `.env`、私钥、助记词、API key、cookie 或 session token 写入仓库、日志、memory 或测试快照。
 
 服务器部署默认目录是 `/home/PolyPulse`，运行时文件默认在 `/home/PolyPulse/.env`、`/home/PolyPulse/runtime-artifacts`、`/home/PolyPulse/runtime-artifacts/state` 和 `/home/PolyPulse/logs`。`.env` 权限必须是 `600`，真实 secret 只放服务器本地。
 
@@ -102,7 +104,7 @@ PolyPulse 当前和 Predict-Raven 相同或接近的部分：
 - 结构化套利自动执行：当多选项事件的所有 Yes ask 价格之和 < 1（buy-all-yes 套利）或 > 1（buy-all-no 套利）且预期利润率 ≥ `ARBITRAGE_MIN_PROFIT`（默认 5%）时，系统自动对每个兄弟市场构造 synthetic decision 对象并调用 `ledger.openPosition()` 执行；套利仓位标记 `arbitrage: true`，不计入 daily limit 预算，不参与 AI 重估/position review。配置：`ARBITRAGE_ENABLED`（默认 true）、`ARBITRAGE_MIN_PROFIT`（默认 0.05）、`ARBITRAGE_MAX_TRADE_USD`（默认 5）。
 - 预测效果评估追踪器（PredictionPerformanceTracker）记录每次预测和平仓结果，每 N 轮（默认 5 轮）在 monitor log 中输出完整评估报表：包括 hit rate、Brier score、概率校准偏差（predicted vs actual by bucket）、按 confidence/category 分组的胜率和收益、edge 预测精度（预测 edge vs 实际 return）。这对齐了 Predict-Raven 的预测效果评估和持续改进反馈环。
 - provider prompt 采用"先独立估算，后锚定审视"（Estimate-then-Anchor）两阶段法：阶段一要求 AI 基于 `base_rate`（历史/结构性先验）+ `evidence_adjustment`（证据调整量）独立估算 `ai_probability`，不参考盘口价格；阶段二要求 AI 将估算与盘口对比，偏离>15pp 时在 `deviation_justification` 中给出具体证据支撑，偏离>25pp 无有力解释时应重新审视推理。prompt 同时要求区分盘口价格和独立证据，在 `reasoning_summary` / `uncertainty_factors` 中说明可研究性、外部证据充分性和相对盘口的信息优势；不可研究或信息优势不足时必须降为 `low` confidence。
-- `paper` 和 `live` 模式的 monitor artifact 均保留 `candidate-triage.json` 和完整 per-round 结构化目录；`paper` 模式额外把 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy` 追加到人类可读日志。
+- `paper` 和 `live` 模式的 monitor artifact 均保留 `candidate-triage.json` 和完整 per-round 结构化目录；两种模式均追加写入 `MONITOR_LOG_PATH` 人类可读日志，格式完全一致（`MonitorLogger` 统一输出），包括 `candidate.prescreen`、`candidate.prescreen_summary`、`candidate.triage`、`candidate.triage_summary`、`candidate.triage_failed`、`topic_discovery.completed`、`topic_discovery.failed`、`semantic_discovery.completed`、`calibration.applied`、`calibration.dynamic`、`performance.report`、`performance.calibration`、`performance.by_confidence`、`performance.edge_accuracy`。
 - `live` 模式下单前仍必须通过 env preflight、余额/allowance 检查、账户审计、`confirm LIVE` 和 `RiskEngine`。
 - V2 动态费率查询：`DynamicFeeService` 通过 CLOB API `GET /markets/{conditionId}` 获取市场实时 `{ feeRate, exponent }` 参数（1h 内存 Map 缓存），在决策引擎计算 fee/edge/Kelly/monthly return 之前预取并传入 `buildPulseTradePlan`，替代纯静态费率表；失败时自动回退到 `lookupCategoryFeeParams` 静态查找。这对齐了 Predict-Raven 的 `fetchDynamicFeeParams`（V2 SDK `getClobMarketInfo` + 1h cache + null fallback）。
 - 费率验证：`DynamicFeeService.verifyAndLog` 在 `LiveBroker.submit` 下单前对比静态 fee params 与 CLOB API 返回的动态 fee params（feeRate 和 exponent），偏差超 `PULSE_FEE_VERIFY_THRESHOLD` 时记录到 `{artifactDir}/fee-discrepancies.jsonl`；验证失败不阻断下单。这对齐了 Predict-Raven 的 `verifyFeeEstimate` + `logFeeDiscrepancyIfNeeded`。
@@ -331,9 +333,11 @@ approvedUsd = min(
 | 轮次 | 1 轮，运行后退出 | 无限循环或 N 轮，间隔 `MONITOR_INTERVAL_SECONDS` |
 | 仓位持久性（live） | 不持久 | `live-state.json` 跨进程持久：已开仓、已关仓均保存 |
 | 仓位持久性（paper） | 不持久 | `paper-state.json` 跨进程持久：已开仓、已关仓均保存，Dashboard 显示全部历史 |
+| 启动模式 | 无 | `--init-mode resume`（默认恢复）或 `--init-mode fresh`（清空重新初始化） |
 | 仓位复核 | 仅对已有仓位做一次 mark-to-market | 每轮对所有持仓做 mark-to-market + 重新预测，决定 hold/reduce/close |
 | 胜率计算 | 无（单轮无平仓结算） | 有：`wins / (wins + losses)`，每次平仓时更新 |
-| 输出 | `runtime-artifacts/acceptance-runs/<ts>/step1-7.stdout.log` + `summary.json` | 追加写入 `MONITOR_LOG_PATH` + per-round `runtime-artifacts/monitor/<date>/<run-slug>/` |
+| 日志 | 写入 `MONITOR_LOG_PATH`（paper/live 统一 MonitorLogger 格式） | 追加写入 `MONITOR_LOG_PATH`（paper/live 统一 MonitorLogger 格式） |
+| 输出 | `runtime-artifacts/acceptance-runs/<ts>/step1-7.stdout.log` + `summary.json` | per-round `runtime-artifacts/monitor/<date>/<run-slug>/` |
 | runtime-artifacts | 有：per-round 目录 + provider runtime 日志 | 有：完全相同的结构化 artifact |
 
 持续 monitor 不是"每 N 分钟执行一遍验收"，而是一个**有状态的交易循环**。关键区别：验收是无状态的 pipeline 健康检查；monitor 是有仓位、有资金、有 PnL 积累的连续交易系统。
@@ -371,32 +375,43 @@ winRate = wins / (wins + losses)
 
 ### 持续 Monitor 的 runtime-artifacts
 
-`paper` 和 `live` 模式下，持续 monitor 生成**完全相同的** per-round 结构化 artifact：
+`paper` 和 `live` 模式下，持续 monitor 执行**完全相同的**业务逻辑链路（Topic Discovery → Scan → Pre-screen → Triage → Evidence → Prediction → Downside Risk Ranking → Arbitrage Detection → Risk → Execution → Mark-to-Market → Performance Report），生成**完全相同的** per-round 结构化 artifact 和 provider runtime 日志：
 - `runtime-artifacts/monitor/<date>/<run-slug>/` 目录，含 markets.json, candidates.json, candidate-triage.json, decisions.json, risk.json, orders.json, summary.md
 - `runtime-artifacts/codex-runtime/<ts>/runtime-log.md` — 每次 AI 调用的完整 prompt/output 归档
 - 每个候选的 `predictions/<market-slug>/evidence.json, estimate.json, decision.json`
 
+两种模式的唯一差异：
+
+| 差异项 | Paper | Live |
+|--------|-------|------|
+| 下单客户端 | `PaperOrderClient`（内存模拟成交） | `LivePolymarketClient`（真实提交 CLOB） |
+| `--confirm LIVE` | 不要求 | 必须传入才能下单 |
+| 余额/仓位来源 | 进程内内存账本（首轮从真实钱包初始化） | 每次实时查询 CLOB collateral + allowance |
+| 状态文件 | `paper-state.json` | `live-state.json`（含 crash recovery、run history） |
+
+其他所有逻辑（scan、AI pre-screen、triage、evidence research、prediction、calibration、downside risk ranking、arbitrage detection、daily limit、risk engine、mark-to-market、position review、performance tracking）两种模式完全一致。
+
 两种模式的持久化差异：
 
-| 模式 | 状态持久化 | Dashboard 数据源 |
-|---|---|---|
-| `paper` | `{STATE_DIR}/paper-state.json`（已开仓、已关仓、highWaterMark）+ log 追加 | paper-state.json（全部已关仓）+ log（最近 100 笔跳过）+ 内存（当前仓位） |
-| `live` | `{STATE_DIR}/live-state.json`（完整状态）+ log 追加 | live-state.json（全部数据） |
+| 模式 | 状态持久化 | 人类可读日志 | Dashboard 数据源 |
+|---|---|---|---|
+| `paper` | `{STATE_DIR}/paper-state.json`（已开仓、已关仓、highWaterMark）| `MONITOR_LOG_PATH`（统一 MonitorLogger 格式）| paper-state.json（全部已关仓）+ log（最近 100 笔跳过）+ 内存（当前仓位） |
+| `live` | `{STATE_DIR}/live-state.json`（完整状态）| `MONITOR_LOG_PATH`（统一 MonitorLogger 格式）| live-state.json（全部数据） |
 
-**Paper 模式持久化**：进程重启后会从 `paper-state.json` 恢复已开仓市场和历史已关仓记录，Dashboard 可显示跨会话的历史数据。log 文件仅用于解析最近跳过的市场（最近 100 笔）。
+**Paper 模式持久化**：进程重启后会从 `paper-state.json` 恢复已开仓市场和历史已关仓记录（`--init-mode resume`，默认行为），Dashboard 可显示跨会话的历史数据。使用 `--init-mode fresh` 可清空 state 和 log 从零开始。log 文件仅用于解析最近跳过的市场（最近 100 笔）。
 
 `logs/` 与 `runtime-artifacts/` 的区别：
 
 | | `logs/`（`MONITOR_LOG_PATH`） | `runtime-artifacts/`（`ARTIFACT_DIR`） | `{STATE_DIR}/paper-state.json` | `{STATE_DIR}/live-state.json` |
 |---|---|---|---|---|
 | 格式 | 单文件追加的人类可读纯文本日志 | 结构化 JSON 文件，按 per-round 目录组织 | JSON 状态文件 | JSON 状态文件 |
-| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率 | 程序化分析、回测、审计 | Paper 模式持久化：initialCashUsd / cashUsd / totalEquityUsd、highWaterMarkUsd / maxDrawdownUsd、positions 当前持仓、closedTrades 全量已关仓历史（含 realizedPnlUsd / returnPct / closeReason） | Live 模式完整状态：portfolio（cashUsd / totalEquityUsd / positions）、riskState（drawdown halt / highWaterMark）、monitorState（pause 状态 / runHistory / dailyTradeUsd / tradedMarkets / inFlightRun 崩溃恢复）、orders 全量历史、runs 调度历史 |
+| 用途 | 人工快速查看运行状态、仓位变动、PnL 和胜率（paper/live 统一格式） | 程序化分析、回测、审计 | Paper 模式持久化：initialCashUsd / cashUsd / totalEquityUsd、highWaterMarkUsd / maxDrawdownUsd、positions 当前持仓、closedTrades 全量已关仓历史（含 realizedPnlUsd / returnPct / closeReason） | Live 模式完整状态：portfolio（cashUsd / totalEquityUsd / positions）、riskState（drawdown halt / highWaterMark）、monitorState（pause 状态 / runHistory / dailyTradeUsd / tradedMarkets / inFlightRun 崩溃恢复）、orders 全量历史、runs 调度历史 |
 | 生命周期 | 持续追加，不自动清理 | 受 `ARTIFACT_RETENTION_DAYS` 和 `ARTIFACT_MAX_RUNS` 控制自动清理 | 持续更新 | 持续更新 |
-| 模式差异 | `paper` / `live` 均写入 | 两种模式生成完全相同的结构化 artifact | 仅 paper 模式使用 | 仅 live 模式使用 |
+| 模式差异 | paper / live 均写入，格式完全一致 | 两种模式生成完全相同的结构化 artifact | 仅 paper 模式使用 | 仅 live 模式使用 |
 
 ### Monitor Log 格式（paper / live 通用）
 
-`MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。每次启动 `trade once` 或 `monitor run` 都会先写入 session header：
+`MONITOR_LOG_PATH` 是人类可读追加日志，不是稳定的机器解析协议。`paper` 和 `live` 模式均由统一的 `MonitorLogger` 写入，格式完全一致。每次启动 `trade once` 或 `monitor run` 都会先写入 session header：
 
 ```text
 ================================================================================
@@ -882,15 +897,26 @@ Codex 提示词：
 
 #### 流水线说明
 
-`trade once` 和 `monitor run` 使用同一套进程内内存账本逻辑：初始资金来自真实钱包余额，每次进程启动都会写同样的 session header，执行过程都追加到 `MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式。区别是 `trade once` 只针对指定市场执行一轮，不做候选池 AI triage，进程结束后仓位丢失；`monitor run --loop` 在同一进程内跨轮保留仓位，并按间隔继续 mark-to-market、复核和平仓。
+`trade once` 和 `monitor run` 使用同一套进程内内存账本逻辑：初始资金来自真实钱包余额，每次进程启动都会写同样的 session header，执行过程都追加到 `MONITOR_LOG_PATH`，并使用同样的 `round.start`、`topics.fetched`、`candidate`、`prediction`、`risk`、`open.filled`、`mark_to_market`、`round.end` 日志格式（paper/live 统一 `MonitorLogger`）。区别是 `trade once` 只针对指定市场执行一轮，不做候选池 AI triage，进程结束后仓位丢失；`monitor run --loop` 在同一进程内跨轮保留仓位，并按间隔继续 mark-to-market、复核和平仓。两种模式均通过 state 文件持久化仓位（`--init-mode fresh` 可清空重新开始）。
 
 ### 持续 Monitor
 
 同一个命令用于 `paper` 和 `live` 模式；区别由 `.env` 的 `POLYPULSE_EXECUTION_MODE` 决定。`live` 模式会在风控通过后提交真实订单。
 
 ```bash
+# 恢复历史状态（默认）：读取 state 文件恢复余额/仓位/盈亏
 node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop
+
+# 全新启动：删除 state 文件 + 清空 monitor log，从真实钱包余额重新初始化
+node ./bin/polypulse.js monitor run --env-file .env --confirm LIVE --loop --init-mode fresh
 ```
+
+`--init-mode` 参数：
+
+| 值 | 行为 |
+|----|------|
+| `resume`（默认） | 读取已有 state 文件，恢复余额/仓位/盈亏，日志追加写入 |
+| `fresh` | 删除 state 文件（`paper-state.json` 或 `live-state.json`）+ 清空 monitor log，从真实钱包余额重新初始化账户 |
 
 Monitor 行为：
 
@@ -903,15 +929,15 @@ Monitor 行为：
 - 每轮先完成全部候选预测，再按 `action`、`confidence`、`monthly_return`、`net_edge`、`quarter_kelly_pct`、`expected_value` 等 AI 衍生指标排序后，由 DownsideRiskRanker 进行二次排序（综合下行风险、流动性风险、类别集中度和资金分配），最终按 `risk_adjusted_score` 顺序执行；AI 不输出交易指令或 broker 参数。
 - 用 `RiskEngine` 做金额、流动性、仓位、回撤、证据和置信度检查。
 - `paper` 模式下风控允许时在内存账本开仓；`live` 模式下提交真实订单。已有仓位每轮 mark-to-market，并在市场关闭、接近 0/1、触发止损或预测 edge 反转时自动平仓。
-- 每一步都会追加到 `MONITOR_LOG_PATH`：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
+- 每一步都会追加到 `MONITOR_LOG_PATH`（paper/live 统一格式）：抓取 topic、候选过滤、预测、风控、开仓、平仓、现金、权益、realized/unrealized PnL、wins/losses、win rate 和最大回撤。
 - `trade once` 和 `monitor run` 共用同一套日志格式和执行逻辑；`trade once` 是指定市场的一轮执行，`monitor run --loop` 是按间隔重复执行并在同一进程中保留仓位。
-- `paper` 模式下程序退出后不保留仓位、现金或交易状态（内存账本随进程消亡）；持久保留的有：`MONITOR_LOG_PATH` 人类可读日志和 `runtime-artifacts/` 下的 per-round 结构化 artifact。需要停止 monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程。
+- `paper` 和 `live` 模式均持久化状态到 `{STATE_DIR}/` 下的 JSON 文件，进程重启后通过 `--init-mode resume`（默认）恢复仓位和历史；使用 `--init-mode fresh` 可清空状态从头开始。持久保留的还有：`MONITOR_LOG_PATH` 人类可读日志和 `runtime-artifacts/` 下的 per-round 结构化 artifact。需要停止 monitor 时，使用 `systemctl stop polypulse-monitor.service` 或结束进程。
 
 Codex 提示词版本：
 
 ```text
 1. 请检查 .env 的 POLYPULSE_EXECUTION_MODE、provider、真实市场读取和 confirm LIVE。
-2. 如果是 paper 模式，请启动 monitor，并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存账本自动开仓/平仓，但不提交真实订单；程序退出后只保留人类可读 log。
+2. 如果是 paper 模式，请启动 monitor（默认 --init-mode resume 恢复历史仓位；需要从零开始时用 --init-mode fresh），并确认它读取当前 Polymarket 真实市场、调用真实 AI provider、使用内存账本自动开仓/平仓，但不提交真实订单；程序退出后状态持久化到 paper-state.json，日志保留到 MONITOR_LOG_PATH。
 3. 如果是 live 模式，请先运行 account balance 和 account audit，并只在我明确确认真实交易风险且 audit 无阻断后启动 monitor。
 4. 启动后请汇总 monitor 状态、风控状态、artifact 或 monitor log 位置。
 ```
